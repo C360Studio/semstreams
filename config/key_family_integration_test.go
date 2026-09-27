@@ -83,11 +83,12 @@ func TestKeyFamilyDeliversSnapshotThenChanges(t *testing.T) {
 	require.Equal(t, []byte(`"b1"`), value)
 	require.ErrorIs(t, family.Create(ctx, "b", []byte(`"b2"`)), natsclient.ErrKVKeyExists)
 
-	// A refused Start binds nothing: the foreign declaration's family stays
-	// unable to write, exactly like the manager's own writers.
+	// A refused Start binds nothing: a manager whose bucket records a foreign
+	// identity leaves its family unable to write, exactly like its own writers.
 	refusedFamily, _ := collectingFamily(t, "rules")
 	refused, err := NewConfigManager(identityTestConfig("acme", "other"), tc.Client, nil, WithKeyFamily(refusedFamily))
 	require.NoError(t, err)
+	seedIdentityRecord(t, ctx, refused, platformIdentityRecord{Org: "acme", Stem: "dep", ID: "dep-0a1b2c"})
 	startErr := refused.Start(ctx)
 	require.Error(t, startErr)
 	require.True(t, errors.Is(refusedFamily.Put(ctx, "c", []byte(`"c"`)), errFamilyNotRegistered),

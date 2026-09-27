@@ -564,97 +564,56 @@ func putConfigValue(t *testing.T, ctx context.Context, manager *Manager, key str
 	require.NoError(t, err)
 }
 
-// TestConfigManager_RejectsForeignPlatformIdentityAtStart is a regression test for
-// gh#459: two sem* apps sharing one NATS server also share the fixed-name
-// semstreams_config bucket. With matching config versions, the second app to
-// boot silently adopted the first's components (and could panic creating a
-// foreign one). The manager must fail startup before adopting or mutating a
-// bucket whose platform identity differs from the local file's.
+// TestBucketIsNamedByTheDeclaredPair is the gh#459 regression, flipped by
+// #1188. Two sem* apps on one NATS server used to share the fixed-name
+// configuration bucket, and the second to boot either adopted the first's
+// components or, once the gh#459 guard existed, was refused. Now each declared
+// pair names its own bucket: both apps start, neither sees the other's
+// configuration, and nothing is refused because there is nothing left to
+// catch. A clone declaring the same pair shares its bucket and its authority.
 //
-// Since ADR-104 the refusal comes one branch EARLIER and from a stronger fact:
-// the first app's boot minted and recorded platform_identity, and the second
-// app's adopt check compares against that record rather than against the
-// mutable `platform` config key. That is what lets #1188 retire the config-key
-// guard without reopening gh#459.
-func TestConfigManager_RejectsForeignPlatformIdentityAtStart(t *testing.T) {
+// spec: component-runtime-config / The configuration bucket is named by the declared authority pair
+func TestBucketIsNamedByTheDeclaredPair(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Manager A — the "foreign" app boots first and seeds the shared bucket.
-	foreignCfg := &Config{
-		Version:  "1.0.0",
-		Platform: PlatformConfig{Org: "foreignorg", ID: "foreign-app", Type: "test"},
-		Services: make(types.ServiceConfigs),
-		Components: ComponentConfigs{
-			"foreign-comp": types.ComponentConfig{
-				Type: "input", Name: "udp", Enabled: true,
-				Config: json.RawMessage(`{"port": 8080}`),
+	appConfig := func(org, id, component, factory string) *Config {
+		return &Config{
+			Version:  "1.0.0", // matching versions: identity alone must separate the apps
+			Platform: PlatformConfig{Org: org, ID: id, Type: "test"},
+			Services: make(types.ServiceConfigs),
+			Components: ComponentConfigs{
+				component: types.ComponentConfig{
+					Type: "input", Name: factory, Enabled: true,
+					Config: json.RawMessage(`{"port": 8080}`),
+				},
 			},
-		},
+		}
 	}
-	mgrA, err := NewConfigManager(foreignCfg, tc.Client, nil)
+
+	first, err := NewConfigManager(appConfig("acme", "dep", "dep-comp", "udp"), tc.Client, nil)
 	require.NoError(t, err)
-	require.NoError(t, mgrA.Start(ctx)) // first boot → pushes foreign config to KV
-	require.NoError(t, mgrA.Stop(5*time.Second))
-	before := snapshotConfigBucket(t, ctx, mgrA)
+	require.NoError(t, first.Start(ctx))
+	defer first.Stop(5 * time.Second)
 
-	// Manager B — the "local" app boots second against the same bucket with a
-	// DIFFERENT platform identity but the SAME version. It must NOT adopt the
-	// foreign config.
-	localCfg := &Config{
-		Version:  "1.0.0", // matching version is not matching identity
-		Platform: PlatformConfig{Org: "localorg", ID: "local-app", Type: "test"},
-		Services: make(types.ServiceConfigs),
-		Components: ComponentConfigs{
-			"local-comp": types.ComponentConfig{
-				Type: "output", Name: "websocket", Enabled: true,
-				Config: json.RawMessage(`{"port": 9099}`),
-			},
-		},
-	}
-	mgrB, err := NewConfigManager(localCfg, tc.Client, nil)
+	other, err := NewConfigManager(appConfig("acme", "other", "other-comp", "websocket"), tc.Client, nil)
 	require.NoError(t, err)
-	err = mgrB.Start(ctx)
-	require.ErrorContains(t, err, "config bucket platform identity mismatch")
-	require.ErrorContains(t, err, `local org="localorg" platform="local-app"`)
-	require.ErrorContains(t, err, `recorded org="foreignorg" stem="foreign-app"`)
-	require.ErrorContains(t, err, `shared bucket "semstreams_config" belongs to another platform`)
+	require.NoError(t, other.Start(ctx), "a different declared pair must start in its own bucket, not be refused")
+	defer other.Stop(5 * time.Second)
 
-	got := mgrB.GetConfig().Get()
+	require.Equal(t, "semstreams_config_acme_dep", first.bucketName)
+	require.Equal(t, "semstreams_config_acme_other", other.bucketName)
+	_, bleed := other.GetConfig().Get().Components["dep-comp"]
+	require.False(t, bleed, "an app must never see another pair's components (gh#459)")
+	_, err = mustStore(t, other).Get(ctx, "components.dep-comp")
+	require.ErrorIs(t, err, natsclient.ErrKVKeyNotFound, "the other pair's bucket must not hold the first app's keys")
 
-	// Kept its own platform identity — did not adopt the foreign one.
-	require.Equal(t, "localorg", got.Platform.Org, "manager B must keep its own org")
-	require.Equal(t, "local-app", got.Platform.ID, "manager B must keep its own platform id")
-
-	// Kept its own component; did not adopt the foreign app's (the gh#459 bleed).
-	_, hasForeign := got.Components["foreign-comp"]
-	require.False(t, hasForeign, "manager B must not adopt the foreign app's component")
-	_, hasLocal := got.Components["local-comp"]
-	require.True(t, hasLocal, "manager B must keep its own component")
-
-	after := snapshotConfigBucket(t, ctx, mgrB)
-	require.Equal(t, before, after, "failed startup must leave every foreign bucket key and revision unchanged")
-}
-
-type configBucketSnapshotEntry struct {
-	Revision uint64
-	Value    string
-}
-
-func snapshotConfigBucket(t *testing.T, ctx context.Context, manager *Manager) map[string]configBucketSnapshotEntry {
-	t.Helper()
-	// Independent of the manager's lifecycle: this helper is called on a
-	// manager whose Start was REFUSED, which since Codex B6 leaves its own
-	// handles unpublished on purpose.
-	kv := directBucket(t, ctx, manager)
-	keys, err := kv.Keys(ctx)
+	clone, err := NewConfigManager(appConfig("acme", "dep", "dep-comp", "udp"), tc.Client, nil)
 	require.NoError(t, err)
-	snapshot := make(map[string]configBucketSnapshotEntry, len(keys))
-	for _, key := range keys {
-		entry, err := kv.Get(ctx, key)
-		require.NoError(t, err)
-		snapshot[key] = configBucketSnapshotEntry{Revision: entry.Revision(), Value: string(entry.Value())}
-	}
-	return snapshot
+	require.NoError(t, clone.Start(ctx))
+	defer clone.Stop(5 * time.Second)
+	require.Equal(t, first.bucketName, clone.bucketName, "a clone of the same pair shares one bucket")
+	require.Equal(t, first.GetConfig().Get().Platform.ID, clone.GetConfig().Get().Platform.ID,
+		"a clone adopts the recorded authority instead of minting a second one")
 }

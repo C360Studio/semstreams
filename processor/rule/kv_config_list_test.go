@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/config"
-	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -35,7 +34,9 @@ func startRulesFamily(t *testing.T, ctx context.Context, tc *natsclient.TestClie
 	require.NoError(t, err)
 	require.NoError(t, manager.Start(ctx))
 	t.Cleanup(func() { _ = manager.Stop(5 * time.Second) })
-	bucket, err := tc.Client.GetKeyValueBucket(ctx, graph.BucketSemStreamsConfig)
+	name, err := config.BucketName(cfg.Platform.Org, cfg.Platform.ID)
+	require.NoError(t, err)
+	bucket, err := tc.Client.GetKeyValueBucket(ctx, name)
 	require.NoError(t, err)
 	return rcm, bucket
 }

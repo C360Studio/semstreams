@@ -48,7 +48,7 @@ func TestFrameworkOwnedBuckets_IncludesOperationalBuckets(t *testing.T) {
 // created-but-never-read-or-written surface is gone from the owned set, so the
 // retention sweep guards FrameworkOwnedBuckets() with no bucket existing
 // solely to carry a guard exemption. One owned bucket sits outside the sweep
-// by design: a strict-retention row (semstreams_config, ADR-104) is verified
+// by design: a strict-retention row (the semstreams_config_* family, ADR-104) is verified
 // at every acquisition instead of reconciled by this backstop.
 func TestFrameworkOwnedBuckets_NoEmbeddingsCache(t *testing.T) {
 	t.Parallel()

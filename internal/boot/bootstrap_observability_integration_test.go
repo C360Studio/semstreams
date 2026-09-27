@@ -260,8 +260,10 @@ func seedEffectiveForwarderConfig(
 	platform config.PlatformConfig,
 ) {
 	t.Helper()
+	name, err := config.BucketName(platform.Org, platform.ID)
+	require.NoError(t, err)
 	bucket, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: "semstreams_config", History: 5,
+		Bucket: name, History: 5,
 	})
 	require.NoError(t, err)
 	putKVJSON(t, ctx, bucket, "version", "2.0.0")

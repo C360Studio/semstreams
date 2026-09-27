@@ -8,8 +8,8 @@ import (
 	gtypes "github.com/c360studio/semstreams/graph"
 )
 
-// sharedConfigForgeryTargets are the two keys in the shared runtime
-// configuration bucket that a generic update_kv must never reach. They are
+// sharedConfigForgeryTargets are keys in a runtime configuration bucket that a
+// generic update_kv must never reach. They are
 // written as literals here (not the graph.* / config.* constants) on purpose:
 // these tests assert the write-ownership BEHAVIOR, mirroring
 // operational_bucket_ownership_test.go.
@@ -19,14 +19,17 @@ import (
 //     nothing more — so a rule pack could move the authority every entity is
 //     minted under. A forged id that does NOT match bricks the boot
 //     permanently, because ADR-102 d7 forbids rewriting a minted authority.
-//   - platform_identity_guard: overwriting the environment claim reopens the
-//     concurrent-first-boot race it exists to decide (Codex B2).
+//   - rules.forged: a rule pack writing a rule definition past the rule
+//     ConfigManager, which is the only writer of rules.* (#1188).
 //
-// natsKVWriter.PutJSON plain-Puts, so neither key's create-once-ness protects
-// it; the ownership guard is what protects it.
-var sharedConfigForgeryTargets = []string{"platform_identity", "platform_identity_guard"}
+// natsKVWriter.PutJSON plain-Puts, so no key's create-once-ness protects it;
+// the ownership guard is what protects it.
+var sharedConfigForgeryTargets = []string{"platform_identity", "rules.forged"}
 
-const sharedConfigBucketLiteral = "semstreams_config"
+// sharedConfigBucketLiteral is one member of the configuration bucket family:
+// since #1188 each deployment's bucket is named by its declared pair, and the
+// guard must refuse every member, not one fixed name.
+const sharedConfigBucketLiteral = "semstreams_config_acme_dep"
 
 // newMockKVWriterNATS builds the production writer with a NIL NATS client on
 // purpose: every path that would touch it panics, so a test that passes proves

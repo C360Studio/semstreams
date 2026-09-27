@@ -19,6 +19,7 @@ func TestConfigManager_PatternMatching(t *testing.T) {
 	// Create a minimal config
 	cfg := &Config{
 		Version:    "1.0.0",
+		Platform:   PlatformConfig{Org: "c360", ID: "test", Type: "test"},
 		Services:   make(types.ServiceConfigs),
 		Components: make(ComponentConfigs),
 	}
@@ -536,6 +537,7 @@ func TestConfigManager_WatchModelRegistry_ImplementsModelWatcher(t *testing.T) {
 func TestConfigManager_MultipleSubscribers(t *testing.T) {
 	cfg := &Config{
 		Version:    "1.0.0",
+		Platform:   PlatformConfig{Org: "c360", ID: "test", Type: "test"},
 		Services:   make(types.ServiceConfigs),
 		Components: make(ComponentConfigs),
 	}

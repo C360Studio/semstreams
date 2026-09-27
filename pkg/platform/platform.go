@@ -33,5 +33,11 @@ type Config struct {
 	Region       string   `json:"region,omitempty"`       // gulf_mexico, atlantic, pacific
 	Capabilities []string `json:"capabilities,omitempty"` // radar, ctd, deployment, etc.
 
-	Environment string `json:"environment,omitempty"` // "prod", "dev", "test"
+	// Environment is a startup log label ("prod", "dev", "test") and nothing
+	// else: it separates no deployments. Two deployments declaring the same
+	// Org and ID share one configuration bucket and one authority whatever
+	// their Environment; give each its own ID ("myapp-dev", "myapp-prod")
+	// instead (owner ruling on #1188, 2026-09-01: "the bucket name is the
+	// separation").
+	Environment string `json:"environment,omitempty"`
 }

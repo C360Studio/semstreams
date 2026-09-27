@@ -23,7 +23,7 @@
 
 ### Integration Points
 
-- **Consumes from**: JSON configuration files, environment variables, NATS KV bucket "semstreams_config"
+- **Consumes from**: JSON configuration files, environment variables, NATS KV bucket `semstreams_config_<org>_<stem>`, named from the declared `platform.org` and `platform.id` by `config.BucketName`; other writers, such as the rule manager's `rules.*`, reach it through a key family registered with `WithKeyFamily`
 - **Provides to**: All components requiring configuration (processors, managers, services, input handlers)
 - **External dependencies**: NATS JetStream for KV operations, file system for JSON file I/O
 

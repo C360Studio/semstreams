@@ -278,8 +278,8 @@ func TestHotReload_DebounceCoalescing(t *testing.T) {
 		time.Sleep(15 * time.Millisecond)
 	}
 
-	// debounce(250ms) + slack(250ms).
-	time.Sleep(500 * time.Millisecond)
+	// debounce(250ms) + slack(150ms).
+	time.Sleep(400 * time.Millisecond)
 
 	finalCount := rcm.ReconcileCount()
 	assert.Equal(t, initialCount+1, finalCount,

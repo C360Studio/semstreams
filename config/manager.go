@@ -32,7 +32,14 @@ type Update struct {
 type Manager struct {
 	config *SafeConfig // Current configuration
 
-	// natsClient is retained so the shared configuration bucket is acquired
+	// bucketName is this deployment's configuration bucket, derived once at
+	// construction by BucketName from the DECLARED pair — before Start can
+	// replace platform.id with the minted identifier, which lives inside the
+	// bucket and so can never name it (#1188). Resolved through the catalog's
+	// configuration family, never spelled locally.
+	bucketName string
+
+	// natsClient is retained so the configuration bucket is acquired
 	// under Start's context rather than one the constructor invented. The
 	// Manager retains the CLIENT, never a context (repository hard rule).
 	natsClient *natsclient.Client
@@ -72,31 +79,13 @@ type Manager struct {
 	engineHighWaterRev atomic.Uint64
 }
 
-// configBucketName is the fixed, global name of the shared configuration
-// bucket. Every sem* app pointed at one NATS server shares it, which is why the
-// deployment's identity has to be recorded IN it rather than assumed about it.
-//
-// The name is the catalog's, not this package's: since ADR-104 the framework
-// guarantees this bucket's retention, which is what puts it in the
-// framework-bucket-catalog descriptor table. A local literal would fork the
-// name from the descriptor that governs it, and a contract test rejects one.
-const configBucketName = graph.BucketSemStreamsConfig
-
-// platformIdentityKVKey is the key in the shared configuration bucket holding
+// platformIdentityKVKey is the key in the configuration bucket holding
 // the deployment's durable platform identity (ADR-104).
 //
 // It is NOT configuration. It is created once with an atomic Create, never
 // written by PushToKV, never applied by syncFromKV or updateConfig, never
 // watched, and never counted as configuration by first-boot detection.
 const platformIdentityKVKey = "platform_identity"
-
-// platformEnvironmentGuardKey records which platform.environment established
-// this configuration bucket. It is INTERNAL: nothing outside this package reads
-// it, and it is deliberately not a field of platformIdentityRecord, whose
-// `{org, stem, id}` shape is a cross-repo read contract. Like the identity
-// record it is never pushed, never applied, never watched, and never counted as
-// configuration.
-const platformEnvironmentGuardKey = "platform_identity_guard"
 
 // platformIdentityRecord says which platform authority a configuration bucket
 // belongs to. Its shape is a cross-repo contract (ADR-104): adopters without Go
@@ -124,14 +113,19 @@ func NewConfigManager(cfg *Config, natsClient *natsclient.Client, logger *slog.L
 		logger = slog.Default()
 	}
 
-	// No I/O here, and no context. The shared configuration bucket is acquired
+	// No I/O here, and no context. The configuration bucket is acquired
 	// in Start(ctx), under the caller's lifecycle context: this constructor used
 	// to invent a context.Background() root for CreateKeyValueBucket, which the
 	// repository hard rule forbids and which left the caller's cancellation
 	// unable to bound the acquisition. It became removal work rather than
 	// inherited debt the moment this package made that bucket the home of
 	// create-once identity state.
+	bucketName, err := BucketName(cfg.Platform.Org, cfg.Platform.ID)
+	if err != nil {
+		return nil, fmt.Errorf("name the configuration bucket: %w", err)
+	}
 	cm := &Manager{
+		bucketName:  bucketName,
 		config:      NewSafeConfig(cfg),
 		natsClient:  natsClient,
 		subscribers: make(map[string][]chan Update),
@@ -156,7 +150,7 @@ func NewConfigManager(cfg *Config, natsClient *natsclient.Client, logger *slog.L
 var errBucketNotAcquired = errors.New(
 	"config manager has no configuration bucket yet: it is acquired by Start(ctx), which must run first")
 
-// acquireBucket obtains the shared configuration bucket under the CALLER's
+// acquireBucket obtains the configuration bucket under the CALLER's
 // context and refuses a policy that could silently delete what this package
 // mints into it.
 func (cm *Manager) acquireBucket(ctx context.Context) (jetstream.KeyValue, *natsclient.KVStore, error) {
@@ -164,12 +158,13 @@ func (cm *Manager) acquireBucket(ctx context.Context) (jetstream.KeyValue, *nats
 	// not this function — declares History 5 and the strict no-lifecycle
 	// retention that refuses an evicting policy rather than repairing one,
 	// because the identity such a policy could already have deleted is
-	// create-once (ADR-104; ADR-102 decision 7). The other writer of this
-	// bucket, processor/rule's ConfigManager, resolves the same descriptor, so
-	// the guarantee no longer depends on which of them creates it first.
-	kv, err := graph.EnsureCatalogBucket(ctx, cm.natsClient, configBucketName)
+	// create-once (ADR-104; ADR-102 decision 7). This is the bucket's only
+	// acquisition: its name is derived from the declared pair only this
+	// Manager holds, and the rule ConfigManager writes rules.* through the key
+	// family this Manager serves it (#1188).
+	kv, err := graph.EnsureCatalogBucket(ctx, cm.natsClient, cm.bucketName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("acquire config bucket %q: %w", configBucketName, err)
+		return nil, nil, fmt.Errorf("acquire config bucket %q: %w", cm.bucketName, err)
 	}
 	return kv, cm.natsClient.NewKVStore(kv), nil
 }
@@ -179,8 +174,8 @@ func (cm *Manager) acquireBucket(ctx context.Context) (jetstream.KeyValue, *nats
 // It runs once, at the very end of a successful Start, and that placement is
 // the contract: until it runs, PushToKV, PutComponentToKV and
 // DeleteComponentFromKV all return errBucketNotAcquired. A Start that refused —
-// a foreign identity, a pre-identity bucket, a lost environment claim, a
-// malformed record, a watcher that would not open — therefore leaves no armed
+// a foreign identity, a pre-identity bucket, a malformed record, a watcher
+// that would not open — therefore leaves no armed
 // writer behind. Publishing at acquisition instead let a caller overwrite the
 // very bucket Start had just refused as another platform's, which is the
 // detached running mode component-runtime-config says does not exist.
@@ -306,7 +301,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 	// Initialize shutdown channel
 	cm.shutdownCh = make(chan struct{})
 
-	// Acquire the shared configuration bucket under THIS context, and refuse a
+	// Acquire the configuration bucket under THIS context, and refuse a
 	// policy that could evict the identity established below.
 	//
 	// The handles stay LOCAL through every step of Start that can refuse. They
@@ -334,38 +329,6 @@ func (cm *Manager) Start(ctx context.Context) error {
 			// Continue anyway - UI won't have initial state but app can run
 		}
 	} else {
-		// Guard against cross-app config bleed on shared NATS (gh#459).
-		// The config bucket has a fixed global name (semstreams_config), so
-		// two sem* apps pointed at the same NATS server share it. Sync
-		// direction is otherwise decided purely by version, and matching
-		// versions is NOT matching identity — the second app to boot would
-		// silently adopt the first's components (and can panic creating a
-		// foreign component). If the stored config carries a DIFFERENT
-		// platform identity (org+id+env) than the local file, refuse to
-		// adopt or continue startup. Identity-less configs (no
-		// org/id on either side) fall through to the existing behavior —
-		// they're indistinguishable, and per-platform bucket namespacing is
-		// the complete fix for that case.
-		if kvIdentity, found := cm.kvPlatformIdentity(ctx, kvHandle); found {
-			localIdentity := cm.config.Get().Platform
-			if platformHasIdentity(localIdentity) && platformHasIdentity(kvIdentity) &&
-				platformIdentityTuple(localIdentity) != platformIdentityTuple(kvIdentity) {
-				return fmt.Errorf(
-					"config bucket platform identity mismatch: "+
-						"local org=%q platform=%q environment=%q, "+
-						"stored org=%q platform=%q environment=%q: "+
-						"shared bucket %q belongs to another platform",
-					localIdentity.Org,
-					localIdentity.ID,
-					localIdentity.Environment,
-					kvIdentity.Org,
-					kvIdentity.ID,
-					kvIdentity.Environment,
-					configBucketName,
-				)
-			}
-		}
-
 		// Subsequent boot: compare versions to decide sync direction
 		fileVersion := cm.config.Get().Version
 		kvVersion, err := cm.getKVVersion(ctx, kvHandle)
@@ -468,7 +431,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 				_ = w.Stop()
 			}
 			cleanup()
-			return fmt.Errorf("watch key family %q in config bucket %q: %w", family.pattern(), configBucketName, err)
+			return fmt.Errorf("watch key family %q in config bucket %q: %w", family.pattern(), cm.bucketName, err)
 		}
 		familyWatchers = append(familyWatchers, watcher)
 	}
@@ -1042,7 +1005,7 @@ func (cm *Manager) establishPlatformIdentity(ctx context.Context, kvStore *natsc
 		// Fail closed: a bucket that cannot be read is a bucket that must not
 		// be minted into. Guessing "first boot" here would Create a second
 		// authority for a deployment that already has one.
-		return false, fmt.Errorf("read config bucket %q to establish platform identity: %w", configBucketName, err)
+		return false, fmt.Errorf("read config bucket %q to establish platform identity: %w", cm.bucketName, err)
 	}
 
 	recordPresent := false
@@ -1051,8 +1014,6 @@ func (cm *Manager) establishPlatformIdentity(ctx context.Context, kvStore *natsc
 		switch key {
 		case platformIdentityKVKey:
 			recordPresent = true
-		case platformEnvironmentGuardKey:
-			// Framework-internal, like the record: never configuration.
 		default:
 			configKeys++
 		}
@@ -1060,83 +1021,23 @@ func (cm *Manager) establishPlatformIdentity(ctx context.Context, kvStore *natsc
 
 	switch {
 	case recordPresent:
-		if err := cm.claimEnvironment(ctx, kvStore); err != nil {
-			return false, err
-		}
 		return configKeys > 0, cm.adoptPlatformIdentity(ctx, kvStore)
 	case configKeys > 0:
 		declared := cm.config.Get().Platform
 		return false, fmt.Errorf(
 			"config bucket %q holds %d configuration key(s) (%s) but no %q record, so nothing was minted and nothing was written. "+
-				"Either it predates framework-minted platform identity (ADR-104), or another writer created it first — "+
-				"%q is a fixed global name and this package is not its only writer: processor/rule's ConfigManager "+
-				"creates the same bucket for its rules.* keys, and two ConfigManager instances coexist against it by design. "+
-				"Both cases have the same remedy: provision fresh NATS storage for this deployment — ADR-102 decision 7 "+
-				"forbids rewriting a minted authority — or, to adopt the pair this configuration declares, pre-create %q as "+
+				"This package is the bucket's only writer until its first Start succeeds — rules.* arrive only through the "+
+				"key family it serves — so the keys were written some other way: the bucket predates framework-minted "+
+				"platform identity (ADR-104), or something wrote it by hand. "+
+				"Provision fresh NATS storage for this deployment — ADR-102 decision 7 forbids rewriting a minted "+
+				"authority — or, to adopt the pair this configuration declares, pre-create %q as "+
 				"{\"org\":%q,\"stem\":%q,\"id\":%q}",
-			configBucketName, configKeys, summarizeKeys(keys), platformIdentityKVKey,
-			configBucketName,
+			cm.bucketName, configKeys, summarizeKeys(keys), platformIdentityKVKey,
 			platformIdentityKVKey, declared.Org, declared.ID, declared.ID,
 		)
 	default:
-		// Guard BEFORE the record, so a crash between the two leaves a safe
-		// state: the same environment proceeds to mint, a second one is
-		// refused.
-		if err := cm.claimEnvironment(ctx, kvStore); err != nil {
-			return false, err
-		}
 		return false, cm.mintPlatformIdentity(ctx, kvStore)
 	}
-}
-
-// claimEnvironment enforces the invariant that at most ONE environment may
-// establish against one configuration bucket.
-//
-// The gh#459 guard compares (org, id, environment) — but only on the
-// subsequent-boot branch. When two managers find the bucket empty, the winner
-// Creates the identity record and the loser adopts it through ErrKeyExists, and
-// BOTH then take the first-boot branch, where that guard never runs: two
-// deployments with the same org and stem but different environments each
-// published their configuration over the other's. Measured 10/10 against real
-// NATS (Codex owner round, 2026-08-31).
-//
-// The claim is an atomic Create on an internal key, so it is decided by the
-// same primitive as the identity record and cannot be raced. It is NOT part of
-// the record: the `{org, stem, id}` shape is a cross-repo read contract and
-// stays exactly that. This guard is also what carries the environment
-// distinction after #1188 retires the gh#459 config-key guard.
-func (cm *Manager) claimEnvironment(ctx context.Context, kvStore *natsclient.KVStore) error {
-	declared := cm.config.Get().Platform.Environment
-	claim, err := json.Marshal(declared)
-	if err != nil {
-		return fmt.Errorf("marshal environment claim: %w", err)
-	}
-
-	if _, err := kvStore.Create(ctx, platformEnvironmentGuardKey, claim); err == nil {
-		return nil
-	} else if !errors.Is(err, natsclient.ErrKVKeyExists) {
-		return fmt.Errorf("claim environment for config bucket %q: %w", configBucketName, err)
-	}
-
-	entry, err := kvStore.Get(ctx, platformEnvironmentGuardKey)
-	if err != nil {
-		return fmt.Errorf("read the environment claim on config bucket %q: %w", configBucketName, err)
-	}
-	var established string
-	if err := json.Unmarshal(entry.Value, &established); err != nil {
-		return fmt.Errorf("parse the environment claim %q on config bucket %q: %w", platformEnvironmentGuardKey, configBucketName, err)
-	}
-	if established != declared {
-		return fmt.Errorf(
-			"config bucket %q was established by platform.environment %q and this deployment declares %q: "+
-				"one bucket serves one environment, and two would publish configuration over each other. "+
-				"Point this deployment at its own NATS storage — or, if this is the only deployment, "+
-				"platform.environment was changed after this bucket was established; the framework binds "+
-				"the environment at first boot and never re-decides it (ADR-102 d7)",
-			configBucketName, established, declared,
-		)
-	}
-	return nil
 }
 
 // summarizeKeys renders at most a handful of bucket keys so the refusal above
@@ -1246,15 +1147,21 @@ func (cm *Manager) adoptPlatformIdentity(ctx context.Context, kvStore *natsclien
 			return fmt.Errorf(
 				"config bucket %q records platform identity %q, minted from stem %q, and this configuration declares the minted identifier: "+
 					"declare the stem %q, not the minted identifier %q — the framework composes the effective value and records it here",
-				configBucketName, record.ID, record.Stem, record.Stem, record.ID,
+				cm.bucketName, record.ID, record.Stem, record.Stem, record.ID,
 			)
 		}
+		// The bucket is named by the declared pair, so a record for another
+		// pair is reachable only through an alias — `_` is legal inside both
+		// parts — or a hand-written record (owner ruling on #1188, Q2 (a):
+		// refused here, not prevented at naming).
 		return fmt.Errorf(
 			"config bucket platform identity mismatch: "+
-				"local org=%q platform=%q, "+
-				"recorded org=%q stem=%q id=%q: "+
-				"shared bucket %q belongs to another platform",
-			declared.Org, declared.ID, record.Org, record.Stem, record.ID, configBucketName,
+				"this configuration declares org=%q platform.id=%q, but config bucket %q records org=%q stem=%q id=%q. "+
+				"The bucket is named from the declared pair, so this happens only when two pairs alias to one name "+
+				"(`_` is legal inside both parts: org \"a_b\" with platform.id \"c\" and org \"a\" with platform.id \"b_c\" "+
+				"share a bucket) or when the record was written by hand. Declare a pair that does not alias, or provision "+
+				"fresh NATS storage — ADR-102 decision 7 forbids rewriting a minted authority",
+			declared.Org, declared.ID, cm.bucketName, record.Org, record.Stem, record.ID,
 		)
 	}
 
@@ -1308,44 +1215,6 @@ func (cm *Manager) getKVVersion(ctx context.Context, kvHandle jetstream.KeyValue
 	}
 
 	return version, nil
-}
-
-// kvPlatformIdentity reads the stored platform identity from the KV `platform`
-// key. Returns found=false when the key is absent or unparseable (an old config
-// format, or a bucket written before platform identity was populated), in which
-// case the caller must not treat the bucket as identity-mismatched.
-func (cm *Manager) kvPlatformIdentity(ctx context.Context, kvHandle jetstream.KeyValue) (PlatformConfig, bool) {
-	entry, err := kvHandle.Get(ctx, "platform")
-	if err != nil {
-		return PlatformConfig{}, false
-	}
-	var p PlatformConfig
-	if err := json.Unmarshal(entry.Value(), &p); err != nil {
-		cm.logger.Warn("Failed to parse platform identity from KV", "error", err)
-		return PlatformConfig{}, false
-	}
-	return p, true
-}
-
-// platformHasIdentity reports whether a platform config carries a discriminating
-// identity (org or id). An identity-less config cannot be told apart from
-// another, so the cross-app guard does not fire on it.
-func platformHasIdentity(p PlatformConfig) bool {
-	return p.Org != "" || p.ID != ""
-}
-
-// platformIdentityTuple is the identity tuple used to compare two platform
-// configs for the cross-app config-bleed guard (gh#459). Environment is
-// included so two instances of the same org+id but different environments
-// (prod vs dev) sharing one NATS are also treated as distinct. A NUL
-// separator (illegal in every segment) is used so the join is unambiguous —
-// {org:"a",id:"b.c"} and {org:"a.b",id:"c"} must not collide.
-//
-// Named "tuple", not "key": it is a comparison value, and platformIdentityKVKey
-// beside it is a KV address. Two symbols one letter apart meaning different
-// things is how the wrong one gets called.
-func platformIdentityTuple(p PlatformConfig) string {
-	return p.Org + "\x00" + p.ID + "\x00" + p.Environment
 }
 
 // syncFromKV loads all configuration from KV and applies it
