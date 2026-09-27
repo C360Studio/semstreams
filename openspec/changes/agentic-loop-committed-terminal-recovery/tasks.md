@@ -267,6 +267,6 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
 - [x] 7.10 Codex re-review at `ff4a0abf`, finding 2 (MEDIUM): the W2 "what is guaranteed" cells in design § 1 and
       § 8 and the § 9 adopter line are qualified by the same-kind outcome — an approved terminal tool's completion
       does not converge and latches the lane — matching the spec and the migration.
-- [ ] 7.11 OWNER RULING OWED (merge hold, Codex re-review at `ff4a0abf`): the W2 `tool.result` lane latch in the § 8
-      amendment column — accept it as part of the (a) bound, or authorize narrower behaviour. Ticked with the
-      owner's words when ruled; the ruling is transcribed onto #1377.
+- [x] 7.11 OWNER RULING (merge hold lifted; Codex re-review at `ff4a0abf`): the W2 `tool.result` lane latch in the § 8
+      amendment column. RULED 2026-09-27, the owner's words: "Accept as the (a) bound (Recommended)" — transcribed onto
+      #1377; the latch is an accepted limitation of the (a) bound and of #1146's first exit clause, no narrowing by code.
