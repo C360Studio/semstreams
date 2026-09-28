@@ -3,12 +3,12 @@
 - [x] 1.1 `inventory-processor.md` at `7a91400a` — Stop path waits, 16 lifecycle fields × writer/reader/guard/goroutine, consumers, tests (`task inventory:verify`: pins=35 ok=35)
 - [x] 1.2 `inventory-cron-and-lanes.md` at `7a91400a` — CronScheduler waits and fields, the lane shape repo-wide, sibling idioms, sanctioned-idiom search (`task inventory:verify`: pins=154 ok=154)
 
-- [ ] 1.3 Independent inventory review → `INVENTORY PASS` (architect contract step 3) — NOT RUN before design; docket Q0 on #1283 asks the owner to waive or run
+- [x] 1.3 Independent inventory review → `INVENTORY PASS` (architect contract step 3) — NOT RUN; waived by the owner 2026-09-28 (docket 1 Q0 (a))
 
 ## 2. Design
 
 - [x] 2.1 `design.md` — § 0 rulings verbatim, premises pinned, options with costs, docket cheaper-row-first, acceptance, residuals to file; § 7 coordinator amendments A0–A2
-- [ ] 2.2 Owner read of the docket; rulings transcribed into § 0
+- [x] 2.2 Owner read of the docket; rulings transcribed into § 0 — Owner read 2026-09-28 — Q0 (a), Q-A (2), Q-C (3)
 
 ## 3. Implementation (rows from design § 6, amended by § 7; the owner's docket rulings select 3.1/3.2's form)
 
