@@ -10,7 +10,11 @@ import (
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
-// ApplyConfigUpdate applies validated configuration changes
+// ApplyConfigUpdate applies validated configuration changes. Blocks while a
+// running processor executes the update on its runtime; returns the update's
+// result, a refusal once Stop has fenced admission, or the runtime's end error.
+// It carries no caller deadline — a bounded Stop cancels the runtime and
+// releases it.
 func (rp *Processor) ApplyConfigUpdate(changes map[string]any) error {
 	if _, present := changes["pack_id"]; present {
 		return errs.WrapInvalid(

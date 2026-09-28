@@ -294,6 +294,10 @@ func (rp *Processor) stopWatcherForBucketPattern(bucketName, pattern string) err
 }
 
 // UpdateWatchBuckets atomically replaces the configured ENTITY_STATES patterns.
+// Blocks while a running processor executes the update on its runtime; returns
+// the update's result, a refusal once Stop has fenced admission, or the
+// runtime's end error. It carries no caller deadline — a bounded Stop cancels
+// the runtime and releases it.
 func (rp *Processor) UpdateWatchBuckets(newBuckets map[string][]string) error {
 	if err := validateEntityWatchBuckets(newBuckets); err != nil {
 		return err

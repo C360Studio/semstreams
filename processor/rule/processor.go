@@ -1307,6 +1307,10 @@ func (rp *Processor) cleanup(ctx context.Context) error {
 		stopErrors = append(stopErrors, err)
 	}
 	if hotReloadMgr != nil {
+		// Contextless but bounded in practice: its KV goroutine selects on its
+		// own ctx, which Stop cancels before joining; its only other wait is a
+		// runtime command, refused since the step-1 fence or, if admitted
+		// before it, already settled by the step-1 barrier.
 		stopErrors = append(stopErrors, hotReloadMgr.Stop())
 	}
 	// 6. Watcher admission is closed; now no new work can enter the coalescer.
