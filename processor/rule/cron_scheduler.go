@@ -55,16 +55,7 @@ type CronScheduler struct {
 	stopDone      chan struct{}
 	cancel        context.CancelFunc
 	registerFence bool
-	dispatchMu    sync.Mutex
-	dispatchQueue []cronDispatch
-	dispatchWake  chan struct{}
-	dispatchDone  chan struct{}
-	dispatchFence bool
-}
-
-type cronDispatch struct {
-	run    func(context.Context) error
-	result chan error
+	dispatch      ownerLane
 }
 
 type cronStopContext struct{ done <-chan struct{} }
@@ -260,12 +251,10 @@ func (s *CronScheduler) Start(ctx context.Context) error {
 	s.startDone = make(chan struct{})
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
-	s.dispatchWake = make(chan struct{}, 1)
-	s.dispatchDone = make(chan struct{})
-	s.dispatchFence = false
+	s.dispatch.open()
 	s.lifecycleMu.Unlock()
 
-	go s.runDispatcher(runCtx)
+	go s.dispatch.run(runCtx)
 
 	s.restoreFromTracker(ctx)
 
@@ -279,90 +268,16 @@ func (s *CronScheduler) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *CronScheduler) runDispatcher(ctx context.Context) {
-	defer close(s.dispatchDone)
-	for {
-		select {
-		case <-ctx.Done():
-			s.failDispatchQueue(ctx.Err())
-			return
-		case <-s.dispatchWake:
-			for {
-				s.dispatchMu.Lock()
-				if len(s.dispatchQueue) == 0 {
-					s.dispatchMu.Unlock()
-					break
-				}
-				dispatch := s.dispatchQueue[0]
-				s.dispatchQueue = s.dispatchQueue[1:]
-				s.dispatchMu.Unlock()
-				dispatch.result <- dispatch.run(ctx)
-				close(dispatch.result)
-			}
-		}
-	}
-}
-
-func (s *CronScheduler) failDispatchQueue(err error) {
-	s.dispatchMu.Lock()
-	queue := s.dispatchQueue
-	s.dispatchQueue = nil
-	s.dispatchMu.Unlock()
-	for _, dispatch := range queue {
-		dispatch.result <- err
-		close(dispatch.result)
-	}
-}
-
+// submitDispatch runs one admitted fire's actions on the dispatch lane.
 func (s *CronScheduler) submitDispatch(run func(context.Context) error) error {
-	dispatch := cronDispatch{run: run, result: make(chan error, 1)}
-	s.dispatchMu.Lock()
-	if s.dispatchFence || s.dispatchWake == nil {
-		s.dispatchMu.Unlock()
+	err := s.dispatch.submit(run)
+	switch {
+	case errors.Is(err, errLaneAdmissionClosed):
 		return errors.New("cron scheduler: dispatch admission is closed")
-	}
-	select {
-	case <-s.dispatchDone:
-		s.dispatchMu.Unlock()
+	case errors.Is(err, errLaneEnded):
 		return errors.New("cron scheduler: dispatcher stopped")
-	default:
 	}
-	s.dispatchQueue = append(s.dispatchQueue, dispatch)
-	wake := s.dispatchWake
-	s.dispatchMu.Unlock()
-	select {
-	case wake <- struct{}{}:
-	default:
-	}
-	return <-dispatch.result
-}
-
-func (s *CronScheduler) fenceDispatch() <-chan error {
-	barrier := cronDispatch{run: func(context.Context) error { return nil }, result: make(chan error, 1)}
-	s.dispatchMu.Lock()
-	s.dispatchFence = true
-	if s.dispatchDone == nil {
-		s.dispatchMu.Unlock()
-		barrier.result <- nil
-		close(barrier.result)
-		return barrier.result
-	}
-	select {
-	case <-s.dispatchDone:
-		s.dispatchMu.Unlock()
-		barrier.result <- nil
-		close(barrier.result)
-		return barrier.result
-	default:
-	}
-	s.dispatchQueue = append(s.dispatchQueue, barrier)
-	wake := s.dispatchWake
-	s.dispatchMu.Unlock()
-	select {
-	case wake <- struct{}{}:
-	default:
-	}
-	return barrier.result
+	return err
 }
 
 // restoreFromTracker walks the registered rules, looks up each rule's
@@ -490,10 +405,10 @@ func (s *CronScheduler) Stop() context.Context {
 		stopDone := s.stopDone
 		settlement = stopDone
 		cancel := s.cancel
-		dispatchDone := s.dispatchDone
+		dispatchDone := s.dispatch.done()
 		s.lifecycleMu.Unlock()
 
-		barrier := s.fenceDispatch()
+		barrier := s.dispatch.fence()
 		nativeStop := s.cron.Stop()
 		go func() {
 			<-nativeStop.Done()

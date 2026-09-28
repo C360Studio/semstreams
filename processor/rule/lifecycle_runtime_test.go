@@ -37,7 +37,7 @@ func TestRuleReadinessCompletionSurvivesStopDeadline(t *testing.T) {
 		}
 		runtimeDone := processor.runtimeDone
 		go func() {
-			processor.runRuntimeCoordinator(runCtx)
+			processor.commandLane.run(runCtx)
 			close(runtimeDone)
 		}()
 		statusDone := make(chan struct{})
@@ -113,8 +113,8 @@ func TestRuleRuntimeCompletionWaitsForStartupRegistration(t *testing.T) {
 		<-gate.entered
 		processor.lifecycleMu.Lock()
 		runtimeDone := processor.runtimeDone
-		coordinatorDone := processor.coordinatorDone
 		processor.lifecycleMu.Unlock()
+		coordinatorDone := processor.commandLane.done()
 		cancel()
 		<-coordinatorDone
 		synctest.Wait()

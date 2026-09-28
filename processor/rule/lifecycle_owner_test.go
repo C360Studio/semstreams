@@ -113,16 +113,15 @@ func TestRuleCleanupDrainsJetStreamBeforeCancel(t *testing.T) {
 	var cancelOnce sync.Once
 	processor := &Processor{
 		streamConsumers: []ruleStreamConsumer{{handle: consumer}},
-		commandWake:     make(chan struct{}, 1),
-		coordinatorDone: make(chan struct{}),
 		runtimeDone:     make(chan struct{}),
 		cancel: func() {
 			cancelOnce.Do(func() { close(cancelCalled) })
 			runCancel()
 		},
 	}
+	processor.commandLane.open()
 	go func() {
-		processor.runRuntimeCoordinator(runCtx)
+		processor.commandLane.run(runCtx)
 		close(processor.runtimeDone)
 	}()
 
@@ -153,8 +152,9 @@ func TestRuleRuntimeCoordinatorUsesExactStartContextAndFences(t *testing.T) {
 	type contextKey string
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey("key"), "value"))
 	defer cancel()
-	processor := &Processor{commandWake: make(chan struct{}, 1), coordinatorDone: make(chan struct{})}
-	go processor.runRuntimeCoordinator(ctx)
+	processor := &Processor{}
+	processor.commandLane.open()
+	go processor.commandLane.run(ctx)
 
 	if err := processor.submitRuntimeCommand(func(commandCtx context.Context) error {
 		if got := commandCtx.Value(contextKey("key")); got != "value" {
@@ -164,7 +164,7 @@ func TestRuleRuntimeCoordinatorUsesExactStartContextAndFences(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("submit runtime command: %v", err)
 	}
-	barrier := processor.fenceRuntimeCommands()
+	barrier := processor.commandLane.fence()
 	if err := <-barrier; err != nil {
 		t.Fatalf("runtime barrier: %v", err)
 	}
@@ -193,8 +193,6 @@ func TestRuleCleanupDeadlineCancelsAdmittedBootstrapEvaluationWithoutGateWait(t 
 	processor := &Processor{
 		logger:                slog.Default(),
 		cancel:                cancelRun,
-		commandWake:           make(chan struct{}, 1),
-		coordinatorDone:       make(chan struct{}),
 		runtimeDone:           make(chan struct{}),
 		graphStateGuardDone:   make(chan struct{}),
 		entityWatcherMap:      map[string]jetstream.KeyWatcher{key: watcher},
@@ -209,13 +207,14 @@ func TestRuleCleanupDeadlineCancelsAdmittedBootstrapEvaluationWithoutGateWait(t 
 		},
 		stateTracker: tracker,
 	}
+	processor.commandLane.open()
 	processor.statefulEvaluator = NewStatefulEvaluator(tracker, executor, nil)
 	watcherCtx, watcherCancel := context.WithCancel(runCtx)
 	processor.entityDispatchRecords[key] = managedEntityWatcher{
 		watcher: watcher, generation: 1, cancel: watcherCancel, done: make(chan struct{}),
 	}
 	go func() {
-		processor.runRuntimeCoordinator(runCtx)
+		processor.commandLane.run(runCtx)
 		close(processor.runtimeDone)
 	}()
 
@@ -236,10 +235,10 @@ func TestRuleCleanupDeadlineCancelsAdmittedBootstrapEvaluationWithoutGateWait(t 
 	go func() { cleanupDone <- processor.cleanup(stopCtx) }()
 	deadline := time.Now().Add(time.Second)
 	for {
-		processor.commandMu.Lock()
-		fenced := processor.commandFenced
-		queued := len(processor.commands)
-		processor.commandMu.Unlock()
+		processor.commandLane.mu.Lock()
+		fenced := processor.commandLane.fenced
+		queued := len(processor.commandLane.queue)
+		processor.commandLane.mu.Unlock()
 		if fenced && queued == 0 {
 			break
 		}
@@ -393,13 +392,12 @@ func TestRuleCleanupSettlesAdmittedWatcherUpdateBeforeSnapshot(t *testing.T) {
 	processor := &Processor{
 		logger:                slog.Default(),
 		config:                &cfg,
-		commandWake:           make(chan struct{}, 1),
-		coordinatorDone:       make(chan struct{}),
 		runtimeDone:           make(chan struct{}),
 		cancel:                cancel,
 		entityWatcherMap:      make(map[string]jetstream.KeyWatcher),
 		entityDispatchRecords: make(map[string]managedEntityWatcher),
 	}
+	processor.commandLane.open()
 	processor.running = true
 	processor.entityWatcherPrepare = func(context.Context, string, string) (jetstream.KeyWatcher, error) {
 		close(prepareStarted)
@@ -407,7 +405,7 @@ func TestRuleCleanupSettlesAdmittedWatcherUpdateBeforeSnapshot(t *testing.T) {
 		return watcher, nil
 	}
 	go func() {
-		processor.runRuntimeCoordinator(runCtx)
+		processor.commandLane.run(runCtx)
 		close(processor.runtimeDone)
 	}()
 
@@ -422,9 +420,9 @@ func TestRuleCleanupSettlesAdmittedWatcherUpdateBeforeSnapshot(t *testing.T) {
 	cleanupDone := make(chan error, 1)
 	go func() { cleanupDone <- processor.cleanup(context.Background()) }()
 	for {
-		processor.commandMu.Lock()
-		fenced := processor.commandFenced
-		processor.commandMu.Unlock()
+		processor.commandLane.mu.Lock()
+		fenced := processor.commandLane.fenced
+		processor.commandLane.mu.Unlock()
 		if fenced {
 			break
 		}
@@ -451,13 +449,12 @@ func TestRuleCleanupDeadlineCancelsAndJoinsCoordinatorBeforeSnapshot(t *testing.
 	processor := &Processor{
 		logger:                slog.Default(),
 		config:                &cfg,
-		commandWake:           make(chan struct{}, 1),
-		coordinatorDone:       make(chan struct{}),
 		runtimeDone:           make(chan struct{}),
 		cancel:                cancelRun,
 		entityWatcherMap:      make(map[string]jetstream.KeyWatcher),
 		entityDispatchRecords: make(map[string]managedEntityWatcher),
 	}
+	processor.commandLane.open()
 	processor.running = true
 	processor.entityWatcherPrepare = func(commandCtx context.Context, _, _ string) (jetstream.KeyWatcher, error) {
 		close(prepareStarted)
@@ -465,7 +462,7 @@ func TestRuleCleanupDeadlineCancelsAndJoinsCoordinatorBeforeSnapshot(t *testing.
 		return watcher, nil
 	}
 	go func() {
-		processor.runRuntimeCoordinator(runCtx)
+		processor.commandLane.run(runCtx)
 		close(processor.runtimeDone)
 	}()
 	updateDone := make(chan error, 1)
@@ -485,7 +482,7 @@ func TestRuleCleanupDeadlineCancelsAndJoinsCoordinatorBeforeSnapshot(t *testing.
 		t.Fatalf("runtime update error = %v, want nil commit after canceled acquisition: %v", err, err)
 	}
 	select {
-	case <-processor.coordinatorDone:
+	case <-processor.commandLane.done():
 	default:
 		t.Fatal("cleanup returned before the canceled coordinator joined")
 	}
