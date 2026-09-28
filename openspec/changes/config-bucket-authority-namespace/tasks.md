@@ -142,7 +142,7 @@ re-run by the coordinating session at the new final code revision.
       `-v` run through the canonical runner of `./internal/boot ./processor/rule ./test/testinfra` exit 0:
       `TestRootRuleManagerHotReloadsIntoTheProcessor`, the five `TestHotReload_*` and
       `TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock` PASS.
-- [ ] 4.8 Review round 3 on PR #1404 (PASS WITH AMENDMENTS at `60c3320c`, PR comment 2026-09-28):
+- [x] 4.8 Review round 3 on PR #1404 (PASS WITH AMENDMENTS at `60c3320c`, PR comment 2026-09-28):
       - MEDIUM-2, commit `020704e4`: `TestConfigManagerStopDuringSeedingJoinsStart` never binds the family, so any
         reconcile fails at `ListRules` before an apply and its "no apply" assertion could not fail (the reviewer's
         mutation survived 5/5). It now records the manager's logs and asserts "Initial rule reconcile failed" is never
@@ -162,4 +162,39 @@ re-run by the coordinating session at the new final code revision.
       - NIT-4, commit `87a5510f`: migration obligation 7 says every byte outside the alphabet other than `.` (for
         example `:`) was never storable, and that a dotted ID was stored and applied only when another change or a
         restart reconciled the family.
-      Gates: GATES.
+      Gates, run with 4.9's on its final code commit `87bcfa78`: see 4.9.
+- [x] 4.9 Owner ruling on #1188, docket 6 Q11 (b-full) (issuecomment-5873491391; the debt outside this change is #1415).
+      Commit `87bcfa78` (code), `8c427184` (design, spec delta, proposal, migration note).
+      - The rule `ConfigManager` is the registered framework service `rule-config`: the adapter `ruleConfigService`
+        (`internal/boot/rule_config_service.go:27`, name at `:16`) embeds `*service.BaseService`, and
+        `registerRuleConfigService` (`:77`, `RegisterInstance` at `:82`) binds `service.ComponentsImplementing` targets
+        and refuses when the component manager is not yet registered. The root calls it at `internal/boot/run.go:339`,
+        right after `configureAndCreateServices` and `service.ConfigureRulePackMutations`, and passes `manager` itself
+        to `runUntilShutdown`; `service.Manager`'s registration-order `StartAll` and exact-reverse `StopAll` give D3.
+        `ruleHotReloadRuntime`, the `ruleHotReload` interface and `internal/boot/rule_hot_reload_test.go` are deleted.
+      - BREAKING: `rule.ConfigManager.Stop(ctx context.Context) error` (`processor/rule/kv_config_integration.go:166`):
+        nil refused before any action; cancel, then nil on the completion fence or the context's error when it ends
+        first; a completed repeated Stop is a nil no-op. Every test caller passes a named bound
+        (`configManagerStopBudget`, 30s, the root's `--shutdown-timeout` default).
+      - Tests: `TestRuleConfigServiceStartsAfterAndStopsBeforeTheComponents` (a real `service.Manager`, a component
+        manager stand-in and the production registration; start order components then rules, stop order rules then
+        components); `TestConfigManagerStopReturnsWhenItsContextEnds` (real NATS; a target holding
+        `ApplyConfigUpdate`, a 100 ms Stop returns `context.DeadlineExceeded`, the loop exits on release);
+        `TestConfigManagerStopRefusesANilContext`; `TestRegisterRuleConfigServiceRefusesBeforeTheComponentManager`.
+        `TestBinaryBootOrder` pins `configureAndCreateServices` → `registerRuleConfigService(manager, ruleManager, …)`
+        → `runUntilShutdown(…, manager, …)` and, in `registerRuleConfigService`, the `ComponentsImplementing` targets
+        and `RegisterInstance(ruleConfigServiceName, newRuleConfigService(rules, targets, logger))`.
+      - Mutations (cp backup plus md5, restored checksum verified each time): M15 the `RegisterInstance` call deleted:
+        `TestBinaryBootOrder` fails "call manager.RegisterInstance absent or out of order". M16 `Stop` waits on the
+        fence ignoring ctx: `TestConfigManagerStopReturnsWhenItsContextEnds` fails "Stop did not return within 5s of its
+        100ms deadline". M17a the `registerRuleConfigService` call moved before `configureAndCreateServices` in
+        `run.go`: `TestBinaryBootOrder` fails "call registerRuleConfigService absent or out of order". M17b the guard
+        deleted and the ordering test's registrations swapped: `TestRuleConfigServiceStartsAfterAndStopsBeforeTheComponents`
+        fails "start order must be [components, rules]". Test (a) drives the production registration function, but the
+        order relative to the component manager is set by `run.go`'s statement order, which only the AST test sees.
+      - Gates, run at `8c427184` (the code of `87bcfa78`; only documents follow it): `go build ./...`, `task lint`, `go vet ./...`,
+      `go vet -tags=integration ./...`, `go run ./cmd/entity-id-audit .` (1334 candidates) each exit 0; `task test:race`
+      exit 0, 160 ok / 0 FAIL / 20 no test files / 0 DATA RACE; `task test:integration` exit 0, 160 ok / 0 FAIL / 20 no
+      test files / 0 DATA RACE; `task schema:generate` exit 0 with an empty `git diff schemas/ specs/`; `openspec validate
+      config-bucket-authority-namespace --strict` valid; `openspec validate --all --strict` 58/58; `task spec:properties`
+      451/451.
