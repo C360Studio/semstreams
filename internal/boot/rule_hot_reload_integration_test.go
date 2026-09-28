@@ -56,7 +56,15 @@ func hotReloadRule(id string) rulepkg.Definition {
 // hang into a 20-minute CI job timeout.
 const ruleProcessorStopBudget = 30 * time.Second
 
-func startedRuleProcessor(t *testing.T, ctx context.Context, client *natsclient.Client) *rulepkg.Processor {
+// startedRuleProcessor starts a rule processor and registers its controlled
+// shutdown. The component contract keeps the Start context live until a
+// bounded Stop returns (component/lifecycle.go); ending it first is abort
+// cancellation, on which Stop may legitimately report cleanup errors. So the
+// helper owns its Start authority and cancels it in a cleanup registered
+// BEFORE the Stop cleanup: cleanups run last-in first-out, so Stop runs while
+// the Start context is still live. A Start context from t.Context() or the
+// test's own deferred cancel would already be over by then.
+func startedRuleProcessor(t *testing.T, client *natsclient.Client) *rulepkg.Processor {
 	t.Helper()
 	cfg, err := rulepkg.NewConfig("root-hot-reload-test")
 	require.NoError(t, err)
@@ -75,7 +83,9 @@ func startedRuleProcessor(t *testing.T, ctx context.Context, client *natsclient.
 	require.NoError(t, err)
 	proc.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	require.NoError(t, proc.Initialize())
-	require.NoError(t, proc.Start(ctx))
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	t.Cleanup(cancelStart)
+	require.NoError(t, proc.Start(startCtx))
 	t.Cleanup(func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), ruleProcessorStopBudget)
 		defer cancel()
@@ -126,7 +136,7 @@ func TestRootRuleManagerHotReloadsIntoTheProcessor(t *testing.T) {
 	t.Cleanup(func() { _ = configManager.Stop(5 * time.Second) })
 
 	proc := &observedRuleProcessor{
-		Processor: startedRuleProcessor(t, ctx, testNATS.Client),
+		Processor: startedRuleProcessor(t, testNATS.Client),
 		applied:   make(chan map[string]any, 8),
 	}
 	ruleConfig := newRuleConfigService(ruleManager, []rulepkg.HotReloadTarget{proc}, logger)
