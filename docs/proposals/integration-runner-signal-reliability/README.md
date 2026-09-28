@@ -41,6 +41,21 @@ The numerical containment bound needs a recorded basis before implementation acc
 examples address these ordering obligations; broader state histories require revisiting the existing PBT decision.
 No implementation or new verification result is claimed by the initial draft-PR claim commit.
 
+## Implementation and review
+
+The [implementation evidence](evidence/implementation-evidence.md) records the controlled delayed-progress regression,
+terminal-signal cases, cleanup ownership checks, race/lint commands and mutation limitations. The final source reviewed
+on 2026-09-28 has MD5 `87186d432ecdb43e0462b87b9974aea7`; production runner behavior is unchanged.
+
+Independent review found and corrected terminal waits, incomplete-join assumptions, a replacement scheduling guess and
+unsafe numeric-PID cleanup authority. See [first review](implementation-review-1.md),
+[second review](implementation-review-2.md), [third review](implementation-review-3.md),
+[convergence check](convergence-check.md) and [final probe approval](implementation-review-4.md).
+The final review accepts the explicitly recorded unsafe-signaling mutation deferral; it does not claim that experiment
+ran. The 35-second fixture ceiling and separate six-second cleanup ceiling contain failures without relying on the
+package alarm. The [final local gate passed](verification.md); hosted results for the committed candidate belong
+in the PR record.
+
 ## Record choice
 
 This is a test-only correction to evidence of an existing runner contract. Under
