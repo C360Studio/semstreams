@@ -223,6 +223,16 @@ func TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock(t *testing.T)
 	parentReadySentinel := filepath.Join(tempDir, "parent-ready.sent")
 	termReceivedSentinel := filepath.Join(tempDir, "term-received.sent")
 	gracePauseClaim := filepath.Join(tempDir, "grace-pause.claim")
+	// The runner fixture sets its pull watchdog to 30s. Give that owned
+	// operation and its 1s termination grace a single 35s containment window;
+	// this is a failure bound, not a performance assertion. The unmodified
+	// fixture measured 1.37s under -race, and the delayed case measured 4.26s.
+	// Cleanup has at most 6s: 2s runner release, 2s forced Wait,
+	// and 2s to observe helper exit through the private release gate.
+	const fixtureBudget = 35 * time.Second
+	fixtureStarted := time.Now()
+	fixtureCtx, cancelFixture := context.WithTimeout(t.Context(), fixtureBudget)
+	t.Cleanup(cancelFixture)
 	writeTerminationToolWrappers(t, tools.bin)
 
 	parentReadyReader, parentReadyWriter := mustPipe(t)
@@ -262,20 +272,19 @@ func TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock(t *testing.T)
 		"SEMSTREAMS_TEST_REAL_DATE":                      realDate,
 		"SEMSTREAMS_TEST_REAL_RMDIR":                     realRmdir,
 		"SEMSTREAMS_TEST_BINARY":                         testBinary,
+		"SEMSTREAMS_TEST_READY_DELAY_SECONDS":            "3.2",
 	})
-	var output bytes.Buffer
-	command.Stdout = &output
-	command.Stderr = &output
+	// A file avoids Cmd.Wait's copy goroutine: a surviving descendant may
+	// inherit stdout, but cannot hold the sole waiter hostage after runner exit.
+	outputFile := attachRunnerOutputFile(t, command, tempDir)
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
 	waiter := newCommandWaiter(command)
 	t.Cleanup(func() {
-		// EOF releases the helper on any early failure. killAndWait kills only
-		// when the runner is still live and always joins the sole waiter.
-		_ = releaseWriter.Close()
-		_ = graceReleaseWriter.Close()
-		_ = waiter.killAndWait()
+		if err := cleanupRunnerAndPull(waiter, pullPIDFile, releaseWriter, graceReleaseWriter); err != nil {
+			t.Error(err)
+		}
 	})
 	closeInheritedFiles(t, map[string]*os.File{
 		"parent-ready writer":  parentReadyWriter,
@@ -286,7 +295,7 @@ func TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock(t *testing.T)
 		"grace-release reader": graceReleaseReader,
 	})
 
-	readPipeSignal(t, parentReadyReader, 3*time.Second, "parent retained pull PID")
+	readRunnerSignal(fixtureCtx, t, fixtureStarted, parentReadyReader, waiter, 0, false, "parent retained pull PID")
 	ownerBeforeTermination := readFile(t, filepath.Join(lockDir, "owner"))
 	if !strings.Contains(ownerBeforeTermination, "token=") {
 		t.Fatalf("lock owner has no token before termination:\n%s", ownerBeforeTermination)
@@ -295,8 +304,8 @@ func TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock(t *testing.T)
 	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("terminate runner: %v", err)
 	}
-	readPipeSignal(t, termAckReader, 3*time.Second, "pull helper TERM acknowledgement")
-	readPipeSignal(t, gracePauseReader, 3*time.Second, "cleanup grace paused")
+	readRunnerSignal(fixtureCtx, t, fixtureStarted, termAckReader, waiter, pullPID, false, "pull helper TERM acknowledgement")
+	readRunnerSignal(fixtureCtx, t, fixtureStarted, gracePauseReader, waiter, pullPID, false, "cleanup grace paused")
 
 	ownerWhileChildBlocked := readFile(t, filepath.Join(lockDir, "owner"))
 	if ownerWhileChildBlocked != ownerBeforeTermination {
@@ -306,9 +315,9 @@ func TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock(t *testing.T)
 	if !processExists(pullPID) {
 		t.Fatalf("TERM-acknowledged pull helper %d exited before release", pullPID)
 	}
-	probe := exec.Command(filepath.Join(tools.bin, "rmdir"), lockDir)
-	probe.Env = command.Env
-	probeOutput, probeErr := probe.CombinedOutput()
+	probe, probeOutputFile := newRunnerRmdirProbe(fixtureCtx, t, filepath.Join(tools.bin, "rmdir"), lockDir, command.Env)
+	probeErr := probe.Run()
+	probeOutput := readFile(t, probeOutputFile.Name())
 	var probeExitErr *exec.ExitError
 	if !errors.As(probeErr, &probeExitErr) || probeExitErr.ExitCode() != 73 ||
 		!strings.Contains(string(probeOutput), "refused live or zombie helper") {
@@ -327,26 +336,309 @@ func TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock(t *testing.T)
 	if err := graceReleaseWriter.Close(); err != nil {
 		t.Fatalf("close cleanup-grace release: %v", err)
 	}
-	waitErr := waiter.wait(untilTestDeadline(t))
+	readRunnerSignal(fixtureCtx, t, fixtureStarted, reapAckReader, waiter, pullPID, true, "post-reap lock removal")
+	fixtureDeadline, _ := fixtureCtx.Deadline()
+	waitErr := waiter.wait(time.Until(fixtureDeadline))
 	var timeoutErr *commandWaitTimeoutError
 	if errors.As(waitErr, &timeoutErr) {
-		t.Fatalf("runner waiter timed out after child release: %v\n%s", waitErr, output.String())
+		t.Fatalf("runner did not exit after child release: elapsed=%s budget=%s: %v", time.Since(fixtureStarted), fixtureBudget, waitErr)
 	}
 	var exitErr *exec.ExitError
 	if !errors.As(waitErr, &exitErr) {
-		t.Fatalf("runner exit = %v, want *exec.ExitError code 130\n%s", waitErr, output.String())
+		t.Fatalf("runner exit = %v, want *exec.ExitError code 130\n%s", waitErr, readFile(t, outputFile.Name()))
 	}
 	if exitErr.ExitCode() != 130 {
-		t.Fatalf("runner exit code = %d, want 130\n%s", exitErr.ExitCode(), output.String())
+		t.Fatalf("runner exit code = %d, want 130\n%s", exitErr.ExitCode(), readFile(t, outputFile.Name()))
 	}
 	if command.ProcessState == nil || !command.ProcessState.Exited() {
 		t.Fatalf("waiter returned before runner exit: state=%v", command.ProcessState)
 	}
-	readPipeSignal(t, reapAckReader, 3*time.Second, "post-reap lock removal")
 	assertProcessGone(t, pullPID, "terminated fake image pull")
 	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
 		t.Fatalf("runner retained lock after exact child reap: %v", err)
 	}
+}
+
+func TestIntegrationRunner_RmdirProbeHonorsFixtureCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inherited file descriptors differ on Windows")
+	}
+	tools := newFakeToolchain(t)
+	writeExecutable(t, filepath.Join(tools.bin, "rmdir"), `#!/bin/sh
+printf 'held rmdir probe\n'
+printf R >&4
+read x <&3
+`)
+	holdReader, holdWriter := mustPipe(t)
+	readyReader, readyWriter := mustPipe(t)
+	closeFilesOnCleanup(t, holdReader, holdWriter, readyReader, readyWriter)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	probe, outputFile := newRunnerRmdirProbe(ctx, t, filepath.Join(tools.bin, "rmdir"),
+		filepath.Join(t.TempDir(), "integration.lock"), nil)
+	probe.ExtraFiles = []*os.File{holdReader, readyWriter}
+	started := time.Now()
+	if err := probe.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waiter := newCommandWaiter(probe)
+	t.Cleanup(func() {
+		cancel()
+		_ = holdWriter.Close()
+		assertCommandCleanupFinished(t, waiter, "held rmdir probe")
+	})
+	closeInheritedFiles(t, map[string]*os.File{"hold reader": holdReader, "ready writer": readyWriter})
+	readRunnerSignal(ctx, t, started, readyReader, waiter, 0, false, "rmdir probe ready")
+	select {
+	case <-waiter.done:
+		t.Fatalf("rmdir probe exited before fixture cancellation: %v", waiter.err)
+	default:
+	}
+	cancel()
+	probeErr := waiter.wait(2 * time.Second)
+	if isCommandWaitTimeout(probeErr) {
+		t.Fatalf("canceled rmdir probe did not join within terminal bound: %v", probeErr)
+	}
+	if probeErr == nil || !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("held probe result = %v, context = %v; want fixture cancellation", probeErr, ctx.Err())
+	}
+	if probe.ProcessState == nil {
+		t.Fatalf("canceled probe returned without reaping: state=%v", probe.ProcessState)
+	}
+	assertProcessGone(t, probe.Process.Pid, "canceled rmdir probe")
+	if output := readFile(t, outputFile.Name()); !strings.Contains(output, "held rmdir probe") {
+		t.Fatalf("probe file-backed output missing controlled marker: %q", output)
+	}
+}
+
+func TestIntegrationRunner_ReadySignalFailuresAreDiagnosticAndReaped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("integration runner is a bash script")
+	}
+	for _, testCase := range []struct {
+		name       string
+		earlyExit  bool
+		wantDetail string
+	}{
+		{name: "child exits before signal", earlyExit: true, wantDetail: "before signal"},
+		{name: "live child never signals", wantDetail: "no signal within fixture budget"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repoRoot := findRepoRoot(t)
+			tools := newFakeToolchain(t)
+			tempDir := t.TempDir()
+			pullPIDFile := filepath.Join(tempDir, "pull.pid")
+			writeTerminationToolWrappers(t, tools.bin)
+			parentReadyReader, parentReadyWriter := mustPipe(t)
+			termAckReader, termAckWriter := mustPipe(t)
+			releaseReader, releaseWriter := mustPipe(t)
+			closeFilesOnCleanup(t, parentReadyReader, parentReadyWriter, termAckReader, termAckWriter, releaseReader, releaseWriter)
+
+			command := exec.Command(filepath.Join(repoRoot, "scripts", "run-integration-tests.sh"))
+			command.Dir = repoRoot
+			command.ExtraFiles = []*os.File{parentReadyWriter, termAckWriter, releaseReader}
+			command.Env = runnerEnvironment(tools, filepath.Join(tempDir, "integration.lock"), map[string]string{
+				"DOCKER_IMAGE_INSPECT_STATUS":                    "1",
+				"DOCKER_PULL_PID_FILE":                           pullPIDFile,
+				"SEMSTREAMS_CONTRACT_IMAGE_PULL_TIMEOUT_SECONDS": "30",
+				"SEMSTREAMS_TEST_PARENT_READY_SENTINEL":          filepath.Join(tempDir, "ready.sent"),
+				"SEMSTREAMS_TEST_SUPPRESS_PARENT_READY":          "1",
+				"SEMSTREAMS_TEST_PULL_HELPER":                    "1",
+				"SEMSTREAMS_TEST_BINARY":                         mustExecutable(t),
+				"SEMSTREAMS_TEST_REAL_DATE":                      mustLookPath(t, "date"),
+				"SEMSTREAMS_TEST_REAL_RMDIR":                     mustLookPath(t, "rmdir"),
+				"SEMSTREAMS_TEST_PULL_EXIT_EARLY":                fmt.Sprint(testCase.earlyExit),
+			})
+			outputFile := attachRunnerOutputFile(t, command, tempDir)
+			started := time.Now()
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			waiter := newCommandWaiter(command)
+			t.Cleanup(func() {
+				if err := cleanupRunnerAndPull(waiter, pullPIDFile, releaseWriter); err != nil {
+					t.Error(err)
+				}
+			})
+			closeInheritedFiles(t, map[string]*os.File{
+				"parent-ready writer":  parentReadyWriter,
+				"TERM-ack writer":      termAckWriter,
+				"child-release reader": releaseReader,
+			})
+			waitForFileContent(t, pullPIDFile, "\n", 5*time.Second)
+			if !testCase.earlyExit && !processExists(readPID(t, pullPIDFile)) {
+				t.Fatal("missing-signal control did not retain a live pull helper")
+			}
+			budget := 5 * time.Second
+			if !testCase.earlyExit {
+				budget = 300 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), budget)
+			defer cancel()
+			err := observeRunnerSignal(ctx, started, parentReadyReader, waiter, 0, false, "parent retained pull PID")
+			if err == nil || !strings.Contains(err.Error(), "parent retained pull PID") || !strings.Contains(err.Error(), testCase.wantDetail) {
+				t.Fatalf("signal failure = %v, want phase and %q; runner output:\n%s", err, testCase.wantDetail, readFile(t, outputFile.Name()))
+			}
+			if testCase.earlyExit {
+				waitErr := waiter.wait(2 * time.Second)
+				var exitErr *exec.ExitError
+				if !errors.As(waitErr, &exitErr) || exitErr.ExitCode() != 1 {
+					t.Fatalf("early child exit did not reach runner: wait=%v diagnostic=%v", waitErr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestObserveRunnerSignal_TerminalPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inherited file descriptors differ on Windows")
+	}
+	t.Run("EOF while runner remains live", func(t *testing.T) {
+		releaseReader, releaseWriter := mustPipe(t)
+		signalReader, signalWriter := mustPipe(t)
+		closeFilesOnCleanup(t, releaseReader, releaseWriter, signalReader, signalWriter)
+		command := exec.Command("/bin/sh", "-c", "read x <&3")
+		command.ExtraFiles = []*os.File{releaseReader}
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		waiter := newCommandWaiter(command)
+		t.Cleanup(func() {
+			_ = releaseWriter.Close()
+			if err := waiter.wait(2 * time.Second); isCommandWaitTimeout(err) {
+				t.Errorf("held runner did not exit after release: %v", err)
+			}
+		})
+		closeInheritedFiles(t, map[string]*os.File{"release reader": releaseReader})
+		if err := signalWriter.Close(); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		err := observeRunnerSignal(ctx, time.Now(), signalReader, waiter, 0, false, "ready")
+		if ctx.Err() != nil {
+			t.Fatalf("EOF exhausted the single control bound while runner was deliberately held live: %v", err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "ready") || !strings.Contains(err.Error(), "EOF") {
+			t.Fatalf("live-runner EOF result = %v", err)
+		}
+		select {
+		case <-waiter.done:
+			t.Fatal("runner exited before EOF was observed")
+		default:
+		}
+	})
+
+	t.Run("runner exits while descendant holds writer", func(t *testing.T) {
+		releaseReader, releaseWriter := mustPipe(t)
+		signalReader, signalWriter := mustPipe(t)
+		closeFilesOnCleanup(t, releaseReader, releaseWriter, signalReader, signalWriter)
+		pidFile := filepath.Join(t.TempDir(), "descendant.pid")
+		command := exec.Command("/bin/sh", "-c", "( read x <&3 ) & printf '%s\\n' \"$!\" > \"$CHILD_PID_FILE\"; exit 7")
+		command.ExtraFiles = []*os.File{releaseReader, signalWriter}
+		command.Env = append(os.Environ(), "CHILD_PID_FILE="+pidFile)
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		waiter := newCommandWaiter(command)
+		t.Cleanup(func() {
+			if err := cleanupRunnerAndPull(waiter, pidFile, releaseWriter); err != nil {
+				t.Error(err)
+			}
+		})
+		closeInheritedFiles(t, map[string]*os.File{"release reader": releaseReader, "signal writer": signalWriter})
+		waitForFileContent(t, pidFile, "\n", 2*time.Second)
+		if err := waiter.wait(2 * time.Second); isCommandWaitTimeout(err) {
+			t.Fatalf("runner did not exit while descendant retained writer: %v", err)
+		}
+		childPID := readPID(t, pidFile)
+		if !processExists(childPID) {
+			t.Fatalf("descendant %d did not retain the signal writer", childPID)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		err := observeRunnerSignal(ctx, time.Now(), signalReader, waiter, 0, false, "ready")
+		if ctx.Err() != nil {
+			t.Fatalf("runner exit exhausted the single control bound before descendant writer release: %v", err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "ready") || !strings.Contains(err.Error(), "runner exited") {
+			t.Fatalf("exited-runner retained-writer result = %v", err)
+		}
+		if !processExists(childPID) {
+			t.Fatal("descendant released writer before terminal error")
+		}
+		if err := cleanupRunnerAndPull(waiter, pidFile, releaseWriter); err != nil {
+			t.Fatal(err)
+		}
+		assertProcessGone(t, childPID, "released descendant after parent exit")
+	})
+
+	t.Run("buffered final acknowledgement after exit", func(t *testing.T) {
+		signalReader, signalWriter := mustPipe(t)
+		closeFilesOnCleanup(t, signalReader, signalWriter)
+		command := exec.Command("/bin/sh", "-c", "printf R >&3")
+		command.ExtraFiles = []*os.File{signalWriter}
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		waiter := newCommandWaiter(command)
+		closeInheritedFiles(t, map[string]*os.File{"signal writer": signalWriter})
+		if err := waiter.wait(2 * time.Second); err != nil {
+			t.Fatalf("writer command exit: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		if err := observeRunnerSignal(ctx, time.Now(), signalReader, waiter, 0, true, "final ack"); err != nil {
+			t.Fatalf("buffered final acknowledgement lost after runner exit: %v", err)
+		}
+	})
+}
+
+func TestRunnerFixtureCleanup_RefusesUnprovenPID(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inherited file descriptors differ on Windows")
+	}
+	releaseReader, releaseWriter := mustPipe(t)
+	holdReader, holdWriter := mustPipe(t)
+	closeFilesOnCleanup(t, releaseReader, releaseWriter, holdReader, holdWriter)
+	foreign := exec.Command("/bin/sh", "-c", "read x <&3")
+	foreign.ExtraFiles = []*os.File{holdReader}
+	if err := foreign.Start(); err != nil {
+		t.Fatal(err)
+	}
+	foreignWaiter := newCommandWaiter(foreign)
+	t.Cleanup(func() {
+		_ = holdWriter.Close()
+		assertCommandCleanupFinished(t, foreignWaiter, "foreign controlled process")
+	})
+	closeInheritedFiles(t, map[string]*os.File{"held child reader": holdReader, "unused release reader": releaseReader})
+	command := exec.Command("/bin/sh", "-c", "exit 0")
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waiter := newCommandWaiter(command)
+	if err := waiter.wait(2 * time.Second); isCommandWaitTimeout(err) {
+		t.Fatalf("runner did not exit before cleanup: %v", err)
+	}
+	pidFile := filepath.Join(t.TempDir(), "stale-helper.pid")
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d\n", foreign.Process.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := cleanupRunnerAndPull(waiter, pidFile, releaseWriter)
+	if err == nil || !strings.Contains(err.Error(), "ownership unproven, refusing to signal") {
+		t.Fatalf("stale PID cleanup = %v, want refusal without signal", err)
+	}
+	if !processExists(foreign.Process.Pid) {
+		t.Fatalf("cleanup signaled unrelated controlled process %d", foreign.Process.Pid)
+	}
+	if err := holdWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := foreignWaiter.wait(2 * time.Second); isCommandWaitTimeout(err) {
+		t.Fatalf("foreign process did not exit after its own release: %v", err)
+	}
+	assertProcessGone(t, foreign.Process.Pid, "foreign controlled process after its own release")
 }
 
 func TestIntegrationRunnerFakePullHelper(t *testing.T) {
@@ -367,6 +659,9 @@ func TestIntegrationRunnerFakePullHelper(t *testing.T) {
 	pidFile := os.Getenv("DOCKER_PULL_PID_FILE")
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if os.Getenv("SEMSTREAMS_TEST_PULL_EXIT_EARLY") == "true" {
+		os.Exit(42)
 	}
 
 	released := make(chan error, 1)
@@ -442,7 +737,7 @@ func TestIntegrationRunnerFakePullHelper_PreTERMReleaseExits(t *testing.T) {
 	waiter := newCommandWaiter(command)
 	t.Cleanup(func() {
 		_ = releaseWriter.Close()
-		_ = waiter.killAndWait()
+		assertCommandCleanupFinished(t, waiter, "pre-TERM pull helper")
 	})
 	for _, endpoint := range []*os.File{parentReadyPlaceholder, termAckPlaceholder, releaseReader} {
 		if err := endpoint.Close(); err != nil {
@@ -475,14 +770,23 @@ func TestCommandWaiter_TimeoutCleanupKillsAndReapsThroughOneOwner(t *testing.T) 
 	}
 	pid := command.Process.Pid
 	waiter := newCommandWaiter(command)
-	t.Cleanup(func() { _ = waiter.killAndWait() })
+	t.Cleanup(func() { assertCommandCleanupFinished(t, waiter, "timeout-cleaned command") })
 
 	var timeoutErr *commandWaitTimeoutError
 	if err := waiter.wait(10 * time.Millisecond); !errors.As(err, &timeoutErr) {
 		t.Fatalf("wait before cleanup = %v, want bounded timeout", err)
 	}
-	if err := waiter.killAndWait(); err == nil {
+	err := waiter.killAndWait()
+	if isCommandWaitTimeout(err) {
+		t.Fatalf("killed command still has incomplete Wait: %v", err)
+	}
+	if err == nil {
 		t.Fatal("killed command unexpectedly reported success")
+	}
+	select {
+	case <-waiter.done:
+	default:
+		t.Fatal("cleanup returned without completing Wait")
 	}
 	if command.ProcessState == nil {
 		t.Fatalf("cleanup returned before command was reaped: state=%v", command.ProcessState)
@@ -490,6 +794,57 @@ func TestCommandWaiter_TimeoutCleanupKillsAndReapsThroughOneOwner(t *testing.T) 
 	assertProcessGone(t, pid, "timeout-cleaned command")
 	if err := waiter.wait(time.Second); err == nil {
 		t.Fatal("repeated wait lost the command's killed result")
+	}
+}
+
+func TestCommandWaiter_RetainedOutputReportsIncompleteCleanup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inherited file descriptors differ on Windows")
+	}
+	releaseReader, releaseWriter := mustPipe(t)
+	readyReader, readyWriter := mustPipe(t)
+	closeFilesOnCleanup(t, releaseReader, releaseWriter, readyReader, readyWriter)
+	// The child retains the stdout pipe and waits on FD 3. Killing its parent
+	// must not let a bare Cmd.Wait receive hang the test until package timeout.
+	command := exec.Command("/bin/sh", "-c", "( read x <&3 ) & printf R >&4; wait")
+	command.ExtraFiles = []*os.File{releaseReader, readyWriter}
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waiter := newCommandWaiter(command)
+	t.Cleanup(func() {
+		_ = releaseWriter.Close()
+		assertCommandCleanupFinished(t, waiter, "retained-output command")
+	})
+	closeInheritedFiles(t, map[string]*os.File{"release reader": releaseReader, "ready writer": readyWriter})
+	if err := readyReader.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var signal [1]byte
+	if _, err := readyReader.Read(signal[:]); err != nil || signal[0] != 'R' {
+		t.Fatalf("child did not retain command output: signal=%q err=%v", signal, err)
+	}
+	if err := waiter.killAndWait(); !isCommandWaitTimeout(err) {
+		t.Fatalf("retained stdout cleanup = %v, want bounded incomplete-cleanup error", err)
+	}
+	select {
+	case <-waiter.done:
+		t.Fatal("retained stdout command unexpectedly joined before descendant release")
+	default:
+	}
+	if _, err := releaseWriter.Write([]byte{'R'}); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := waiter.wait(2 * time.Second); isCommandWaitTimeout(err) {
+		t.Fatalf("command did not join after descendant released: %v", err)
+	}
+	if command.ProcessState == nil {
+		t.Fatal("command waiter reported completion without reaping parent")
 	}
 }
 
@@ -540,7 +895,7 @@ func TestIntegrationRunner_HostLockHasBoundedContentionDiagnostics(t *testing.T)
 	t.Cleanup(func() {
 		_ = os.WriteFile(releaseFile, []byte("release\n"), 0o644)
 		cancelHolder()
-		_ = holderWaiter.killAndWait()
+		assertCommandCleanupFinished(t, holderWaiter, "lock holder")
 	})
 	waitForFileContent(t, filepath.Join(lockDir, "owner"), "token=", 3*time.Second)
 
@@ -820,15 +1175,88 @@ func waitForFileContent(t *testing.T, path, content string, timeout time.Duratio
 	}
 }
 
-func readPipeSignal(t *testing.T, reader *os.File, timeout time.Duration, description string) {
+func readRunnerSignal(ctx context.Context, t *testing.T, started time.Time, reader *os.File, waiter *commandWaiter, ownedPID int, allowBufferedAfterExit bool, description string) {
 	t.Helper()
-	if err := reader.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		t.Fatalf("set %s deadline: %v", description, err)
+	if err := observeRunnerSignal(ctx, started, reader, waiter, ownedPID, allowBufferedAfterExit, description); err != nil {
+		t.Fatal(err)
 	}
-	var signal [1]byte
-	if _, err := reader.Read(signal[:]); err != nil {
-		t.Fatalf("wait for %s: %v", description, err)
+}
+
+func observeRunnerSignal(ctx context.Context, started time.Time, reader *os.File, waiter *commandWaiter, ownedPID int, allowBufferedAfterExit bool, description string) error {
+	deadline, _ := ctx.Deadline()
+	if err := reader.SetReadDeadline(deadline); err != nil {
+		return fmt.Errorf("set %s deadline: %w", description, err)
 	}
+	type pipeResult struct {
+		value byte
+		err   error
+	}
+	readDone := make(chan pipeResult, 1)
+	go func() {
+		var signal [1]byte
+		_, err := reader.Read(signal[:])
+		readDone <- pipeResult{value: signal[0], err: err}
+	}()
+	var result pipeResult
+	select {
+	case result = <-readDone:
+	case <-waiter.done:
+		if ownedPID > 0 && processExists(ownedPID) {
+			_ = reader.Close()
+			<-readDone
+			return fmt.Errorf("%s: runner exited while owned pull helper %d was still alive: exit=%v elapsed=%s",
+				description, ownedPID, waiter.err, time.Since(started))
+		}
+		if !allowBufferedAfterExit {
+			_ = reader.Close()
+			<-readDone
+			return fmt.Errorf("%s: runner exited before signal: exit=%v elapsed=%s",
+				description, waiter.err, time.Since(started))
+		}
+		// A signal can be buffered just before runner exit (the post-reap
+		// acknowledgement does this). Only this final phase may drain the
+		// already-written byte after exit; the pipe's deadline remains bounded.
+		result = <-readDone
+		if result.err != nil {
+			return fmt.Errorf("%s: runner exited before signal: exit=%v elapsed=%s read=%v",
+				description, waiter.err, time.Since(started), result.err)
+		}
+	case <-ctx.Done():
+		_ = reader.SetReadDeadline(time.Now())
+		result = <-readDone
+		if result.err != nil {
+			return fmt.Errorf("%s: no signal within fixture budget: elapsed=%s deadline=%s runner_pid=%d last_read=%v",
+				description, time.Since(started), deadline.Format(time.RFC3339Nano), waiter.command.Process.Pid, result.err)
+		}
+	}
+	if result.err != nil {
+		if errors.Is(result.err, io.EOF) {
+			select {
+			case <-waiter.done:
+				return fmt.Errorf("%s: runner exited before signal: exit=%v elapsed=%s read=%v",
+					description, waiter.err, time.Since(started), result.err)
+			default:
+				return fmt.Errorf("%s: pipe closed before signal while runner remained live: elapsed=%s runner_pid=%d last_read=%v",
+					description, time.Since(started), waiter.command.Process.Pid, result.err)
+			}
+		}
+		select {
+		case <-waiter.done:
+			return fmt.Errorf("%s: runner exited before signal: exit=%v elapsed=%s read=%v",
+				description, waiter.err, time.Since(started), result.err)
+		default:
+		}
+		if ctx.Err() != nil || errors.Is(result.err, os.ErrDeadlineExceeded) {
+			return fmt.Errorf("%s: no signal within fixture budget: elapsed=%s deadline=%s runner_pid=%d last_read=%v",
+				description, time.Since(started), deadline.Format(time.RFC3339Nano), waiter.command.Process.Pid, result.err)
+		}
+		return fmt.Errorf("%s: signal unavailable: elapsed=%s runner_pid=%d last_read=%v",
+			description, time.Since(started), waiter.command.Process.Pid, result.err)
+	}
+	if result.value == 0 {
+		return fmt.Errorf("%s: empty signal from runner after %s", description, time.Since(started))
+	}
+	return nil
 }
 
 func mustPipe(t *testing.T) (*os.File, *os.File) {
@@ -838,6 +1266,24 @@ func mustPipe(t *testing.T) (*os.File, *os.File) {
 		t.Fatal(err)
 	}
 	return reader, writer
+}
+
+func attachRunnerOutputFile(t *testing.T, command *exec.Cmd, tempDir string) *os.File {
+	t.Helper()
+	outputFile, err := os.Create(filepath.Join(tempDir, "runner-output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = outputFile.Close() })
+	command.Stdout, command.Stderr = outputFile, outputFile
+	return outputFile
+}
+
+func newRunnerRmdirProbe(ctx context.Context, t *testing.T, binary, lockDir string, env []string) (*exec.Cmd, *os.File) {
+	t.Helper()
+	probe := exec.CommandContext(ctx, binary, lockDir)
+	probe.Env = env
+	return probe, attachRunnerOutputFile(t, probe, t.TempDir())
 }
 
 // untilTestDeadline is the wait for a process the test has already released:
@@ -892,6 +1338,11 @@ func (w *commandWaiter) wait(timeout time.Duration) error {
 	case <-w.done:
 		return w.err
 	case <-timer.C:
+		select {
+		case <-w.done:
+			return w.err
+		default:
+		}
 		return &commandWaitTimeoutError{timeout: timeout}
 	}
 }
@@ -904,11 +1355,91 @@ func (w *commandWaiter) killAndWait() error {
 	}
 
 	killErr := w.command.Process.Kill()
-	<-w.done
+	if err := w.wait(2 * time.Second); isCommandWaitTimeout(err) {
+		return fmt.Errorf("killed command %d but Wait did not finish: %w", w.command.Process.Pid, err)
+	}
 	if w.err != nil {
 		return w.err
 	}
 	return killErr
+}
+
+func isCommandWaitTimeout(err error) bool {
+	var timeoutErr *commandWaitTimeoutError
+	return errors.As(err, &timeoutErr)
+}
+
+func assertCommandCleanupFinished(t *testing.T, waiter *commandWaiter, description string) {
+	t.Helper()
+	if err := waiter.killAndWait(); isCommandWaitTimeout(err) {
+		t.Errorf("%s cleanup left Wait unfinished: %v", description, err)
+	}
+	select {
+	case <-waiter.done:
+	default:
+		t.Errorf("%s cleanup returned with Wait still running", description)
+	}
+}
+
+func readExistingPID(path string) (int, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(body)), "%d", &pid); err != nil || pid <= 0 {
+		return 0, fmt.Errorf("invalid PID in %s: value=%q err=%v", path, body, err)
+	}
+	return pid, nil
+}
+
+// cleanupRunnerAndPull owns the runner, its recorded helper, and fixture
+// release gates. A parent exit alone cannot establish child cleanup.
+// The PID file is observation only: it does not authorize signaling a PID.
+func cleanupRunnerAndPull(waiter *commandWaiter, pidFile string, releases ...*os.File) error {
+	var failures []error
+	for _, release := range releases {
+		if err := release.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			failures = append(failures, fmt.Errorf("close runner fixture release gate: %w", err))
+		}
+	}
+	if err := waiter.wait(2 * time.Second); isCommandWaitTimeout(err) {
+		if killErr := waiter.killAndWait(); isCommandWaitTimeout(killErr) {
+			failures = append(failures, fmt.Errorf("runner cleanup did not join after forced kill: %w", killErr))
+		}
+	}
+	select {
+	case <-waiter.done:
+		if waiter.command.ProcessState == nil {
+			failures = append(failures, errors.New("runner cleanup left process unreaped"))
+		}
+	default:
+		failures = append(failures, errors.New("runner cleanup left Wait unfinished"))
+	}
+	pid, err := readExistingPID(pidFile)
+	if err != nil {
+		failures = append(failures, fmt.Errorf("runner cleanup cannot verify pull helper: %w", err))
+		return errors.Join(failures...)
+	}
+	if !waitForProcessGone(pid, 2*time.Second) {
+		failures = append(failures, fmt.Errorf("recorded pull helper PID %d remains after fixture release; ownership unproven, refusing to signal", pid))
+	}
+	return errors.Join(failures...)
+}
+
+func waitForProcessGone(pid int, budget time.Duration) bool {
+	deadline := time.NewTimer(budget)
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for processExists(pid) {
+		select {
+		case <-deadline.C:
+			return !processExists(pid)
+		case <-ticker.C:
+		}
+	}
+	return true
 }
 
 func writeTerminationToolWrappers(t *testing.T, bin string) {
@@ -916,7 +1447,12 @@ func writeTerminationToolWrappers(t *testing.T, bin string) {
 	writeExecutable(t, filepath.Join(bin, "date"), `#!/bin/sh
 if [ "${SEMSTREAMS_TEST_PULL_HELPER:-0}" = "1" ] && [ -s "$DOCKER_PULL_PID_FILE" ] && [ ! -e "$SEMSTREAMS_TEST_PARENT_READY_SENTINEL" ]; then
   : > "$SEMSTREAMS_TEST_PARENT_READY_SENTINEL"
-  printf 'R' >&3
+  if [ -n "${SEMSTREAMS_TEST_READY_DELAY_SECONDS:-}" ]; then
+    sleep "$SEMSTREAMS_TEST_READY_DELAY_SECONDS"
+  fi
+  if [ "${SEMSTREAMS_TEST_SUPPRESS_PARENT_READY:-0}" != "1" ]; then
+    printf 'R' >&3
+  fi
 fi
 if [ "${SEMSTREAMS_TEST_PULL_HELPER:-0}" = "1" ] && [ -e "$SEMSTREAMS_TEST_TERM_RECEIVED_SENTINEL" ] && mkdir "$SEMSTREAMS_TEST_GRACE_PAUSE_CLAIM" 2>/dev/null; then
   printf 'P' >&7

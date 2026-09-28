@@ -438,6 +438,22 @@ Prefer, in order:
 Polling MUST have a narrow deadline and report the last value and last error on failure. It MUST NOT silently turn a
 missing producer, subscriber, or component into a full-window timeout.
 
+For subprocess tests, observe the expected signal alongside EOF and unexpected process exit. EOF without the expected
+signal or an unexpected owner exit is terminal evidence; report it immediately. Use causal gates to establish ordering;
+give the whole fixture a documented containment budget and reserve bounded cleanup time separately.
+A deadline contains a broken test; it does not prove readiness or ordering. Do not restart a guessed performance budget
+at every signal. The runner termination test in
+[`test/testinfra/integration_runner_contract_test.go`](../../test/testinfra/integration_runner_contract_test.go)
+exercises healthy delayed progress, missing progress and early exit through the production runner and controlled tools.
+Its deliberate latency injection is test input for the old failure threshold, not a readiness mechanism.
+
+One owner calls `Cmd.Wait`. Failure cleanup releases fixture gates, terminates remaining owned work and joins that owner
+within its cleanup budget. Inspect mutable process state only after that owner's done signal; a cleanup timeout does
+not establish completion. Report the stalled phase, process identity, last observation and cleanup outcome. A parent
+exit does not prove its descendants were reaped, and an expired cleanup budget means ownership is unresolved. Account
+for inherited output descriptors too: a surviving child can keep an output-copy goroutine, and therefore `Cmd.Wait`,
+blocked after the parent exits.
+
 Test I/O contexts MUST derive from `t.Context()` and then narrow the deadline:
 
 ```go
