@@ -202,7 +202,7 @@ re-run by the coordinating session at the new final code revision.
       config-bucket-authority-namespace --strict` valid; `openspec validate --all --strict` 58/58; `task spec:properties`
       451/451.
 
-- [ ] 4.10 Review round 4 on PR #1404 (CHANGES REQUESTED at `03a330d0`, no production defect; PR comment 2026-09-28).
+- [x] 4.10 Review round 4 on PR #1404 (CHANGES REQUESTED at `03a330d0`, no production defect; PR comment 2026-09-28).
       Rebased onto `7303858d` (#1413, tests and docs only, no conflict); 4.9's `87bcfa78` is now `64a34476` and
       `8c427184` is `7c341428`. Pins in 4.9 are re-measured after the NIT-3 doc comment.
       - HIGH-1, the CI red: `startedRuleProcessor` started the processor with the test's context, which the test's
@@ -227,5 +227,18 @@ re-run by the coordinating session at the new final code revision.
         the startup `Admitted` count by one, and holds readiness for the seeding and initial reconcile (inside
         `StartAll`, before startup commits, as each processor's own seeding did in beta.162).
       - NIT-4: rows 1.2, 1.3 and 3.1's M2 and M7 are marked superseded by 4.9; 4.8's M13 pins are corrected.
-      - MEDIUM-2 (health for at most one tick after a Stop whose bound won): owner docket 7 Q12, pending.
-      Gates: GATES.
+      - MEDIUM-2 (health for at most one tick after a Stop whose bound won): owner ruling on #1188, docket 7 Q12 (a),
+        commit `a4dd453a`: one doc sentence at the adapter's Stop (`internal/boot/rule_config_service.go:67`) says such
+        a Stop leaves the service Running and healthy until its reconcile loop exits, and that no reader acts on it:
+        `beginStopping` has already moved the diagnostic mux and startup snapshot to "stopping", so the only reader
+        left is at most one `publishServiceHealth` tick on `health.service.rule-config`, after the shutdown deadline,
+        before `stopHealthPublisherMode`. No `Health()` override. The migration note drops its parenthetical about
+        this change's unreleased first cut.
+      - Non-test Go is functionally identical to `87bcfa78` (now `64a34476`): `git diff 87bcfa78` over non-test `.go`
+        files touches only `internal/boot/rule_config_service.go`, and every changed line there is a comment.
+      Gates, run at `a4dd453a` (the final code-bearing commit): `go build ./...`, `task lint`, `go vet ./...`, `go vet
+      -tags=integration ./...`, `go run ./cmd/entity-id-audit .` (1334 candidates) each exit 0; `task test:race` exit 0,
+      160 ok / 0 FAIL / 20 no test files / 0 DATA RACE; `task test:integration` exit 0, 160 ok / 0 FAIL / 20 no test
+      files / 0 DATA RACE; `task schema:generate` exit 0 with an empty `git diff schemas/ specs/`; `openspec validate
+      config-bucket-authority-namespace --strict` valid; `openspec validate --all --strict` 58/58; `task
+      spec:properties` 452/452.
