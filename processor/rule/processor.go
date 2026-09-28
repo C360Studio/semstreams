@@ -107,11 +107,7 @@ type Processor struct {
 	cancel             context.CancelFunc
 	runtimeDone        chan struct{}
 	runtimeWG          *sync.WaitGroup
-	commandMu          sync.Mutex
-	commandFenced      bool
-	commands           []ruleRuntimeCommand
-	commandWake        chan struct{}
-	coordinatorDone    chan struct{}
+	commandLane        ownerLane
 	startTime          time.Time
 	messagesEvaluated  int64
 	rulesTriggered     int64
@@ -571,101 +567,25 @@ func (rp *Processor) Initialize() error {
 // watchEntityStates and handleEntityUpdates are in entity_watcher.go
 // loadRuleDefinitionsFromFiles and loadRules are in rule_loader.go
 
-type ruleRuntimeCommand struct {
-	run    func(context.Context) error
-	result chan error
-}
-
 type ruleStreamConsumer struct {
 	handle      jetstream.ConsumeContext
 	drainIssued bool
 }
 
-func (rp *Processor) runRuntimeCoordinator(ctx context.Context) {
-	// Capture before acknowledging any shutdown fence: a bounded Stop may clear
-	// lifecycle handles without joining the coordinator after its deadline.
-	wake := rp.commandWake
-	defer close(rp.coordinatorDone)
-	for {
-		select {
-		case <-ctx.Done():
-			rp.failQueuedRuntimeCommands(ctx.Err())
-			return
-		case <-wake:
-			for {
-				rp.commandMu.Lock()
-				if len(rp.commands) == 0 {
-					rp.commandMu.Unlock()
-					break
-				}
-				command := rp.commands[0]
-				rp.commands = rp.commands[1:]
-				rp.commandMu.Unlock()
-				command.result <- command.run(ctx)
-				close(command.result)
-			}
-		}
-	}
-}
-
-func (rp *Processor) failQueuedRuntimeCommands(err error) {
-	rp.commandMu.Lock()
-	commands := rp.commands
-	rp.commands = nil
-	rp.commandMu.Unlock()
-	for _, command := range commands {
-		command.result <- err
-		close(command.result)
-	}
-}
-
+// submitRuntimeCommand runs a contextless runtime mutation on the processor's
+// runtime lane. It blocks while a running processor executes the update on its
+// runtime; returns the update's result, a refusal once Stop has fenced
+// admission, or the runtime's end error. It carries no caller deadline — a
+// bounded Stop cancels the runtime and releases it.
 func (rp *Processor) submitRuntimeCommand(run func(context.Context) error) error {
-	command := ruleRuntimeCommand{run: run, result: make(chan error, 1)}
-	rp.commandMu.Lock()
-	if rp.commandFenced || rp.commandWake == nil {
-		rp.commandMu.Unlock()
+	err := rp.commandLane.submit(run)
+	switch {
+	case errors.Is(err, errLaneAdmissionClosed):
 		return errs.WrapInvalid(errors.New("runtime command admission is closed"), "RuleProcessor", "runtimeCommand", "processor is not accepting runtime updates")
+	case errors.Is(err, errLaneEnded):
+		return errs.WrapInvalid(errors.New("runtime coordinator stopped"), "RuleProcessor", "runtimeCommand", "processor runtime has ended")
 	}
-	if rp.coordinatorDone != nil {
-		select {
-		case <-rp.coordinatorDone:
-			rp.commandMu.Unlock()
-			return errs.WrapInvalid(errors.New("runtime coordinator stopped"), "RuleProcessor", "runtimeCommand", "processor runtime has ended")
-		default:
-		}
-	}
-	rp.commands = append(rp.commands, command)
-	wake := rp.commandWake
-	rp.commandMu.Unlock()
-	select {
-	case wake <- struct{}{}:
-	default:
-	}
-	return <-command.result
-}
-
-func (rp *Processor) fenceRuntimeCommands() <-chan error {
-	barrier := ruleRuntimeCommand{run: func(context.Context) error { return nil }, result: make(chan error, 1)}
-	rp.commandMu.Lock()
-	rp.commandFenced = true
-	if rp.coordinatorDone != nil {
-		select {
-		case <-rp.coordinatorDone:
-			rp.commandMu.Unlock()
-			barrier.result <- nil
-			close(barrier.result)
-			return barrier.result
-		default:
-		}
-	}
-	rp.commands = append(rp.commands, barrier)
-	wake := rp.commandWake
-	rp.commandMu.Unlock()
-	select {
-	case wake <- struct{}{}:
-	default:
-	}
-	return barrier.result
+	return err
 }
 
 // initializeStateTracker creates the RULE_STATE KV bucket and initializes state tracking components.
@@ -936,7 +856,7 @@ func (rp *Processor) Start(ctx context.Context) (startErr error) {
 	runtimeWG.Add(1)
 	go func() {
 		defer runtimeWG.Done()
-		rp.runRuntimeCoordinator(runCtx)
+		rp.commandLane.run(runCtx)
 	}()
 	go func(wg *sync.WaitGroup, done chan struct{}) {
 		wg.Wait()
@@ -967,7 +887,9 @@ func (rp *Processor) Start(ctx context.Context) (startErr error) {
 		rp.logger.Warn("Failed to create message cache, using noop cache", "error", err)
 		msgCache = cache.NewNoop[message.Message]()
 	}
+	rp.mu.Lock()
 	rp.messageCache = msgCache
+	rp.mu.Unlock()
 
 	// Initialize StateTracker for stateful ECA rules
 	if err := rp.initializeStateTracker(ctx); err != nil {
@@ -1076,9 +998,7 @@ func (rp *Processor) beginStartAuthority(ctx context.Context) (context.Context, 
 	rp.cancel = cancel
 	rp.runtimeWG = &sync.WaitGroup{}
 	rp.runtimeDone = make(chan struct{})
-	rp.commandWake = make(chan struct{}, 1)
-	rp.coordinatorDone = make(chan struct{})
-	rp.commandFenced = false
+	rp.commandLane.open()
 	rp.entityBorrowMu.Lock()
 	rp.entityBorrowFenced = false
 	rp.entityBorrowCount = 0
@@ -1101,6 +1021,11 @@ func (rp *Processor) finishStartAttempt(ctx context.Context, startDone chan stru
 		close(startDone)
 		rp.startDone = nil
 		rp.lifecycleMu.Unlock()
+		if rollbackErr == nil {
+			rp.mu.Lock()
+			rp.messageCache = nil
+			rp.mu.Unlock()
+		}
 		return startErr
 	}
 	rp.lifecycleMu.Lock()
@@ -1310,6 +1235,7 @@ func (rp *Processor) Stop(ctx context.Context) error {
 		rp.running = false
 		rp.isSubscribed = false
 		rp.health.Healthy = false
+		rp.messageCache = nil
 		rp.mu.Unlock()
 		rp.logger.Info("Rule processor stopped")
 		return stopErr
@@ -1319,12 +1245,12 @@ func (rp *Processor) Stop(ctx context.Context) error {
 func (rp *Processor) cleanup(ctx context.Context) error {
 	// 1. Fence readiness and contextless runtime mutation admission.
 	rp.statusFenced.Store(true)
-	barrier := rp.fenceRuntimeCommands()
+	barrier := rp.commandLane.fence()
 
 	rp.lifecycleMu.Lock()
 	cancel := rp.cancel
-	coordinatorDone := rp.coordinatorDone
 	rp.lifecycleMu.Unlock()
+	coordinatorDone := rp.commandLane.done()
 
 	stopErrors := []error{settleRuntimeCommandFence(ctx, barrier, cancel, coordinatorDone)}
 
@@ -1339,10 +1265,10 @@ func (rp *Processor) cleanup(ctx context.Context) error {
 	statusLoopDone := rp.statusLoopDone
 	rp.lifecycleMu.Unlock()
 
-	// 2. Fence cron scheduling and obtain the native in-flight completion.
-	var cronDone <-chan struct{}
+	// 2. Fence cron scheduling and join its in-flight fires under ctx. Admission
+	// closes here, before the input drains, as it did when this step only fenced.
 	if cronScheduler != nil {
-		cronDone = cronScheduler.Stop().Done()
+		stopErrors = append(stopErrors, cronScheduler.Stop(ctx))
 	}
 
 	// 3. Fence every message input while its callback authority is still live.
@@ -1366,8 +1292,8 @@ func (rp *Processor) cleanup(ctx context.Context) error {
 		}
 	}
 
-	// 5. Join every admitted callback, reconcile, and cron fire before
-	// canceling the run authority they still need to finish cleanly.
+	// 5. Join every admitted callback and reconcile before canceling the run
+	// authority they still need to finish cleanly (cron fires joined at step 2).
 	for i := range consumers {
 		select {
 		case <-consumers[i].handle.Closed():
@@ -1389,17 +1315,11 @@ func (rp *Processor) cleanup(ctx context.Context) error {
 		stopErrors = append(stopErrors, err)
 	}
 	if hotReloadMgr != nil {
+		// Contextless but bounded in practice: its KV goroutine selects on its
+		// own ctx, which Stop cancels before joining; its only other wait is a
+		// runtime command, refused since the step-1 fence or, if admitted
+		// before it, already settled by the step-1 barrier.
 		stopErrors = append(stopErrors, hotReloadMgr.Stop())
-	}
-	for _, done := range []<-chan struct{}{cronDone} {
-		if done == nil {
-			continue
-		}
-		select {
-		case <-done:
-		case <-ctx.Done():
-			stopErrors = append(stopErrors, ctx.Err())
-		}
 	}
 	// 6. Watcher admission is closed; now no new work can enter the coalescer.
 	if err := rp.closeEntityEvaluationQueue(); err != nil {
@@ -1496,6 +1416,11 @@ func settleRuntimeCommandFence(
 		// context. If the Stop deadline wins, cancel that authority and join the
 		// coordinator before taking any teardown snapshot; otherwise the command
 		// could publish a watcher or cron registration after the snapshot.
+		// These two receives outlive ctx on purpose, unlike
+		// awaitEntityBorrowSettlement: the snapshot must be final. They are
+		// bounded because the lane always delivers — cancel ends its run, and
+		// its end fails every queued command and barrier (ownerLane I1) — so
+		// the only blocker left is a command ignoring its own ctx.
 		if cancel != nil {
 			cancel()
 		}
@@ -1514,14 +1439,11 @@ func (rp *Processor) clearLifecycleHandles() {
 	rp.cancel = nil
 	rp.runtimeDone = nil
 	rp.runtimeWG = nil
-	rp.commandWake = nil
-	rp.coordinatorDone = nil
 	rp.streamConsumers = nil
 	rp.kvConfigManager = nil
 	rp.subscriptions = nil
 	rp.cronScheduler = nil
 	rp.statusLoopDone = nil
-	rp.messageCache = nil
 }
 
 // publishGraphEvents and publishRuleEvent are in publisher.go

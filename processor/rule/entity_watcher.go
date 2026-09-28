@@ -294,6 +294,10 @@ func (rp *Processor) stopWatcherForBucketPattern(bucketName, pattern string) err
 }
 
 // UpdateWatchBuckets atomically replaces the configured ENTITY_STATES patterns.
+// Blocks while a running processor executes the update on its runtime; returns
+// the update's result, a refusal once Stop has fenced admission, or the
+// runtime's end error. It carries no caller deadline — a bounded Stop cancels
+// the runtime and releases it.
 func (rp *Processor) UpdateWatchBuckets(newBuckets map[string][]string) error {
 	if err := validateEntityWatchBuckets(newBuckets); err != nil {
 		return err
@@ -456,16 +460,23 @@ func (rp *Processor) startManagedEntityWatcher(ctx context.Context, watcher jets
 	rp.lifecycleMu.Lock()
 	wg := rp.runtimeWG
 	rp.lifecycleMu.Unlock()
-	if wg != nil {
-		wg.Add(1)
+	if wg == nil {
+		// The runtime these handles belonged to has been cleared; a goroutine
+		// spawned now would join no Stop. Refuse it and release its record.
+		if done != nil {
+			close(done)
+		}
+		stopErr := watcher.Stop()
+		rp.logger.Warn("Refused managed entity watcher: processor runtime has ended",
+			"key", key, "stop_error", stopErr)
+		return
 	}
+	wg.Add(1)
 	go func() {
 		if done != nil {
 			defer close(done)
 		}
-		if wg != nil {
-			defer wg.Done()
-		}
+		defer wg.Done()
 		rp.handleManagedEntityUpdates(ctx, watcher, key, generation)
 	}()
 }
