@@ -1257,10 +1257,10 @@ func (rp *Processor) cleanup(ctx context.Context) error {
 	statusLoopDone := rp.statusLoopDone
 	rp.lifecycleMu.Unlock()
 
-	// 2. Fence cron scheduling and obtain the native in-flight completion.
-	var cronDone <-chan struct{}
+	// 2. Fence cron scheduling and join its in-flight fires under ctx. Admission
+	// closes here, before the input drains, as it did when this step only fenced.
 	if cronScheduler != nil {
-		cronDone = cronScheduler.Stop().Done()
+		stopErrors = append(stopErrors, cronScheduler.Stop(ctx))
 	}
 
 	// 3. Fence every message input while its callback authority is still live.
@@ -1284,8 +1284,8 @@ func (rp *Processor) cleanup(ctx context.Context) error {
 		}
 	}
 
-	// 5. Join every admitted callback, reconcile, and cron fire before
-	// canceling the run authority they still need to finish cleanly.
+	// 5. Join every admitted callback and reconcile before canceling the run
+	// authority they still need to finish cleanly (cron fires joined at step 2).
 	for i := range consumers {
 		select {
 		case <-consumers[i].handle.Closed():
@@ -1308,16 +1308,6 @@ func (rp *Processor) cleanup(ctx context.Context) error {
 	}
 	if hotReloadMgr != nil {
 		stopErrors = append(stopErrors, hotReloadMgr.Stop())
-	}
-	for _, done := range []<-chan struct{}{cronDone} {
-		if done == nil {
-			continue
-		}
-		select {
-		case <-done:
-		case <-ctx.Done():
-			stopErrors = append(stopErrors, ctx.Err())
-		}
 	}
 	// 6. Watcher admission is closed; now no new work can enter the coalescer.
 	if err := rp.closeEntityEvaluationQueue(); err != nil {

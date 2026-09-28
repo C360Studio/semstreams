@@ -8,9 +8,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/c360studio/semstreams/metric"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -94,7 +96,11 @@ func startSchedulerForTest(ctx context.Context, t *testing.T, scheduler *CronSch
 	if err := scheduler.Start(ctx); err != nil {
 		t.Fatalf("Start = %v, want nil", err)
 	}
-	t.Cleanup(func() { <-scheduler.Stop().Done() })
+	t.Cleanup(func() {
+		if err := scheduler.Stop(context.Background()); err != nil {
+			t.Errorf("Stop = %v, want nil", err)
+		}
+	})
 }
 
 func cronRuleForTest(t *testing.T, mutate func(*Definition)) *CronRule {
@@ -174,7 +180,9 @@ func TestCronScheduler_RegisterRejectsNil(t *testing.T) {
 func TestCronScheduler_RegisterAfterStopIsRejectedWithoutMutation(t *testing.T) {
 	s := newUnstartedSchedulerForTest(t, &recordingExecutor{})
 	rule := cronRuleForTest(t, nil)
-	<-s.Stop().Done()
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop = %v, want nil", err)
+	}
 
 	if err := s.Register(rule); err == nil {
 		t.Fatal("Register after terminal Stop succeeded")
@@ -205,15 +213,18 @@ func TestCronScheduler_StopSerializesWithAdmittedRegister(t *testing.T) {
 		}
 		runtime.Gosched()
 	}
-	stopReturned := make(chan context.Context, 1)
-	go func() { stopReturned <- s.Stop() }()
+	// Stop waits on the lifecycle mutex Register holds; mutex waits are not
+	// durably blocking, so this test cannot use synctest.Wait to observe it.
+	stopReturned := make(chan error, 1)
+	go func() { stopReturned <- s.Stop(context.Background()) }()
 	s.mu.Unlock()
 
 	if err := <-registerDone; err != nil {
 		t.Fatalf("admitted Register: %v", err)
 	}
-	settlement := <-stopReturned
-	<-settlement.Done()
+	if err := <-stopReturned; err != nil {
+		t.Fatalf("Stop = %v, want nil", err)
+	}
 	if got := s.RegisteredCount(); got != 1 {
 		t.Fatalf("admitted registration was silently lost: count=%d", got)
 	}
@@ -231,8 +242,9 @@ func TestCronScheduler_StartTwiceFails(t *testing.T) {
 		t.Fatalf("first Start = %v, want nil", err)
 	}
 	defer func() {
-		stopCtx := s.Stop()
-		<-stopCtx.Done()
+		if err := s.Stop(context.Background()); err != nil {
+			t.Errorf("Stop = %v, want nil", err)
+		}
 	}()
 
 	if err := s.Start(ctx); err == nil {
@@ -248,48 +260,72 @@ func TestCronScheduler_StartRejectsNilContext(t *testing.T) {
 }
 
 func TestCronScheduler_StopOnNeverStartedIsSafe(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := newSchedulerForTest(t, &recordingExecutor{})
+		stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := s.Stop(stopCtx); err != nil {
+			t.Fatalf("Stop on never-started scheduler = %v, want nil", err)
+		}
+		if err := s.Stop(stopCtx); err != nil {
+			t.Fatalf("repeated completed Stop = %v, want nil", err)
+		}
+	})
+}
+
+func TestCronScheduler_StopRejectsNilContext(t *testing.T) {
 	s := newSchedulerForTest(t, &recordingExecutor{})
-	select {
-	case <-s.Stop().Done():
-	case <-time.After(time.Second):
-		t.Fatal("Stop on never-started scheduler did not settle")
+	if err := s.Stop(nil); err == nil {
+		t.Fatal("Stop(nil) err = nil, want non-nil")
+	}
+	if err := s.Register(cronRuleForTest(t, nil)); err != nil {
+		t.Fatalf("rejected Stop fenced registration: %v", err)
 	}
 }
 
 func TestCronScheduler_StandaloneStartContextAndStopSettlement(t *testing.T) {
-	type contextKey string
-	exec := &blockingContextExecutor{
-		started: make(chan context.Context, 1),
-		release: make(chan struct{}),
-	}
-	s := newUnstartedSchedulerForTest(t, exec)
-	rule := cronRuleForTest(t, nil)
-	if err := s.Register(rule); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	startCtx := context.WithValue(context.Background(), contextKey("owner"), "start")
-	if err := s.Start(startCtx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		type contextKey string
+		exec := &blockingContextExecutor{
+			started: make(chan context.Context, 1),
+			release: make(chan struct{}),
+		}
+		s := newUnstartedSchedulerForTest(t, exec)
+		rule := cronRuleForTest(t, nil)
+		if err := s.Register(rule); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+		startCtx := context.WithValue(context.Background(), contextKey("owner"), "start")
+		if err := s.Start(startCtx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
 
-	fireDone := make(chan struct{})
-	go func() {
-		s.fire(rule.ID())
-		close(fireDone)
-	}()
-	dispatchCtx := <-exec.started
-	if got := dispatchCtx.Value(contextKey("owner")); got != "start" {
-		t.Fatalf("dispatch context value = %v, want start", got)
-	}
-	settlement := s.Stop()
-	select {
-	case <-settlement.Done():
-		t.Fatal("Stop settled while an admitted cron action was still running")
-	default:
-	}
-	close(exec.release)
-	<-fireDone
-	<-settlement.Done()
+		fireDone := make(chan struct{})
+		go func() {
+			s.fire(rule.ID())
+			close(fireDone)
+		}()
+		dispatchCtx := <-exec.started
+		if got := dispatchCtx.Value(contextKey("owner")); got != "start" {
+			t.Fatalf("dispatch context value = %v, want start", got)
+		}
+		stopReturned := make(chan error, 1)
+		go func() { stopReturned <- s.Stop(context.Background()) }()
+		synctest.Wait()
+		select {
+		case err := <-stopReturned:
+			t.Fatalf("Stop returned (%v) while an admitted cron action was still running", err)
+		default:
+		}
+		if err := s.Stop(context.Background()); !errs.IsTransient(err) {
+			t.Fatalf("concurrent Stop = %v, want a transient refusal", err)
+		}
+		close(exec.release)
+		<-fireDone
+		if err := <-stopReturned; err != nil {
+			t.Fatalf("Stop = %v, want nil", err)
+		}
+	})
 }
 
 // fire() is exercised directly because waiting for a real cron tick adds
@@ -511,12 +547,10 @@ func TestCronScheduler_StartIntegratesWithRegister(t *testing.T) {
 		t.Fatalf("Start = %v", err)
 	}
 
-	stopCtx := s.Stop()
-	select {
-	case <-stopCtx.Done():
-		// Drained cleanly.
-	case <-time.After(2 * time.Second):
-		t.Fatal("Stop drain timed out")
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelStop()
+	if err := s.Stop(stopCtx); err != nil {
+		t.Fatalf("Stop drain = %v, want nil", err)
 	}
 }
 
@@ -548,8 +582,9 @@ func TestCronScheduler_StartActuallyFiresFromRobfig(t *testing.T) {
 		t.Fatalf("Start = %v", err)
 	}
 	defer func() {
-		stopCtx := s.Stop()
-		<-stopCtx.Done()
+		if err := s.Stop(context.Background()); err != nil {
+			t.Errorf("Stop = %v, want nil", err)
+		}
 	}()
 
 	deadline := time.Now().Add(1500 * time.Millisecond)
@@ -1068,8 +1103,9 @@ func TestCronScheduler_Metrics_SchedulerRunningGauge(t *testing.T) {
 		t.Errorf("running after Start = %f, want 1", got)
 	}
 
-	stopCtx := s.Stop()
-	<-stopCtx.Done()
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop = %v, want nil", err)
+	}
 	if got := testutil.ToFloat64(m.schedulerRunning); got != 0 {
 		t.Errorf("running after Stop = %f, want 0", got)
 	}
@@ -1341,4 +1377,40 @@ func TestCronFire_DeniedStatusDistinctFromError(t *testing.T) {
 	if errorCount != 0 {
 		t.Errorf("fires_total{status=error} = %f, want 0 (deny must not set error status)", errorCount)
 	}
+}
+
+// #1283 wiring proof for the cron owner: a Stop whose fence arrives after the
+// dispatcher's exit took its queue, but before the dispatcher returned, must
+// settle under its caller context instead of waiting on an orphaned barrier.
+// A queued dispatch with a pre-filled cap-1 result parks the exit in that window.
+func TestCronScheduler_StopSettlesWhenBarrierRacesDispatcherExit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := newUnstartedSchedulerForTest(t, &recordingExecutor{})
+		startCtx, cancelStart := context.WithCancel(context.Background())
+		if err := s.Start(startCtx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		parked := laneCommand{run: func(context.Context) error { return nil }, result: make(chan error, 1)}
+		parked.result <- errors.New("prefilled")
+		s.dispatch.mu.Lock()
+		s.dispatch.queue = append(s.dispatch.queue, parked)
+		s.dispatch.mu.Unlock()
+
+		cancelStart()
+		synctest.Wait() // the dispatcher's exit is parked on parked.result
+
+		stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
+		defer cancelStop()
+		stopReturned := make(chan error, 1)
+		go func() { stopReturned <- s.Stop(stopCtx) }()
+		synctest.Wait()
+		<-parked.result
+		synctest.Wait()
+		if err := <-stopReturned; err != nil {
+			t.Fatalf("Stop = %v, want nil: its fence raced the dispatcher's exit and was orphaned", err)
+		}
+		if got := <-parked.result; !errors.Is(got, context.Canceled) {
+			t.Fatalf("parked dispatch end error = %v, want context.Canceled", got)
+		}
+	})
 }
