@@ -49,6 +49,13 @@ func hotReloadRule(id string) rulepkg.Definition {
 	}
 }
 
+// ruleProcessorStopBudget bounds the test processor's Stop. The rule processor
+// has no stop budget of its own; this is the production root's: the
+// --shutdown-timeout default (internal/boot/flags.go, 30s) that bounds the
+// whole runtime's StopAll. An unbounded Stop here turned the #1283 barrier
+// hang into a 20-minute CI job timeout.
+const ruleProcessorStopBudget = 30 * time.Second
+
 func startedRuleProcessor(t *testing.T, ctx context.Context, client *natsclient.Client) *rulepkg.Processor {
 	t.Helper()
 	cfg, err := rulepkg.NewConfig("root-hot-reload-test")
@@ -69,7 +76,13 @@ func startedRuleProcessor(t *testing.T, ctx context.Context, client *natsclient.
 	proc.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	require.NoError(t, proc.Initialize())
 	require.NoError(t, proc.Start(ctx))
-	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), ruleProcessorStopBudget)
+		defer cancel()
+		if err := proc.Stop(stopCtx); err != nil {
+			t.Errorf("rule processor Stop within %s: %v", ruleProcessorStopBudget, err)
+		}
+	})
 	return proc
 }
 

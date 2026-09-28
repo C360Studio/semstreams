@@ -16,6 +16,24 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// processorStopBudget bounds a test processor's Stop. The rule processor has
+// no stop budget of its own; this is the production root's: the
+// --shutdown-timeout default (internal/boot/flags.go, 30s) that bounds the
+// whole runtime's StopAll. An unbounded Stop turned the #1283 barrier hang
+// into a 20-minute CI job timeout.
+const processorStopBudget = 30 * time.Second
+
+// stopProcessorWithinBudget stops proc under processorStopBudget and fails the
+// test if Stop reports an error.
+func stopProcessorWithinBudget(t *testing.T, proc *Processor) {
+	t.Helper()
+	stopCtx, cancel := context.WithTimeout(context.Background(), processorStopBudget)
+	defer cancel()
+	if err := proc.Stop(stopCtx); err != nil {
+		t.Errorf("rule processor Stop within %s: %v", processorStopBudget, err)
+	}
+}
+
 type ruleLifecycleTestConsumer struct {
 	drained chan struct{}
 	closed  chan struct{}
@@ -441,7 +459,9 @@ func TestRuleFailedStartRollsBackPublishedAuthority(t *testing.T) {
 	if !terminal || cleanupPending {
 		t.Fatalf("failed Start authority: terminal=%v cleanupPending=%v", terminal, cleanupPending)
 	}
-	if err := processor.Stop(context.Background()); err != nil {
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), processorStopBudget)
+	defer cancelStop()
+	if err := processor.Stop(stopCtx); err != nil {
 		t.Fatalf("Stop after successful failed-Start rollback: %v", err)
 	}
 	if err := processor.Start(context.Background()); err == nil {

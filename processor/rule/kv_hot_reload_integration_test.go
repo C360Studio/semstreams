@@ -121,7 +121,7 @@ func TestHotReload_SeedIdempotency(t *testing.T) {
 
 	proc := buildHotReloadProcessor(t, tc.Client)
 	require.NoError(t, proc.Start(ctx))
-	defer proc.Stop(context.Background()) //nolint:errcheck
+	defer stopProcessorWithinBudget(t, proc)
 
 	rcm, _ := startRulesFamily(t, ctx, tc)
 	targets := []HotReloadTarget{proc}
@@ -149,7 +149,7 @@ func TestHotReload_SeedRespectsOperatorEdits(t *testing.T) {
 
 	proc := buildHotReloadProcessor(t, tc.Client)
 	require.NoError(t, proc.Start(ctx))
-	defer proc.Stop(context.Background()) //nolint:errcheck
+	defer stopProcessorWithinBudget(t, proc)
 
 	rcm, bucket := startRulesFamily(t, ctx, tc)
 
@@ -184,7 +184,7 @@ func TestHotReload_ReconcileFromKV(t *testing.T) {
 
 	proc := buildHotReloadProcessor(t, tc.Client)
 	require.NoError(t, proc.Start(ctx))
-	defer proc.Stop(context.Background()) //nolint:errcheck
+	defer stopProcessorWithinBudget(t, proc)
 
 	rcm, _ := startRulesFamily(t, ctx, tc)
 	targets := []HotReloadTarget{proc}
@@ -218,7 +218,7 @@ func TestHotReload_WatcherPicksUpNewRule(t *testing.T) {
 
 	proc := buildHotReloadProcessor(t, tc.Client)
 	require.NoError(t, proc.Start(ctx))
-	defer proc.Stop(context.Background()) //nolint:errcheck
+	defer stopProcessorWithinBudget(t, proc)
 
 	rcm, _ := startRulesFamily(t, ctx, tc)
 	require.NoError(t, rcm.Start(ctx, []HotReloadTarget{proc}))
@@ -258,7 +258,7 @@ func TestHotReload_DebounceCoalescing(t *testing.T) {
 
 	proc := buildHotReloadProcessor(t, tc.Client)
 	require.NoError(t, proc.Start(ctx))
-	defer proc.Stop(context.Background()) //nolint:errcheck
+	defer stopProcessorWithinBudget(t, proc)
 
 	rcm, _ := startRulesFamily(t, ctx, tc)
 	require.NoError(t, rcm.Start(ctx, []HotReloadTarget{proc}))
