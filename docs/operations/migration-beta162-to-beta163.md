@@ -2420,8 +2420,7 @@ manager serves other writers a key family; the rule manager exists once, in the 
    - Its health is published as `health.service.rule-config` to the `HEALTH` stream every 5 s, like every service's.
    - The startup service count (`Admitted`) is one higher.
    - Readiness waits for the seeding and the initial reconcile: they run inside `StartAll`, before the service
-     manager commits startup, as each rule processor's own seeding did in beta.162 (this change's unreleased first
-     cut ran them after the commit).
+     manager commits startup, as each rule processor's own seeding did in beta.162.
 
    That adapter is internal; the shape to copy for a root of your own:
 

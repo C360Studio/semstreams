@@ -63,6 +63,13 @@ func (s *ruleConfigService) Start(ctx context.Context) error {
 // reconcile loop exits, Stop returns that error and the service does not
 // report stopped; a later Stop waits again. A completed repeated Stop is a nil
 // no-op.
+//
+// A Stop whose bound won leaves the service Running and healthy until its
+// reconcile loop exits (owner ruling on #1188, docket 7 Q12 (a)). No reader
+// acts on that: StopAll has already called beginStopping, which moves the
+// diagnostic mux and the startup snapshot to "stopping", so the only reader
+// left is at most one publishServiceHealth tick on health.service.rule-config,
+// after the shutdown deadline, before stopHealthPublisherMode ends publishing.
 func (s *ruleConfigService) Stop(ctx context.Context) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "ruleConfigService", "Stop", "context cannot be nil")
