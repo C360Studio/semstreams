@@ -60,8 +60,11 @@ func (l *ownerLane) done() <-chan struct{} {
 	return l.doneCh
 }
 
-// run executes admitted commands with ctx until ctx ends, then fails every
-// command still queued with ctx's error.
+// run executes admitted commands with ctx. A drain in progress does not
+// recheck ctx, so a command already queued when ctx ends may still execute
+// under the canceled ctx and return its own result; a command the drain never
+// reaches fails with ctx's error when the lane ends. A caller sees one of the
+// two, never a hang.
 func (l *ownerLane) run(ctx context.Context) {
 	l.mu.Lock()
 	wake, done := l.wake, l.doneCh

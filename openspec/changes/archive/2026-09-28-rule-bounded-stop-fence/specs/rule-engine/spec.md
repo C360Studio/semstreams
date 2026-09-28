@@ -5,10 +5,10 @@
 A runtime configuration update (`ApplyConfigUpdate`, `UpdateWatchBuckets`) on a running rule processor MUST block
 until the processor applies it on its runtime or that runtime ends, and MUST return the update's own result, a refusal
 once Stop has closed admission, or the runtime's end error. The update carries no caller deadline, and it MUST NOT
-block past a Stop bounded by its caller context: when that bound wins, Stop cancels the runtime; a queued update returns
-the runtime's end error, and an update already running returns its own result under the canceled runtime, and Stop
-returns once it observes that cancellation. A Stop that closes admission at the instant the runtime ends MUST NOT wait
-on work the ended runtime will never run.
+block past a Stop bounded by its caller context: when that bound wins, Stop cancels the runtime; an admitted update
+returns its own result if the runtime executes it, including under that cancellation, and otherwise the runtime's end
+error; Stop returns once it observes that cancellation. A Stop that closes admission at the instant the runtime ends
+MUST NOT wait on work the ended runtime will never run.
 The cron scheduler's `Stop(ctx)` MUST likewise be bounded by its caller context: it returns nil once the scheduler's
 admitted fires have finished, or its context's error when the context ends first.
 

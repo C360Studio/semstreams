@@ -371,9 +371,11 @@ func (s *CronScheduler) restoreFromTracker(ctx context.Context) {
 // Stop halts the scheduler and joins its work under ctx. It fences
 // registration and dispatch admission, stops the native ticker, then waits for
 // in-flight native callbacks and every admitted dispatch before canceling and
-// joining the dispatcher. Every wait is bounded by ctx: when ctx ends first,
-// Stop cancels the dispatch runtime and returns ctx's error without a join
-// claim, and a later Stop retries the joins. A completed Stop returns nil when
+// joining the dispatcher. Every wait is bounded by ctx. When ctx ends while
+// Stop is still waiting for a Start in progress, Stop returns ctx's error and
+// leaves that startup unchanged. Once Stop holds terminal admission and ctx
+// ends first, it cancels the dispatch runtime and returns ctx's error without
+// a join claim, and a later Stop retries the joins. A completed Stop returns nil when
 // repeated; a Stop concurrent with one in progress returns a transient error.
 // Stop on a never-started scheduler is safe. ctx must be non-nil.
 func (s *CronScheduler) Stop(ctx context.Context) error {
