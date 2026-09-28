@@ -236,8 +236,8 @@ caller. No rule processor SHALL acquire the configuration bucket itself.
 - **GIVEN** a started `rules` family
 - **WHEN** `Put`, `Create`, `Get` or `Delete` names `dotted.name`, or any family method receives a nil context
 - **THEN** it returns an invalid error and the bucket is neither read nor written
-- **AND** a `rules.nested.name` key another writer stored is absent from `Names`, and the next delivered entry is the
-  put that followed it
+- **AND** a `rules.nested.name` key another writer stored is absent from `Names`, which logs a Warn naming the key it
+  skipped, and the next delivered entry is the put that followed it
 - **AND** the tests that verify this are `TestKeyFamilyDeliversSnapshotThenChanges` and
   `TestBoundKeyFamilyRefusesBeforeAnyStoreAccess`
 
