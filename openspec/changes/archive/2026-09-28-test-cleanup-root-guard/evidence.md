@@ -8,15 +8,16 @@ resolutions. Independent source and exact-record review is retained in `review/f
 canonical validation of all 445 explicit dependencies and full source snapshots. This supersedes the earlier
 325-entry checkpoint below. The 1,402-site census retains 641 ordinary-only unknowns; those are not safety claims.
 Final classifier source review passed at the hashes below. Installed-manifest guard validation passed;
-Full local preflight has passed; archive/spec synchronization remains the final content step.
+full local preflight passed. This change is archived with its synchronized capability spec.
 
 The final process-reader extraction received scoped approval at SHA256
 `339ca6f11b481ccdd13f8b380e55168c671fb9fd1115845363b2805404dc0729`; event ordering and ownership are unchanged.
-Existing green process results below predate that extraction; final race gates will validate the current source.
+Earlier process results below predate that extraction; the full local gate subsequently validated the current
+source under both race selections.
 
-Citation resolution reported 444/444 existing tracked citations and its fixture matrix passed 34 checks. The initial
-run intentionally does not claim coverage of untracked implementation files; repeat after staging those files.
-Strict OpenSpec validation passed all 58 current items. The queue contains only this change in this worktree.
+Final staged citation resolution passed 445/445 references, and its checker fixture passed 34 checks. The initial
+untracked-file checkpoint covered only 444 citations; it is not the final evidence. Strict OpenSpec validation
+passed all 58 items before archive. Post-archive citation, strict validation and queue checks are separate checks.
 
 ## Admission slice
 

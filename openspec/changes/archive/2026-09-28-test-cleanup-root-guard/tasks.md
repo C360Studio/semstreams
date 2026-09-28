@@ -14,7 +14,7 @@
 - [x] 2.1 Implement the accepted census and guard with test-first evidence and independently reviewed baseline.
 - [x] 2.2 Record measured remediation batches and evidence limits; perform only accepted package repairs.
 - [x] 2.3 Complete implementation review, focused verification, and required local preflight.
-- [ ] 2.4 Archive the completed change and synchronize its capability specification as the last content commit.
+- [x] 2.4 Archive the completed change and synchronize its capability specification as the last content commit.
 
 ## Implementation ownership and evidence
 
@@ -30,11 +30,11 @@ baseline entries only from independently approved exact source records.
 The coordinator owns the shared guard script, Task/CI/runner admission, existing runner fixture adaptations,
 actual-entry-point proof, and documentation. Neither role approves the production baseline merely by generating it.
 Task 2.1 is complete: the final classifier and exact manifest have passed independent source review;
-current-source full preflight and archive remain separate tasks.
+Full local preflight passed; task 2.4 records the final archive/spec synchronization.
 
 The census-driven scope correction passed independent design review and is recorded in PR #1414 comment 5874372507.
 The coordinator accepted the correction against #1064's existing guard scope; no owner waiver or baseline approval
 was inferred. The admission slice separately passed scoped implementation review. The final manifest has 334 debt entries and 86 exact source-backed resolutions,
 with 445 canonical dependency fingerprints checked. The reconciled 1,402-site guard passes. Final classifier source
-review is approved; full local preflight passed; archive/spec synchronization remains the final content step. See `evidence.md`
+review is approved; full local preflight passed; this change is archived with its synchronized capability spec. See `evidence.md`
 and `review/final-manifest-review.md` for hashes, executed checks, and the limits of each approval.
