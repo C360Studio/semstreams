@@ -34,6 +34,22 @@ func stopProcessorWithinBudget(t *testing.T, proc *Processor) {
 	}
 }
 
+// configManagerStopBudget bounds a test rule ConfigManager's Stop. It is the
+// same production number as processorStopBudget: the root stops the
+// "rule-config" service under StopAll's one shutdown context.
+const configManagerStopBudget = processorStopBudget
+
+// stopConfigManagerWithinBudget stops rcm under configManagerStopBudget and
+// fails the test if Stop reports an error. Safe to call from a goroutine.
+func stopConfigManagerWithinBudget(t *testing.T, rcm *ConfigManager) {
+	t.Helper()
+	stopCtx, cancel := context.WithTimeout(context.Background(), configManagerStopBudget)
+	defer cancel()
+	if err := rcm.Stop(stopCtx); err != nil {
+		t.Errorf("rule ConfigManager Stop within %s: %v", configManagerStopBudget, err)
+	}
+}
+
 type ruleLifecycleTestConsumer struct {
 	drained chan struct{}
 	closed  chan struct{}
@@ -273,9 +289,7 @@ func TestConfigManagerStartIsOneShot(t *testing.T) {
 	if err := rcm.Start(context.Background(), nil); err == nil {
 		t.Fatal("duplicate Start succeeded")
 	}
-	if err := rcm.Stop(); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+	stopConfigManagerWithinBudget(t, rcm)
 }
 
 // fakeRuleTarget records every ApplyConfigUpdate it receives.
@@ -310,9 +324,7 @@ func TestConfigManagerStopJoinsTheReconcileLoop(t *testing.T) {
 	if done == nil {
 		t.Fatal("Start with a target must run the reconcile loop")
 	}
-	if err := rcm.Stop(); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+	stopConfigManagerWithinBudget(t, rcm)
 	select {
 	case <-done:
 	default:

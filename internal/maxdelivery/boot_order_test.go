@@ -95,30 +95,25 @@ func TestBinaryBootOrder(t *testing.T) {
 	}
 	require.NoError(t, requireIdentArgument(productionRun, "runUntilShutdown", 0, productionRuntimeCtx))
 	// #1188: the one rule manager registers its `rules` key family with the
-	// config manager it is started beside, and the runtime handed to
-	// runUntilShutdown is the wrapper that orders rule hot reload around the
-	// services. Removing any link here must fail this test.
+	// config manager it is started beside, and runs as the "rule-config"
+	// service, registered after configureAndCreateServices has registered the
+	// component manager and before runUntilShutdown calls manager.StartAll.
+	// service.Manager starts in registration order and stops in exact reverse
+	// order, so that position alone starts it after the rule processors and
+	// stops it before them (docket 6 Q11). Removing any link here must fail.
 	ruleManager, err := assignedCallResult(productionRun, "rulepkg.NewConfigManager", 0)
 	require.NoError(t, err)
 	requireCallOrder(t, productionCalls, "rulepkg.NewConfigManager", "bootstrapobservability.StartValidatedConfigManager")
 	require.NoError(t, requireMethodCallArgument(productionRun, "config.WithKeyFamily", 0, ruleManager, "KeyFamily"))
-	wrappedRules, err := compositeFieldIdentifier(productionRun, "ruleHotReloadRuntime", "rules")
-	require.NoError(t, err)
-	require.Equal(t, ruleManager, wrappedRules)
-	wrappedServices, err := compositeFieldIdentifier(productionRun, "ruleHotReloadRuntime", "runtimeManager")
-	require.NoError(t, err)
 	productionRuntime, err := assignedCallResult(productionRun, "setupRegistriesAndManager", 1)
 	require.NoError(t, err)
-	require.Equal(t, productionRuntime, wrappedServices)
-	// The rule processors the root reconciles into are the ones the same
-	// service manager built; a nil or hand-built list silently stops hot
-	// reload and file-rule seeding in both binaries.
-	wrappedTargets, err := compositeFieldValue(productionRun, "ruleHotReloadRuntime", "targets")
-	require.NoError(t, err)
-	require.Equal(t,
-		"service.ComponentsImplementing[rulepkg.HotReloadTarget]("+productionRuntime+")",
-		types.ExprString(wrappedTargets))
-	require.NoError(t, requireIdentArgument(productionRun, "runUntilShutdown", 2, "runtime"))
+	requireCallOrder(t, productionCalls,
+		"configureAndCreateServices", "service.ConfigureRulePackMutations", "registerRuleConfigService", "runUntilShutdown")
+	require.NoError(t, requireIdentArgument(productionRun, "configureAndCreateServices", 1, productionRuntime))
+	require.NoError(t, requireIdentArgument(productionRun, "registerRuleConfigService", 0, productionRuntime))
+	require.NoError(t, requireIdentArgument(productionRun, "registerRuleConfigService", 1, ruleManager))
+	require.NoError(t, requireIdentArgument(productionRun, "runUntilShutdown", 2, productionRuntime))
+	requireRuleConfigRegistration(t, filepath.Join("..", "boot", "rule_config_service.go"))
 	require.NoError(t, requireMethodCallArgument(productionRun, "runUntilShutdown", 1, productionBootCtx, "Done"))
 	require.NoError(t, requireSelectorArgument(productionRun,
 		"bootstrapobservability.NewForwardingHandler", 0, productionEffective, "Services"))
@@ -618,4 +613,39 @@ func requireCallOrder(t *testing.T, calls []string, ordered ...string) {
 		require.NotEqualf(t, -1, found, "call %s absent or out of order in %v", want, calls)
 		position = found
 	}
+}
+
+// requireRuleConfigRegistration pins registerRuleConfigService: it registers
+// the "rule-config" service on the manager it is given, bound to the rule
+// processors that same manager's component manager built. A nil or
+// hand-built target list silently stops hot reload and file-rule seeding in
+// both binaries.
+func requireRuleConfigRegistration(t *testing.T, path string) {
+	t.Helper()
+	register := functionDecl(t, path, "registerRuleConfigService")
+	manager, err := parameterName(register, 0)
+	require.NoError(t, err)
+	rules, err := parameterName(register, 1)
+	require.NoError(t, err)
+	var targets string
+	ast.Inspect(register.Body, func(node ast.Node) bool {
+		assignment, ok := node.(*ast.AssignStmt)
+		if !ok || len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 {
+			return true
+		}
+		if types.ExprString(assignment.Rhs[0]) != "service.ComponentsImplementing[rulepkg.HotReloadTarget]("+manager+")" {
+			return true
+		}
+		if ident, ok := assignment.Lhs[0].(*ast.Ident); ok {
+			targets = ident.Name
+		}
+		return false
+	})
+	require.NotEmpty(t, targets, "registerRuleConfigService must bind the component manager's rule processors")
+	calls := callsInFunction(register)
+	requireCallOrder(t, calls, "manager.GetService", "manager.RegisterInstance")
+	require.NoError(t, requireIdentArgument(register, manager+".RegisterInstance", 0, "ruleConfigServiceName"))
+	service, err := callArgument(register, manager+".RegisterInstance", 1)
+	require.NoError(t, err)
+	require.Equal(t, "newRuleConfigService("+rules+", "+targets+", logger)", types.ExprString(service))
 }

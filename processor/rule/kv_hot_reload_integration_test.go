@@ -222,7 +222,7 @@ func TestHotReload_WatcherPicksUpNewRule(t *testing.T) {
 
 	rcm, _ := startRulesFamily(t, ctx, tc)
 	require.NoError(t, rcm.Start(ctx, []HotReloadTarget{proc}))
-	defer rcm.Stop() //nolint:errcheck
+	defer stopConfigManagerWithinBudget(t, rcm)
 
 	require.True(t, pollRulesCount(proc, 2, time.Second), "processor must start with 2 file-loaded rules")
 
@@ -236,7 +236,7 @@ func TestHotReload_WatcherPicksUpNewRule(t *testing.T) {
 
 	stopped := make(chan struct{})
 	go func() {
-		_ = rcm.Stop()
+		stopConfigManagerWithinBudget(t, rcm)
 		close(stopped)
 	}()
 	select {
@@ -262,7 +262,7 @@ func TestHotReload_DebounceCoalescing(t *testing.T) {
 
 	rcm, _ := startRulesFamily(t, ctx, tc)
 	require.NoError(t, rcm.Start(ctx, []HotReloadTarget{proc}))
-	defer rcm.Stop() //nolint:errcheck
+	defer stopConfigManagerWithinBudget(t, rcm)
 
 	// Start reconciles once synchronously. Its own seed writes are delivered
 	// back by the family and coalesce into exactly one more reconcile, which

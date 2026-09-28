@@ -105,8 +105,9 @@ func (rcm *ConfigManager) onRuleEntry(config.KeyFamilyEntry) {
 // `rules.*` set into every target, and then keeps reconciling after each
 // debounced change until Stop.
 //
-// The root calls it after every service has started, so the first reconcile
-// finds processors whose subscriptions and scheduler exist, and after
+// The root runs it as the "rule-config" service, which service.Manager starts
+// after the component manager has started the rule processors, so the first
+// reconcile finds processors whose subscriptions and scheduler exist; and after
 // seeding, so a full-replace reconcile never meets an empty family and removes
 // the file rules. Entries delivered before Start only leave a wake-up pending.
 //
@@ -151,11 +152,21 @@ func (rcm *ConfigManager) Start(ctx context.Context, targets []HotReloadTarget) 
 	return nil
 }
 
-// Stop ends the reconcile loop and waits for it, and for a Start still seeding
-// or reconciling. The root calls it before the services stop, so no reconcile
-// races a processor's teardown. Stop is idempotent, and every concurrent Stop
-// waits on the same completion fence; it is a no-op before Start.
-func (rcm *ConfigManager) Stop() error {
+// Stop ends the reconcile loop and waits, bounded by ctx, for it and for a
+// Start still seeding or reconciling. The root runs the manager as the
+// "rule-config" service, which service.Manager stops before the component
+// manager, so no reconcile races a processor's teardown.
+//
+// A nil ctx is refused before any action. Stop cancels, then returns nil once
+// the completion fence closes, or ctx's error if ctx ends first; the loop
+// still exits when the work it waits on returns, and a later Stop waits on the
+// same fence again. Every concurrent Stop waits on that fence; once it has
+// closed, a repeated Stop is a nil no-op (service.Service's Stop contract,
+// gh#520). Stop before Start is a no-op.
+func (rcm *ConfigManager) Stop(ctx context.Context) error {
+	if err := requireContext(ctx, "Stop"); err != nil {
+		return err
+	}
 	rcm.lifecycleMu.Lock()
 	rcm.terminal = true
 	cancel, done := rcm.cancel, rcm.done
@@ -163,10 +174,15 @@ func (rcm *ConfigManager) Stop() error {
 	if cancel != nil {
 		cancel()
 	}
-	if done != nil {
-		<-done
+	if done == nil {
+		return nil
 	}
-	return nil
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("rule configuration manager stop: reconcile loop still running: %w", ctx.Err())
+	}
 }
 
 // run debounces wake-ups and reconciles once per coalesced burst.

@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// parkedStops counts goroutines blocked in a channel receive inside
-// (*ConfigManager).Stop, which is the completion-fence wait. Reading the
+// parkedStops counts goroutines blocked in the select inside
+// (*ConfigManager).Stop, which is the completion-fence wait bounded by ctx. Reading the
 // goroutine dump is the synchronization: it observes that a Stop has reached
 // the fence instead of guessing with a sleep.
 func parkedStops() int {
@@ -29,7 +30,7 @@ func parkedStops() int {
 	}
 	count := 0
 	for _, goroutine := range strings.Split(string(buf), "\n\n") {
-		if strings.Contains(goroutine, "[chan receive") &&
+		if strings.Contains(goroutine, "[select") &&
 			strings.Contains(goroutine, "rule.(*ConfigManager).Stop(") {
 			count++
 		}
@@ -116,7 +117,7 @@ func TestConfigManagerStopDuringSeedingJoinsStart(t *testing.T) {
 
 	stopped := make(chan bool, 1)
 	go func() {
-		_ = rcm.Stop()
+		stopConfigManagerWithinBudget(t, rcm)
 		stopped <- target.returned.Load()
 	}()
 	waitForParkedStops(t, 1, stopped)
@@ -199,7 +200,7 @@ func TestConfigManagerConcurrentStopsBothJoinTheLoop(t *testing.T) {
 	stopped := make(chan bool, 2)
 	for range 2 {
 		go func() {
-			_ = rcm.Stop()
+			stopConfigManagerWithinBudget(t, rcm)
 			select {
 			case <-done:
 				stopped <- true
@@ -220,5 +221,23 @@ func TestConfigManagerConcurrentStopsBothJoinTheLoop(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("a Stop did not return within 10s of the loop's release")
 		}
+	}
+}
+
+// Stop refuses a nil context before any action: the manager is not cancelled.
+func TestConfigManagerStopRefusesANilContext(t *testing.T) {
+	rcm, err := NewConfigManager(slog.Default())
+	if err != nil {
+		t.Fatalf("NewConfigManager: %v", err)
+	}
+	//nolint:staticcheck // SA1012: a nil context is the input under test.
+	if err := rcm.Stop(nil); !errs.IsInvalid(err) {
+		t.Fatalf("Stop(nil) = %v, want an invalid error", err)
+	}
+	rcm.lifecycleMu.Lock()
+	terminal := rcm.terminal
+	rcm.lifecycleMu.Unlock()
+	if terminal {
+		t.Fatal("a refused Stop marked the manager terminal")
 	}
 }

@@ -101,9 +101,9 @@ func nextApplied(t *testing.T, applied <-chan map[string]any) map[string]any {
 // TestRootRuleManagerHotReloadsIntoTheProcessor proves the parts the root
 // composes, assembled by hand in the root's shape: the rule ConfigManager
 // registers its family with the config manager through
-// StartValidatedConfigManager, a ruleHotReloadRuntime starts it after the
-// services, and a rule saved through the manager's CRUD reaches the running
-// processor's ApplyConfigUpdate. It passes the processor as the target
+// StartValidatedConfigManager, the "rule-config" service starts it once the
+// processor runs, and a rule saved through the manager's CRUD reaches the
+// running processor's ApplyConfigUpdate. It passes the processor as the target
 // directly, so it does not prove how the production root finds its targets;
 // TestBinaryBootOrder (internal/maxdelivery) pins that wiring in run.go and
 // TestComponentsImplementingReturnsTheBuiltComponentsThatImplementTheSeam
@@ -129,12 +129,8 @@ func TestRootRuleManagerHotReloadsIntoTheProcessor(t *testing.T) {
 		Processor: startedRuleProcessor(t, ctx, testNATS.Client),
 		applied:   make(chan map[string]any, 8),
 	}
-	runtime := &ruleHotReloadRuntime{
-		runtimeManager: recordingServices{&orderRecorder{}},
-		rules:          ruleManager,
-		targets:        []rulepkg.HotReloadTarget{proc},
-	}
-	require.NoError(t, runtime.StartAll(ctx))
+	ruleConfig := newRuleConfigService(ruleManager, []rulepkg.HotReloadTarget{proc}, logger)
+	require.NoError(t, ruleConfig.Start(ctx))
 
 	// Start seeds the file rule, then reconciles the full family once.
 	seeded := nextApplied(t, proc.applied)
@@ -154,5 +150,7 @@ func TestRootRuleManagerHotReloadsIntoTheProcessor(t *testing.T) {
 	_, loaded := proc.LoadedRuleDefinitions()["x"]
 	require.True(t, loaded, "the running processor must hold the hot-reloaded rule")
 
-	require.NoError(t, runtime.StopAll(ctx))
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), ruleProcessorStopBudget)
+	defer stopCancel()
+	require.NoError(t, ruleConfig.Stop(stopCtx))
 }

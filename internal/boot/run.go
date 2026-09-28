@@ -331,6 +331,15 @@ func Run(runtimeCtx context.Context, opts Options) (runErr error) {
 		return fmt.Errorf("validate rule-pack composition: %w", err)
 	}
 
+	// 11c. The rule ConfigManager runs as the "rule-config" service (#1188,
+	// docket 6 Q11). Registered HERE, right after configureAndCreateServices
+	// registered the component manager and its rule processors, so StartAll
+	// seeds and reconciles only once they have started, and StopAll, in exact
+	// reverse order, stops it before any of them stops.
+	if err := registerRuleConfigService(manager, ruleManager, logger); err != nil {
+		return err
+	}
+
 	// 12. Admit the fixed boot composition only while shutdown remains absent.
 	// Post-start extensions see a fully-started service graph (graph-ingest
 	// subscriptions live, rules wired), so one that emits on boot — a
@@ -344,13 +353,8 @@ func Run(runtimeCtx context.Context, opts Options) (runErr error) {
 		}
 		return nil
 	}
-	runtime := &ruleHotReloadRuntime{
-		runtimeManager: manager,
-		rules:          ruleManager,
-		targets:        service.ComponentsImplementing[rulepkg.HotReloadTarget](manager),
-	}
 	return runUntilShutdown(
-		runtimeCtx, bootCtx.Done(), runtime, opts.ShutdownTimeout, opts.HealthPort, postStart, resources.close,
+		runtimeCtx, bootCtx.Done(), manager, opts.ShutdownTimeout, opts.HealthPort, postStart, resources.close,
 	)
 }
 
@@ -700,38 +704,6 @@ func logShutdownError(err error) {
 			"error", shutdownErr.Err,
 		)
 	}
-}
-
-// ruleHotReloadRuntime orders rule hot reload around the services (#1188).
-//
-// The rule manager seeds each rule processor's loaded rules and reconciles
-// `rules.*` into it only AFTER StartAll, where each processor used to do it in
-// its own Start: subscriptions and the cron scheduler exist, and the first
-// full-replace reconcile meets the seeded file rules rather than an empty
-// family. It stops BEFORE StopAll, where each processor used to stop its own
-// hot-reload manager, so no reconcile races a processor's teardown.
-type ruleHotReloadRuntime struct {
-	runtimeManager
-	rules   ruleHotReload
-	targets []rulepkg.HotReloadTarget
-}
-
-// ruleHotReload is the lifecycle of *rulepkg.ConfigManager that the runtime
-// orders; an interface so the ordering is testable without NATS.
-type ruleHotReload interface {
-	Start(ctx context.Context, targets []rulepkg.HotReloadTarget) error
-	Stop() error
-}
-
-func (r *ruleHotReloadRuntime) StartAll(ctx context.Context) error {
-	if err := r.runtimeManager.StartAll(ctx); err != nil {
-		return err
-	}
-	return r.rules.Start(ctx, r.targets)
-}
-
-func (r *ruleHotReloadRuntime) StopAll(ctx context.Context) error {
-	return errors.Join(r.rules.Stop(), r.runtimeManager.StopAll(ctx))
 }
 
 // buildPersonaManagerConcrete constructs a *persona.Manager (KV-backed
