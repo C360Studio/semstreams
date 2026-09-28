@@ -29,6 +29,9 @@ jobs:
       # CI with new ruleset warnings until we deliberately bump the pin
       # in go.mod. Closes Rule 4 of [[feedback_substrate_flake_discipline]].
 
+      - name: Refuse new or stale lifecycle cleanup debt
+        run: scripts/check-cleanup-roots.sh
+
       - name: Verify go.mod/go.sum are tidy
         # A machine with `GOFLAGS=-mod=mod` set (Go's default is
         # `-mod=readonly`) lets ANY go command — build, test, vet, list,
@@ -145,6 +148,9 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Install Task (pinned)
+        run: GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.53.1
 
       - name: Run additive unit and integration suite
         run: scripts/run-integration-tests.sh

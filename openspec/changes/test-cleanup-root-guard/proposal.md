@@ -23,3 +23,9 @@ re-measure. The inventory, independent review, and design review precede impleme
 No blanket timeout substitution, weakened assertions, production lifecycle changes, or generic watchdog is
 selected here. A deadline context is a cooperative bound; it does not prove Stop returns before a wall-clock limit.
 Existing related work in #1293, #1411, and #1412 retains its scope and placement.
+
+## Current checkpoint
+
+The initial claim above has progressed through independent inventory and design review. The reviewed design and
+`test-cleanup-policy` delta now govern implementation. Census/baseline review, cost measurement, implementation
+review, and full validation remain open. The PR record preserves the exact reviewed snapshots and findings.

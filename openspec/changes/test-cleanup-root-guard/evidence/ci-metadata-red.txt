@@ -1,0 +1,16 @@
+--- FAIL: TestCleanupAdmissionCIExecutionMetadata (0.00s)
+    --- FAIL: TestCleanupAdmissionCIExecutionMetadata/step_ignores_failure (0.00s)
+        cleanup_admission_test.go:469: error=<nil> want error=true
+    --- FAIL: TestCleanupAdmissionCIExecutionMetadata/step_conditional_skip (0.00s)
+        cleanup_admission_test.go:469: error=<nil> want error=true
+    --- FAIL: TestCleanupAdmissionCIExecutionMetadata/step_custom_shell (0.00s)
+        cleanup_admission_test.go:469: error=<nil> want error=true
+    --- FAIL: TestCleanupAdmissionCIExecutionMetadata/job_ignores_failure (0.00s)
+        cleanup_admission_test.go:469: error=<nil> want error=true
+    --- FAIL: TestCleanupAdmissionCIExecutionMetadata/job_conditional_skip (0.00s)
+        cleanup_admission_test.go:469: error=<nil> want error=true
+    --- FAIL: TestCleanupAdmissionCIExecutionMetadata/inherited_custom_shell (0.00s)
+        cleanup_admission_test.go:469: error=<nil> want error=true
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.231s
+FAIL

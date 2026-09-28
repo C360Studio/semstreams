@@ -1,0 +1,5 @@
+--- FAIL: TestCleanupRootGuardTypedFixture (0.18s)
+    cleanup_guard_test.go:67: want unbounded refusal, got <nil>
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.464s
+FAIL

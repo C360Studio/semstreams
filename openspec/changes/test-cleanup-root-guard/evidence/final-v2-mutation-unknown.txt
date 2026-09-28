@@ -1,0 +1,5 @@
+--- FAIL: TestCleanupRootGuardUnresolvedCleanupRegistration (0.17s)
+    cleanup_guard_test.go:485: opaque Cleanup must refuse with one edge: [{Path:owner_test.go StartOffset:93 EndOffset:99 DeclarationOnly:false Line:4 Function:TestOpaque Origin:cleanup Target:opaque Receiver:unresolved callback Context:unknown Classification:uncertain-owner-provenance Applicability:unresolved Identity:owner_test.go|TestOpaque|cleanup|opaque|unresolved callback|unknown|1 Fingerprint:c6016801fd949ea6197dc1427beff89d0bf99075abf18e99285ca94909dba4af Reason:Cleanup callback target unresolved Selections:[default]}], <nil>
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.410s
+FAIL

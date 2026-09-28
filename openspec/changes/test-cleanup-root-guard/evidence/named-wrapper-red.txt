@@ -1,0 +1,5 @@
+--- FAIL: TestCleanupRootGuardNamedWrapperCallbackFailsClosed (0.16s)
+    cleanup_guard_test.go:1861: named Cleanup wrapper pruned unresolved callback: [], <nil>
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.473s
+FAIL

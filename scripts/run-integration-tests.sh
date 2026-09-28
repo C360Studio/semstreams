@@ -28,6 +28,22 @@ if [[ ! "$image_pull_timeout_seconds" =~ ^[1-9][0-9]*$ ]] || (( image_pull_timeo
   exit 2
 fi
 
+packages=("$@")
+if (( ${#packages[@]} == 0 )); then
+  packages=(./...)
+fi
+# Full-suite cleanup refusal precedes host-lock and Docker work. Focused
+# package runs retain the iteration path; they are not repository guard proof.
+full_cleanup_guard=false
+for package_pattern in "${packages[@]}"; do
+  if [[ "$package_pattern" == "./..." ]]; then
+    full_cleanup_guard=true
+  fi
+done
+if $full_cleanup_guard; then
+  "$(dirname -- "${BASH_SOURCE[0]}")/check-cleanup-roots.sh"
+fi
+
 owner_host=$(hostname)
 owner_pid=$$
 owner_started=$(date +%s)
@@ -309,10 +325,6 @@ fi
 # below, not this line, so a -p change has to be carried here by hand.
 echo "[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)"
 
-packages=("$@")
-if (( ${#packages[@]} == 0 )); then
-  packages=(./...)
-fi
 # Latency evidence channel. `go test` discards a PASSING package's output entirely unless -v is
 # passed, and this runner deliberately stays un-verbose over ./... — adding -v here would make the
 # whole tagged suite verbose. So the graph-index owner-filter harness appends its per-filter

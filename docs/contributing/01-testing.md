@@ -5,6 +5,13 @@ infrastructure is justified, and the wall-clock and isolation rules for new test
 [natsclient test-helper guide](../operations/23-natsclient-test-helpers.md) contains implementation examples and MUST
 not redefine this policy.
 
+## Local prerequisites
+
+The canonical checks use Go 1.26 and Task. Unit tests in `test/testinfra` execute the actual Task entry points
+against isolated fixtures, so `task` must be on `PATH` even when invoking `go test` directly. CI pins Task v3.53.1;
+use that version for local/CI parity before its additive unit/integration job. These admission fixtures do
+not require Docker or provider credentials; they fence expensive commands after exercising the real cleanup guard.
+
 ## Testing Discipline
 
 > Prompts focus attention. Contracts state what must hold. Property tests search for counterexamples.
@@ -298,6 +305,24 @@ deadline. A local aggregate run has no additional whole-suite deadline and can b
 25-minute outer job timeout is the whole-job and process-tree bound, including setup and cleanup. The 20-minute
 per-package value is transitional and is not a budget for a new test.
 
+### Cleanup admission
+
+Full lint, test, race and live tasks run `scripts/check-cleanup-roots.sh` before expensive execution. The full
+integration runner performs the same check before acquiring its host lock or contacting Docker; focused package
+iteration remains available through the runner. The guard type-checks default, integration and live_llm sources
+without executing those test selections.
+
+The guard refuses new unbounded defer/Cleanup lifecycle roots, unresolved cleanup paths, and stale approvals.
+`test/testinfra/cleanup_baseline.json` contains exact independently reviewed legacy debt from
+[#1064](https://github.com/C360Studio/semstreams/issues/1064). Do not regenerate or extend that baseline to silence
+a failure. Read the reported ownership and context evidence, repair new cleanup using the policy below, and remove
+stale debt entries when their corresponding cleanup is repaired. A changed reviewed entry needs exact source review.
+
+Ordinary API-contract calls remain distinct from terminal cleanup. A finite supplied context proves only deadline
+supply; it does not prove Stop observes cancellation, returns, reports errors, or precedes NATS teardown. Uncertain
+ordinary calls remain visible audit records. The package repair plan preserves separate causal proof and rollback
+boundaries for existing debt.
+
 ### Integration Runner Host Contract
 
 Every full or focused integration invocation acquires `/tmp/semstreams-integration.lock` before touching Docker. Lock
@@ -562,7 +587,8 @@ The guard verifies that it scanned a non-trivial repository surface, and every c
 fixtures. A zero-match scan is therefore not accepted as proof that the repository is clean.
 
 Fabricated `testing.T` values, untagged container starts, and direct container APIs are zero-debt categories. They fail
-immediately and cannot be added to the baseline. The only recorded debt is 305 legacy integration sleeps.
+immediately and cannot be added to that policy baseline. Its recorded debt is 305 legacy integration sleeps.
+The separate type-aware cleanup guard and reviewed cleanup baseline are described under Cleanup admission above.
 
 `test/testinfra/policy_baseline.json` identifies each of those sleeps by category, file, function, call, and ordinal.
 It is shrink-only and manually maintained: removing a live sleep requires removing its now-stale entry, while a new

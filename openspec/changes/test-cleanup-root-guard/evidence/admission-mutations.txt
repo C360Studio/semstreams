@@ -1,0 +1,69 @@
+Backup/restore: cp
+Original SHA256: 613f0661ccfa3ca843e4ed6b1d658a1bc1152527b8670a63ab680e046810941c
+Command: go test -v -count=1 ./test/testinfra -run ^TestCleanupAdmissionEntryPoints$/^new-debt$/^test$
+
+== passing baseline; exit 0 ==
+=== RUN   TestCleanupAdmissionEntryPoints
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/test
+--- PASS: TestCleanupAdmissionEntryPoints (0.61s)
+    --- PASS: TestCleanupAdmissionEntryPoints/new-debt (0.61s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/test (0.61s)
+PASS
+ok  	github.com/c360studio/semstreams/test/testinfra	0.828s
+
+== omit guard; exit 1 ==
+=== RUN   TestCleanupAdmissionEntryPoints
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/test
+    cleanup_admission_test.go:60: entry point did not execute real fixture analysis: open /var/folders/db/qk1n2zs935q9ld3p2sn98yzr0000gn/T/TestCleanupAdmissionEntryPointsnew-debttest2090526995/001/guard-observation.json: no such file or directory; command error=exit status 201
+        task: Failed to run task "test:default": exit status 73
+--- FAIL: TestCleanupAdmissionEntryPoints (0.21s)
+    --- FAIL: TestCleanupAdmissionEntryPoints/new-debt (0.21s)
+        --- FAIL: TestCleanupAdmissionEntryPoints/new-debt/test (0.21s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.423s
+FAIL
+
+== guard after expensive work; exit 1 ==
+=== RUN   TestCleanupAdmissionEntryPoints
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/test
+    cleanup_admission_test.go:60: entry point did not execute real fixture analysis: open /var/folders/db/qk1n2zs935q9ld3p2sn98yzr0000gn/T/TestCleanupAdmissionEntryPointsnew-debttest719482218/001/guard-observation.json: no such file or directory; command error=exit status 201
+        task: Failed to run task "test:default": exit status 73
+--- FAIL: TestCleanupAdmissionEntryPoints (0.18s)
+    --- FAIL: TestCleanupAdmissionEntryPoints/new-debt (0.18s)
+        --- FAIL: TestCleanupAdmissionEntryPoints/new-debt/test (0.18s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.393s
+FAIL
+
+== ignore guard failure; exit 1 ==
+=== RUN   TestCleanupAdmissionEntryPoints
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/test
+    cleanup_admission_test.go:86: refused new-debt reached expensive-command: stat=<nil>
+        --- FAIL: TestCleanupAdmissionFixtureProcess (0.26s)
+            cleanup_admission_test.go:143: new unbounded-terminal-cleanup: fixture_test.go|TestFixture|cleanup|cleanupfixture.Stop|*cleanupfixture.owner|unbounded|1
+        FAIL
+        task: Failed to run task "test:default": exit status 73
+--- FAIL: TestCleanupAdmissionEntryPoints (0.58s)
+    --- FAIL: TestCleanupAdmissionEntryPoints/new-debt (0.58s)
+        --- FAIL: TestCleanupAdmissionEntryPoints/new-debt/test (0.58s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.797s
+FAIL
+
+Restored SHA256: 613f0661ccfa3ca843e4ed6b1d658a1bc1152527b8670a63ab680e046810941c
+
+== restored baseline; exit 0 ==
+=== RUN   TestCleanupAdmissionEntryPoints
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/test
+--- PASS: TestCleanupAdmissionEntryPoints (0.58s)
+    --- PASS: TestCleanupAdmissionEntryPoints/new-debt (0.58s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/test (0.58s)
+PASS
+ok  	github.com/c360studio/semstreams/test/testinfra	0.797s
+
+Status entry count before/after: 19/19

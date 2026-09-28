@@ -1,0 +1,80 @@
+task: [lint:cleanup-roots] scripts/check-cleanup-roots.sh
+task: [lint:default] go vet ./...
+task: [lint:default] go fmt ./...
+task: [lint:default] go tool revive -config revive.toml -formatter friendly ./...
+task: [lint:test-ports] echo "running fixed-port lint guard (scripts/lint-test-ports.sh)"
+task: [lint:test-ports] bash scripts/lint-test-ports.sh
+task: [lint:nats-kv-sdk-pin] bash scripts/lint-nats-kv-sdk-pin.sh
+task: [lint:nats-kv-sdk-pin:test] bash scripts/lint-nats-kv-sdk-pin_fixture_test.sh
+task: [lint:request-guard] go test ./test/natsclient/
+task: [build:default] go build -o bin/semstreams ./cmd/semstreams
+task: [build:default] echo "Built bin/semstreams"
+task: [check:push] go vet -tags=integration ./...
+task: [check:push] go vet -tags=live_llm ./...
+task: [schema:generate] mkdir -p schemas specs
+task: [schema:generate] go run ./cmd/openapi-generator -graph-research -otel -out ./schemas -openapi ./specs/openapi.v3.yaml
+2026/09/28 13:39:34 OpenAPI Generator
+2026/09/28 13:39:34   Registry: ./componentregistry
+2026/09/28 13:39:34   Output dir: ./schemas
+2026/09/28 13:39:34   OpenAPI spec: ./specs/openapi.v3.yaml
+2026/09/28 13:39:34 Found 33 component types
+2026/09/28 13:39:34 ⚠️  Meta-schema not found, skipping validation: meta-schema not found in any of: [./specs/component-schema-meta.json ../specs/component-schema-meta.json ../../specs/component-schema-meta.json]
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/agentic-tools.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/otel-exporter.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/websocket_input.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/websocket.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/research-graph-assess.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/research-graph-synthesize.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/json_map.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/graph-ingest.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/graph-index.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/httppost.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/graph-clustering.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/research-graph-classify.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/graph-gateway.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/rule-processor.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/json_generic.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/agentic-model.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/lifecycle-gateway.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/udp.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/agentic-loop.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/graph-query.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/graph-index-spatial.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/research-graph-route.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/file.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/http.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/graph-index-temporal.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/agentic-governance.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/agentic-dispatch.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/research-graph-execute.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/file_input.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/gated-dag.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/objectstore.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/graph-embedding.v1.json
+2026/09/28 13:39:34   ✓ Generated component schema: schemas/json_filter.v1.json
+2026/09/28 13:39:34 Found 5 service OpenAPI specs
+2026/09/28 13:39:34   ✓ Generated OpenAPI spec: ./specs/openapi.v3.yaml
+2026/09/28 13:39:34 ✅ OpenAPI generation complete!
+task: [schema:generate] echo "Schemas and OpenAPI spec generated"
+task: [schema:check-changes] git diff --exit-code schemas/ specs/openapi.v3.yaml || (echo "Schema/OpenAPI files changed! Run 'task schema:generate' and commit."; exit 1)
+task: [check:push] go test ./test/contract/...
+task: [check:push] go test -race ./...
+task: [test:integration] scripts/run-integration-tests.sh
+      851.30 real       822.27 user       294.08 sys
+          5695913984  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+            27770821  page reclaims
+              611278  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+              115686  messages sent
+               95785  messages received
+              366759  signals received
+              250503  voluntary context switches
+             6277212  involuntary context switches
+          1106271771  instructions retired
+           362648770  cycles elapsed
+            27689536  peak memory footprint
