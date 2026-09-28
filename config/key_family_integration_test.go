@@ -5,6 +5,8 @@ package config
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +15,38 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
+
+// skippedKeyWarnings records the "key" attribute of every Warn a Manager logs
+// about a key family key it skips. Manager goroutines log concurrently, so the
+// record is guarded.
+type skippedKeyWarnings struct {
+	mu   sync.Mutex
+	keys []string
+}
+
+func (w *skippedKeyWarnings) Enabled(context.Context, slog.Level) bool { return true }
+func (w *skippedKeyWarnings) WithAttrs([]slog.Attr) slog.Handler       { return w }
+func (w *skippedKeyWarnings) WithGroup(string) slog.Handler            { return w }
+func (w *skippedKeyWarnings) Handle(_ context.Context, record slog.Record) error {
+	if record.Level != slog.LevelWarn || record.Message != "Configuration key under a key family is not a member; skipped" {
+		return nil
+	}
+	record.Attrs(func(attr slog.Attr) bool {
+		if attr.Key == "key" {
+			w.mu.Lock()
+			w.keys = append(w.keys, attr.Value.String())
+			w.mu.Unlock()
+		}
+		return true
+	})
+	return nil
+}
+
+func (w *skippedKeyWarnings) snapshot() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.keys...)
+}
 
 // collectingFamily returns a family whose handler forwards every entry to a
 // buffered channel, so a test synchronizes on delivery rather than sleeping.
@@ -54,7 +88,8 @@ func TestKeyFamilyDeliversSnapshotThenChanges(t *testing.T) {
 	require.ErrorIs(t, family.Put(ctx, "early", []byte(`"x"`)), errFamilyNotRegistered,
 		"a family must refuse writes before the manager that registered it has started")
 
-	manager, err := NewConfigManager(identityTestConfig("acme", "dep"), tc.Client, nil, WithKeyFamily(family))
+	warnings := &skippedKeyWarnings{}
+	manager, err := NewConfigManager(identityTestConfig("acme", "dep"), tc.Client, slog.New(warnings), WithKeyFamily(family))
 	require.NoError(t, err)
 	require.NoError(t, manager.Start(ctx))
 	defer func() { _ = manager.Stop(5 * time.Second) }()
@@ -105,6 +140,10 @@ func TestKeyFamilyDeliversSnapshotThenChanges(t *testing.T) {
 	names, err = family.Names(ctx)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"b", "c"}, names, "a nested key is not a family member")
+	// The skip is declared: listing names the nested key it leaves out, once
+	// per listing, and nothing else.
+	require.Equal(t, []string{"rules.nested.name"}, warnings.snapshot(),
+		"Names must warn about the nested key it skips")
 
 	// A refused Start binds nothing: a manager whose bucket records a foreign
 	// identity leaves its family unable to write, exactly like its own writers.

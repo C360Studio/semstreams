@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/c360studio/semstreams/natsclient"
@@ -52,7 +53,7 @@ func TestBoundKeyFamilyRefusesBeforeAnyStoreAccess(t *testing.T) {
 	t.Parallel()
 	family, err := NewKeyFamily("rules", func(KeyFamilyEntry) {})
 	require.NoError(t, err)
-	family.bind(&natsclient.KVStore{})
+	family.bind(&natsclient.KVStore{}, slog.Default())
 
 	var nilCtx context.Context
 	requireInvalid := func(t *testing.T, err error) {

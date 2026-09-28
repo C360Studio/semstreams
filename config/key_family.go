@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -67,8 +68,9 @@ type KeyFamily struct {
 	prefix string
 	handle func(KeyFamilyEntry)
 
-	mu    sync.RWMutex
-	store *natsclient.KVStore
+	mu     sync.RWMutex
+	store  *natsclient.KVStore
+	logger *slog.Logger // the binding Manager's, for Names' skipped keys
 }
 
 // NewKeyFamily builds a family for the keys "<prefix>.<name>".
@@ -138,9 +140,10 @@ func (f *KeyFamily) member(ctx context.Context, method, name string) (*natsclien
 	return store, key, nil
 }
 
-func (f *KeyFamily) bind(store *natsclient.KVStore) {
+func (f *KeyFamily) bind(store *natsclient.KVStore, logger *slog.Logger) {
 	f.mu.Lock()
 	f.store = store
+	f.logger = logger
 	f.mu.Unlock()
 }
 
@@ -198,7 +201,7 @@ func (f *KeyFamily) Delete(ctx context.Context, name string) error {
 
 // Names lists the family's current member names. A key under "<prefix>."
 // with more than one token after it is not a member, because the family's
-// watch never delivers it, so Names omits it too.
+// watch never delivers it, so Names omits it too, and logs a Warn naming it.
 func (f *KeyFamily) Names(ctx context.Context) ([]string, error) {
 	if err := requireContext(ctx, "Names"); err != nil {
 		return nil, err
@@ -211,12 +214,28 @@ func (f *KeyFamily) Names(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	f.mu.RLock()
+	logger := f.logger
+	f.mu.RUnlock()
 	prefix := f.prefix + "."
 	names := make([]string, 0, len(keys))
 	for _, key := range keys {
-		if name, ok := strings.CutPrefix(key, prefix); ok && natsclient.ValidateKVLiteralToken(name) == nil {
-			names = append(names, name)
+		name, ok := strings.CutPrefix(key, prefix)
+		if !ok {
+			continue
 		}
+		if err := natsclient.ValidateKVLiteralToken(name); err != nil {
+			// Declared skip, log-only: only an out-of-band writer can store such a
+			// key (every family write refuses it), the skip is re-evaluated on
+			// every listing so the Warn repeats until an operator removes the
+			// key, and this package has no metrics surface to count it on.
+			logger.Warn("Configuration key under a key family is not a member; skipped",
+				"key", key, "family", f.prefix,
+				"reason", "a member is one KV literal token after the prefix; the family's watch never delivers this key",
+				"error", err)
+			continue
+		}
+		names = append(names, name)
 	}
 	return names, nil
 }

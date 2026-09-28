@@ -212,7 +212,7 @@ func (cm *Manager) publishBucket(kv jetstream.KeyValue, kvStore *natsclient.KVSt
 	cm.kvStore = kvStore
 	cm.bucketMu.Unlock()
 	for _, family := range cm.families {
-		family.bind(kvStore)
+		family.bind(kvStore, cm.logger)
 	}
 }
 
