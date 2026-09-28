@@ -19,11 +19,15 @@ const ruleConfigServiceName = "rule-config"
 // framework service (#1188; owner ruling, docket 6 Q11 (b-full)).
 //
 // service.Manager starts services in registration order and stops them in
-// exact reverse order, under its shutdown context. Registered right after the
-// component manager, this service therefore seeds and reconciles only once
-// the rule processors have started, and stops before any of them stops, so
-// no reconcile races a processor's teardown. Its health is the service's own
-// lifecycle state.
+// exact reverse order, under its shutdown context. It is registered after
+// configureAndCreateServices, which registers every configured service
+// (the component manager among them) in sorted order, so it starts after ALL
+// of them and stops before all of them: it seeds and reconciles only once the
+// rule processors have started, and no reconcile races a processor's
+// teardown. Because its Start runs inside StartAll, before the manager
+// commits startup, readiness now waits for the seeding and the initial
+// reconcile. Its health is the service's own lifecycle state, published as
+// health.service.rule-config every 5 s like every service's.
 type ruleConfigService struct {
 	*service.BaseService
 	rules   *rulepkg.ConfigManager

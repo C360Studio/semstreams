@@ -2413,10 +2413,17 @@ manager serves other writers a key family; the rule manager exists once, in the 
      `*rule.Processor` is one), and `rcm.Stop(ctx)` before they stop. `Stop` takes a context and returns its error
      when the context ends before the reconcile loop exits, so bound it with the shutdown deadline.
 
-   In this repo's root the manager is a registered framework service, `rule-config`, so it appears in the service
-   health listing: it is registered right after the component manager, and `service.Manager` starts it after the
-   rule processors and stops it before them (`internal/boot/rule_config_service.go`). That adapter is internal; the
-   shape to copy for a root of your own:
+   In this repo's root the manager is a registered framework service, `rule-config`
+   (`internal/boot/rule_config_service.go`), so it appears in the service health listing. What an operator sees:
+   - It is registered after every configured service, which `ConfigureFromServices` registers in sorted order, so
+     `service.Manager` starts it after all of them (the rule processors included) and stops it before all of them.
+   - Its health is published as `health.service.rule-config` to the `HEALTH` stream every 5 s, like every service's.
+   - The startup service count (`Admitted`) is one higher.
+   - Readiness waits for the seeding and the initial reconcile: they run inside `StartAll`, before the service
+     manager commits startup, as each rule processor's own seeding did in beta.162 (this change's unreleased first
+     cut ran them after the commit).
+
+   That adapter is internal; the shape to copy for a root of your own:
 
    ```go
    rcm, err := rule.NewConfigManager(logger)
