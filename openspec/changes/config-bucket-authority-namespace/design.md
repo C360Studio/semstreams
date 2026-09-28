@@ -66,19 +66,23 @@ func (f *KeyFamily) Get / Put / Create / Delete / Names
 - CRUD (`SaveRule`, `GetRule`, `DeleteRule`, `ListRules`) goes through the family.
 - The handler only wakes the reconcile loop (non-blocking, buffer of one). Reconcile stays a full `ListRules`
   replace, so it needs no per-entry state.
-- `Start(ctx, targets []HotReloadTarget)` seeds, reconciles once, then debounces at 250 ms as before. `Stop()` cancels and
-  joins.
+- `Start(ctx, targets []HotReloadTarget)` seeds, reconciles once, then debounces at 250 ms as before. `Stop(ctx)` cancels and
+  joins, bounded by `ctx` (docket 6 Q11).
 - `HotReloadTarget` is the small interface the processor exposes: `LoadedRuleDefinitions()` *(new, on `*Processor`)*,
   `ValidateConfigUpdate`, `ApplyConfigUpdate`.
 
 **D3 — ordering (the brief asked for it to be recorded).**
-- **Seed after `StartAll`, then reconcile, and stop the loop before `StopAll`.** `internal/boot` wraps its
-  `runtimeManager`: `StartAll` delegates and then calls `rules.Start(ctx, targets)`, and `StopAll` calls
-  `rules.Stop()` and then delegates.
-- Why after `StartAll`: that is where reconcile ran before, inside each processor's own `Start`
+- **Ordering by service registration (owner ruling on #1188, docket 6 Q11 (b-full)).** The rule manager runs as the
+  `rule-config` service (`internal/boot/rule_config_service.go`), registered with `manager.RegisterInstance` right
+  after `configureAndCreateServices` has registered the component manager. `service.Manager` starts services in
+  registration order and stops them in exact reverse order under its shutdown context, so it seeds and reconciles
+  after the rule processors have started and stops before any of them stops. Its `Stop(ctx)` is bounded by that
+  context. This replaces the first cut's `ruleHotReloadRuntime`, a wrapper around `runtimeManager` whose `StopAll`
+  called a contextless `rules.Stop()`; the wrapper and its `ruleHotReload` interface are deleted.
+- Why after the rule processors start: that is where reconcile ran before, inside each processor's own `Start`
   (`processor/rule/processor.go:1019-1028`), after subscriptions and the cron scheduler exist. Seeding first means the
   first full-replace reconcile sees the file rules. Reconciling into an empty bucket would remove them.
-- Why before `StopAll`: each processor used to stop its own hot-reload manager inside `Stop`
+- Why before they stop: each processor used to stop its own hot-reload manager inside `Stop`
   (`processor/rule/processor.go:1335`). Stopping the loop first keeps any reconcile from racing a processor's teardown.
 - Entries delivered before `rules.Start` only leave a wake-up pending. The first reconcile lists the bucket fresh, so
   nothing is lost and the pending wake costs one extra reconcile.
@@ -86,8 +90,9 @@ func (f *KeyFamily) Get / Put / Create / Delete / Names
   `service.ComponentsImplementing[rule.HotReloadTarget]` *(new)*. It is the generic form of the existing
   `ProjectionBinders` walk, and this is its one consumer. With more than one processor, each receives the full
   `rules.*` set, which is what each processor's own watcher did before.
-- The runtime holds the rule manager through a two-method `ruleHotReload` interface, so
-  `TestRuleHotReloadRuntimeOrdersAroundServices` can pin the order without NATS.
+- `TestRuleConfigServiceStartsAfterAndStopsBeforeTheComponents` pins the order through a real `service.Manager`, and
+  `TestBinaryBootOrder` pins the registration site in `run.go`. `registerRuleConfigService` refuses when the component
+  manager is not yet registered: there would be no processors to bind, and the service would start first.
 
 **D4 — the name (step 2).**
 - `config.BucketName(org, stem string) (string, error)` returns `graph.BucketSemStreamsConfig + "_" + org + "_" +

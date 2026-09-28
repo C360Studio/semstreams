@@ -33,8 +33,9 @@ the 2026-09-01 retire list stands.
    - Once Start succeeds, the family's scoped CRUD reaches the acquired bucket. No handle leaks and no name leaks.
    - The rule `ConfigManager` is constructed once, in `internal/boot`. It serves CRUD to the agent tools through the
      `rules` family and is that family's handler.
-   - After `StartAll`, the root seeds file rules from each constructed rule processor and reconciles `rules.*` into
-     each processor through `ApplyConfigUpdate`. The reconcile loop stops before `StopAll`.
+   - It runs as the registered `rule-config` service, registered after the component manager. Once the rule
+     processors have started, it seeds file rules from each and reconciles `rules.*` into each through
+     `ApplyConfigUpdate`; its reconcile loop stops, within the shutdown context, before they stop.
    - The component-internal manager, `InitializeKVStore`, and the rule package's own acquisition of the bucket are
      deleted.
 2. **The name (step 2).**

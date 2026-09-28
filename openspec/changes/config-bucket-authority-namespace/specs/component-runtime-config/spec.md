@@ -217,11 +217,14 @@ The rule processor SHALL also refuse a rule whose ID is not one KV literal token
 rule, so a file or inline rule with a dotted ID fails loudly before any write.
 
 The rule engine's `rules.*` family SHALL be registered this way, by the composition root, which owns the one rule
-`ConfigManager`. That manager SHALL serve rule CRUD through the family. After every service has started it SHALL seed
-each rule processor's loaded rules with create-if-absent, then reconcile the full `rules.*` set into each processor
-through `ApplyConfigUpdate`, debouncing later changes. It SHALL stop before the services stop, and its Stop SHALL
-return only after Start's seeding and initial reconcile and the reconcile loop have finished, for every concurrent
-caller. No rule processor SHALL acquire the configuration bucket itself.
+`ConfigManager`. That manager SHALL serve rule CRUD through the family. It SHALL run as the registered framework
+service `rule-config`, registered after the component manager, so that it starts after the rule processors and stops
+before them. On start it SHALL seed each rule processor's loaded rules with create-if-absent, then reconcile the full
+`rules.*` set into each processor through `ApplyConfigUpdate`, debouncing later changes. Its Stop SHALL follow the
+framework service contract: it SHALL refuse a nil context before any action, SHALL return only after Start's seeding
+and initial reconcile and the reconcile loop have finished, for every concurrent caller, or with the context's error
+when the context ends first, and a repeated Stop after completion SHALL be a no-op. No rule processor SHALL acquire the
+configuration bucket itself.
 
 #### Scenario: a registered family receives its snapshot and its changes
 
@@ -246,8 +249,13 @@ caller. No rule processor SHALL acquire the configuration bucket itself.
 - **GIVEN** a rule `ConfigManager` whose Start is seeding a target, or whose reconcile loop is running
 - **WHEN** Stop is called, once or by two callers concurrently
 - **THEN** each Stop returns only after Start has released the target and the reconcile loop has exited
-- **AND** the tests that verify this are `TestConfigManagerStopDuringSeedingJoinsStart` and
-  `TestConfigManagerConcurrentStopsBothJoinTheLoop`
+- **AND** a Stop whose context ends while the target holds the work returns the context's error, and the loop still
+  exits once the target is released
+- **AND** a nil context is refused before any action
+- **AND** the manager, registered after the component manager, starts after it and stops before it
+- **AND** the tests that verify this are `TestConfigManagerStopDuringSeedingJoinsStart`,
+  `TestConfigManagerConcurrentStopsBothJoinTheLoop`, `TestConfigManagerStopReturnsWhenItsContextEnds`,
+  `TestConfigManagerStopRefusesANilContext` and `TestRuleConfigServiceStartsAfterAndStopsBeforeTheComponents`
 
 #### Scenario: a rule written through the root's manager reaches the running processor
 

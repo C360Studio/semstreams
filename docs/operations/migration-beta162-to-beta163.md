@@ -2410,9 +2410,13 @@ manager serves other writers a key family; the rule manager exists once, in the 
    - passes `config.WithKeyFamily(rcm.KeyFamily())` to `config.NewConfigManager`;
    - hands `rcm` to the agent tools;
    - calls `rcm.Start(ctx, targets)` after its services start, where `targets` are its `rule.HotReloadTarget`s (every
-     `*rule.Processor` is one), and `rcm.Stop()` before they stop.
+     `*rule.Processor` is one), and `rcm.Stop(ctx)` before they stop. `Stop` takes a context and returns its error
+     when the context ends before the reconcile loop exits, so bound it with the shutdown deadline.
 
-   The shape to copy, from this repo's root (`internal/boot/run.go`):
+   In this repo's root the manager is a registered framework service, `rule-config`, so it appears in the service
+   health listing: it is registered right after the component manager, and `service.Manager` starts it after the
+   rule processors and stops it before them (`internal/boot/rule_config_service.go`). That adapter is internal; the
+   shape to copy for a root of your own:
 
    ```go
    rcm, err := rule.NewConfigManager(logger)
@@ -2426,8 +2430,8 @@ manager serves other writers a key family; the rule manager exists once, in the 
    if err := rcm.Start(ctx, targets); err != nil {
        return err
    }
-   // on shutdown, before serviceManager.StopAll(ctx):
-   err = errors.Join(rcm.Stop(), serviceManager.StopAll(ctx))
+   // on shutdown, before serviceManager.StopAll(ctx), under the same bounded shutdown ctx:
+   err = errors.Join(rcm.Stop(ctx), serviceManager.StopAll(ctx))
    ```
 
    Roots that register the framework `componentregistry` (and with it `rule.Register`,
