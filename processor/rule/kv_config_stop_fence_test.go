@@ -70,10 +70,38 @@ func (s *seedBlockingTarget) LoadedRuleDefinitions() map[string]Definition {
 	return nil
 }
 
+// recordingLogHandler records every log message it handles.
+type recordingLogHandler struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (h *recordingLogHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingLogHandler) WithAttrs([]slog.Attr) slog.Handler       { return h }
+func (h *recordingLogHandler) WithGroup(string) slog.Handler            { return h }
+func (h *recordingLogHandler) Handle(_ context.Context, record slog.Record) error {
+	h.mu.Lock()
+	h.messages = append(h.messages, record.Message)
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *recordingLogHandler) logged(prefix string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, message := range h.messages {
+		if strings.HasPrefix(message, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // A Stop that races Start's seeding cancels it and returns only after Start has
 // released the target it was seeding. Codex round 1 on #1188, finding 2.
 func TestConfigManagerStopDuringSeedingJoinsStart(t *testing.T) {
-	rcm, err := NewConfigManager(slog.Default())
+	logs := &recordingLogHandler{}
+	rcm, err := NewConfigManager(slog.New(logs))
 	if err != nil {
 		t.Fatalf("NewConfigManager: %v", err)
 	}
@@ -109,6 +137,15 @@ func TestConfigManagerStopDuringSeedingJoinsStart(t *testing.T) {
 	case changes := <-target.applied:
 		t.Fatalf("a cancelled Start must not reconcile, got %v", changes)
 	default:
+	}
+	// The family is never bound, so any reconcile Start attempted would fail
+	// at ListRules and log before reaching an apply: the absence of that log
+	// line, not of an apply, is what shows Start skipped the reconcile.
+	if !logs.logged("Rule configuration hot reload started") {
+		t.Fatal("the recording handler saw no Start log; the reconcile observation below would be vacuous")
+	}
+	if logs.logged("Initial rule reconcile failed") {
+		t.Fatal("a cancelled Start attempted its initial reconcile")
 	}
 }
 
