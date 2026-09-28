@@ -106,7 +106,7 @@ re-run by the coordinating session at the new final code revision.
       `task schema:generate` exit 0 with an empty `git diff schemas/ specs/`; `openspec validate
       config-bucket-authority-namespace --strict` valid; `openspec validate --all --strict` 58/58; `task
       spec:properties` 449/449.
-- [ ] 4.6 Owner ruling on #1188, docket 4 Q8 (b): `rule.ValidateDefinition` also requires the rule ID to be one KV
+- [x] 4.6 Owner ruling on #1188, docket 4 Q8 (b): `rule.ValidateDefinition` also requires the rule ID to be one KV
       literal token and refuses it with a classified invalid error naming the rule, so a file or inline rule with a
       dotted ID fails loudly (`rule.Config.Validate` for inline rules; the processor's preflight and Start for rule
       files) and the agent CRUD path (`SaveRule`) refuses before writing; the family's write-time refusal is the second
@@ -115,4 +115,30 @@ re-run by the coordinating session at the new final code revision.
       nats.go's key grammar, so only `.` is newly refused); the spec delta's family requirement names the
       definition-validation refusal. M12 the check deleted from `ValidateDefinition` (cp backup plus md5, restored
       checksum verified): `TestConfigValidateRefusesARuleIDThatIsNotOneKVToken` fails "An error is expected but got
-      nil". Gates on this change: GATES.
+      nil". The ID check made `TestReferenceRuleConfigsUseDeclaredPredicates` fail: it decoded a rule-processor
+      config file as one `Definition` and so validated an empty rule; commit `a319048e` (`4bab02f1` after the 4.7
+      rebase) validates the file's `inline_rules` instead. Gates on this change, run after the 4.7 rebase at `b3687f48`:
+      `go build ./...`, `task lint`, `go vet ./...`, `go vet -tags=integration ./...`, `go run ./cmd/entity-id-audit .`
+      (1334 candidates) each exit 0; `task test:race` exit 0, 160 ok / 0 FAIL / 20 no test files / 0 DATA RACE; `task
+      test:integration` exit 0, 160 ok / 0 FAIL / 20 no test files / 0 DATA RACE; `task schema:generate` exit 0 with an
+      empty `git diff schemas/ specs/`; `openspec validate config-bucket-authority-namespace --strict` valid; `openspec
+      validate --all --strict` 58/58; `task spec:properties` 449/449.
+- [x] 4.7 Owner ruling on #1188 (issuecomment-5871896598): rebased onto `aa138957` for #1397 (PR #1408) and #1283 (PR
+      #1409), no waiver. One conflict, `processor/rule/processor.go` in `d02306ae` (was `d2e194a6`): kept this change's
+      `LoadedRuleDefinitions` and `HotReloadTarget` assertion and main's removal of `ruleRuntimeCommand` (the owner
+      lane replaces it); in `cleanup` dropped both sides' block — the `hotReloadMgr.Stop()` call main had annotated,
+      because this change deletes the component-internal manager, and the `cronDone` join, because main now joins
+      cron at step 2 through `CronScheduler.Stop(ctx)`. `processor/rule/lifecycle_owner_test.go` merged cleanly.
+      Nothing in this change calls `CronScheduler.Stop`; `go build ./...` and `go vet -tags=integration ./...` exit 0.
+      Every rule-processor `Stop` with an unbounded context in a test file this change touches now runs under a named
+      30s bound, the production root's `--shutdown-timeout` default (`internal/boot/flags.go`), since the processor has
+      no stop budget of its own, and reports its error: `internal/boot/rule_hot_reload_integration_test.go:57`
+      (`ruleProcessorStopBudget`) used at `:80`, the cleanup whose unbounded Stop turned the #1283 hang into a 20-minute
+      CI timeout at `ada5c46a`; `processor/rule/lifecycle_owner_test.go:24` (`processorStopBudget`) and `:28`
+      (`stopProcessorWithinBudget`), used at `lifecycle_owner_test.go:462` and
+      `processor/rule/kv_hot_reload_integration_test.go:124`, `:152`, `:187`, `:221`, `:261`. Sweep (`grep -rn
+      'Stop(context.Background())\|Stop(context.TODO())'` over `internal/boot config processor/rule test/e2e/config`,
+      restricted to `git diff --name-only origin/main...HEAD`): those seven hits, no others. Commit `b3687f48`. A
+      `-v` run through the canonical runner of `./internal/boot ./processor/rule ./test/testinfra` exit 0:
+      `TestRootRuleManagerHotReloadsIntoTheProcessor`, the five `TestHotReload_*` and
+      `TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock` PASS.
