@@ -1,15 +1,20 @@
 package rule
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/cache"
 )
 
 // The existing logger provides a startup boundary without a production test hook.
@@ -138,6 +143,128 @@ func TestRuleRuntimeCompletionWaitsForStartupRegistration(t *testing.T) {
 		}
 		if err := processor.Stop(context.Background()); err != nil {
 			t.Fatalf("completed Stop: %v", err)
+		}
+	})
+}
+
+// startRuleRuntimeForTest drives the NATS-free accepted-Start seam: the real
+// Start authority, the real runtime lane on its run context, and a committed
+// Start, so Stop runs its production cleanup.
+func startRuleRuntimeForTest(t *testing.T, packID string) (*Processor, context.CancelFunc) {
+	t.Helper()
+	cfg := mustTestConfig(t, packID)
+	processor, err := NewProcessor(nil, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	runCtx, startDone, err := processor.beginStartAuthority(startCtx)
+	if err != nil {
+		cancelStart()
+		t.Fatal(err)
+	}
+	runtimeDone := processor.runtimeDone
+	go func() {
+		processor.commandLane.run(runCtx)
+		close(runtimeDone)
+	}()
+	if err := processor.finishStartAttempt(startCtx, startDone, true, nil); err != nil {
+		cancelStart()
+		t.Fatal(err)
+	}
+	return processor, cancelStart
+}
+
+// The settle helper's deadline arm (#1283 Q-E): an admitted runtime command
+// that waits on its runtime context holds the fence barrier past the Stop
+// bound. Stop must cancel the runtime, receive the barrier, and join the lane
+// — all at the virtual deadline — and the submitter learns the cancellation.
+func TestRuleStopDeadlineArmCancelsAndJoinsCoordinator(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		processor, cancelStart := startRuleRuntimeForTest(t, "stop-deadline-arm")
+		defer cancelStart()
+		submitted := make(chan error, 1)
+		go func() {
+			submitted <- processor.submitRuntimeCommand(func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			})
+		}()
+		synctest.Wait() // the command is running on the lane
+
+		stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
+		defer cancelStop()
+		if err := processor.Stop(stopCtx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Stop = %v, want its deadline", err)
+		}
+		select {
+		case <-processor.commandLane.done():
+		default:
+			t.Fatal("Stop returned before the canceled lane ended")
+		}
+		if err := <-submitted; !errors.Is(err, context.Canceled) {
+			t.Fatalf("submitter = %v, want context.Canceled", err)
+		}
+	})
+}
+
+// rp.mu is the one guard on the message cache handle (#1283 Q-E). The handler's
+// read is woken by a virtual timer, which gives Stop's clear no happens-before
+// edge to it, so under -race an unguarded read is reported deterministically.
+func TestRuleMessageCacheOneGuard(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		processor, cancelStart := startRuleRuntimeForTest(t, "message-cache-guard")
+		defer cancelStart()
+		processor.mu.Lock()
+		processor.messageCache = cache.NewNoop[message.Message]()
+		processor.mu.Unlock()
+
+		evaluated := make(chan struct{})
+		go func() {
+			defer close(evaluated)
+			time.Sleep(time.Hour)
+			processor.evaluateRulesForMessage(context.Background(), "test.subject", nil)
+		}()
+		if err := processor.Stop(context.Background()); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		<-evaluated
+		processor.mu.RLock()
+		cleared := processor.messageCache == nil
+		processor.mu.RUnlock()
+		if !cleared {
+			t.Fatal("Stop did not clear the message cache handle")
+		}
+	})
+}
+
+// A managed watcher whose runtime was cleared must not get a goroutine that no
+// Stop joins (#1283 Q-E): the spawn is refused, its record released, the
+// watcher stopped, and the refusal logged with its key.
+func TestRuleManagedWatcherSpawnRefusedAfterRuntimeEnd(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		watcher := newTransactionalTestWatcher()
+		key := watcherKey(graph.BucketEntityStates, "acme.prod.robotics.*.drone.*")
+		done := make(chan struct{})
+		processor := &Processor{
+			logger:                slog.New(slog.NewTextHandler(&logs, nil)),
+			entityDispatchRecords: map[string]managedEntityWatcher{key: {watcher: watcher, generation: 1, done: done}},
+		}
+		processor.clearLifecycleHandles()
+
+		processor.startManagedEntityWatcher(context.Background(), watcher, key, 1)
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("managed watcher spawned after its runtime was cleared")
+		}
+		if !watcher.stopped.Load() {
+			t.Fatal("refused watcher was not stopped")
+		}
+		if got := logs.String(); !strings.Contains(got, "Refused managed entity watcher") || !strings.Contains(got, key) {
+			t.Fatalf("refusal not logged with its key: %q", got)
 		}
 	})
 }

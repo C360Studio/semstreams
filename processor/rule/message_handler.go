@@ -84,11 +84,14 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 	// Increment evaluation counter for all messages (NATS and KV watcher)
 	atomic.AddInt64(&rp.messagesEvaluated, 1)
 
-	// Cache the message if needed
+	// Cache the message if needed. rp.mu guards the handle: Start publishes it
+	// and Stop clears it.
+	rp.mu.RLock()
 	if rp.messageCache != nil {
 		cacheKey := fmt.Sprintf("%s_%d", subject, time.Now().UnixNano())
 		rp.messageCache.Set(cacheKey, msg)
 	}
+	rp.mu.RUnlock()
 
 	// Snapshot all three maps so hot-reload writes don't race with iteration.
 	rules, ruleDefs, counters := rp.snapshotRules()

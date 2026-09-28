@@ -887,7 +887,9 @@ func (rp *Processor) Start(ctx context.Context) (startErr error) {
 		rp.logger.Warn("Failed to create message cache, using noop cache", "error", err)
 		msgCache = cache.NewNoop[message.Message]()
 	}
+	rp.mu.Lock()
 	rp.messageCache = msgCache
+	rp.mu.Unlock()
 
 	// Initialize StateTracker for stateful ECA rules
 	if err := rp.initializeStateTracker(ctx); err != nil {
@@ -1019,6 +1021,11 @@ func (rp *Processor) finishStartAttempt(ctx context.Context, startDone chan stru
 		close(startDone)
 		rp.startDone = nil
 		rp.lifecycleMu.Unlock()
+		if rollbackErr == nil {
+			rp.mu.Lock()
+			rp.messageCache = nil
+			rp.mu.Unlock()
+		}
 		return startErr
 	}
 	rp.lifecycleMu.Lock()
@@ -1228,6 +1235,7 @@ func (rp *Processor) Stop(ctx context.Context) error {
 		rp.running = false
 		rp.isSubscribed = false
 		rp.health.Healthy = false
+		rp.messageCache = nil
 		rp.mu.Unlock()
 		rp.logger.Info("Rule processor stopped")
 		return stopErr
@@ -1436,7 +1444,6 @@ func (rp *Processor) clearLifecycleHandles() {
 	rp.subscriptions = nil
 	rp.cronScheduler = nil
 	rp.statusLoopDone = nil
-	rp.messageCache = nil
 }
 
 // publishGraphEvents and publishRuleEvent are in publisher.go

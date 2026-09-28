@@ -460,16 +460,23 @@ func (rp *Processor) startManagedEntityWatcher(ctx context.Context, watcher jets
 	rp.lifecycleMu.Lock()
 	wg := rp.runtimeWG
 	rp.lifecycleMu.Unlock()
-	if wg != nil {
-		wg.Add(1)
+	if wg == nil {
+		// The runtime these handles belonged to has been cleared; a goroutine
+		// spawned now would join no Stop. Refuse it and release its record.
+		if done != nil {
+			close(done)
+		}
+		stopErr := watcher.Stop()
+		rp.logger.Warn("Refused managed entity watcher: processor runtime has ended",
+			"key", key, "stop_error", stopErr)
+		return
 	}
+	wg.Add(1)
 	go func() {
 		if done != nil {
 			defer close(done)
 		}
-		if wg != nil {
-			defer wg.Done()
-		}
+		defer wg.Done()
 		rp.handleManagedEntityUpdates(ctx, watcher, key, generation)
 	}()
 }
