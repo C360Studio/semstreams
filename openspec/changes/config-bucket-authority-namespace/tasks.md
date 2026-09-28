@@ -142,3 +142,24 @@ re-run by the coordinating session at the new final code revision.
       `-v` run through the canonical runner of `./internal/boot ./processor/rule ./test/testinfra` exit 0:
       `TestRootRuleManagerHotReloadsIntoTheProcessor`, the five `TestHotReload_*` and
       `TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock` PASS.
+- [ ] 4.8 Review round 3 on PR #1404 (PASS WITH AMENDMENTS at `60c3320c`, PR comment 2026-09-28):
+      - MEDIUM-2, commit `020704e4`: `TestConfigManagerStopDuringSeedingJoinsStart` never binds the family, so any
+        reconcile fails at `ListRules` before an apply and its "no apply" assertion could not fail (the reviewer's
+        mutation survived 5/5). It now records the manager's logs and asserts "Initial rule reconcile failed" is never
+        logged (`processor/rule/kv_config_stop_fence_test.go:147`), with a positive control that Start's own log was
+        recorded (`:144`). M13 `if runCtx.Err() == nil {` replaced by `if true {` at
+        `processor/rule/kv_config_integration.go:139` (cp backup plus md5, restored checksum
+        `e022a84fe065d010f38bbfb673eda8f9` verified): the test fails 5/5, "a cancelled Start attempted its initial
+        reconcile".
+      - MEDIUM-3, commit `0e66ff12`: `KeyFamily.Names` logs a Warn naming a key under the prefix that is not one
+        token (`config/key_family.go:228`), with the binding Manager's logger. Log-only, stated at the site: only an
+        out-of-band writer can store such a key, the Warn repeats on every listing, and `config` has no metrics
+        surface; ADR-098 decision 3 makes logs and metrics the substrate contract but names no per-skip metric.
+        `TestKeyFamilyDeliversSnapshotThenChanges` asserts the Warns are exactly `rules.nested.name`
+        (`config/key_family_integration_test.go:145`). M14 the Warn call deleted (cp backup plus md5, restored checksum
+        `0dd3c3488528cd759235fceb5661b150` verified): that test fails, expected `[]string{"rules.nested.name"}`,
+        actual `[]string(nil)`. The component-runtime-config scenario names the Warn (commit `87a5510f`).
+      - NIT-4, commit `87a5510f`: migration obligation 7 says every byte outside the alphabet other than `.` (for
+        example `:`) was never storable, and that a dotted ID was stored and applied only when another change or a
+        restart reconciled the family.
+      Gates: GATES.
