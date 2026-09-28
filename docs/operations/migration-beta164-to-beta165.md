@@ -25,3 +25,6 @@ Context it used to return is gone; there is no compatibility shim.
 
 A product that stops a `CronScheduler` directly replaces `<-scheduler.Stop().Done()` (or a select on it) with
 `err := scheduler.Stop(ctx)`, passing the shutdown context that bounds it. No sister repository was found doing so.
+The old `Stop()` returned at once and handed back a settlement to wait on; the new one blocks until the admitted fires
+finish or `ctx` ends, so a fire-and-forget caller now waits under its own bound. A Stop that returned its context's
+error may be retried: the retry fences again and settles as soon as the scheduler's runtime has ended.

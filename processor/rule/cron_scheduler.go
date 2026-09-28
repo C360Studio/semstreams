@@ -12,8 +12,8 @@
 //  2. Processor.run launches the scheduler with Start(ctx); robfig spawns
 //     its own internal goroutine that walks the schedule and dispatches
 //     each fire callback on its own goroutine.
-//  3. Processor.run defers Stop on shutdown, draining in-flight fires up
-//     to the shutdown grace period.
+//  3. Processor.cleanup calls Stop(ctx) at its step 2, joining in-flight
+//     fires under the Stop context.
 //  4. Hot reload (applyRuleChanges) calls Register / Deregister under the
 //     processor's mu.Lock; robfig supports live add/remove without a
 //     scheduler restart.

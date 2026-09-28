@@ -103,10 +103,10 @@ func (l *ownerLane) end(done chan struct{}, err error) {
 	}
 }
 
-// submit blocks while a running processor executes the update on its runtime;
-// returns the update's result, a refusal once Stop has fenced admission, or the
-// runtime's end error. It carries no caller deadline — a bounded Stop cancels
-// the runtime and releases it.
+// submit blocks while the owner's runtime executes run; it returns run's
+// result, a refusal once the lane is fenced, or the lane's end error. It carries
+// no caller deadline — the owner's bounded Stop cancels the runtime and releases
+// it.
 func (l *ownerLane) submit(run func(context.Context) error) error {
 	command := laneCommand{run: run, result: make(chan error, 1)}
 	l.mu.Lock()
