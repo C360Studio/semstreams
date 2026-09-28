@@ -3,14 +3,20 @@
 - [x] 1.1 `inventory-processor.md` at `7a91400a` — Stop path waits, 16 lifecycle fields × writer/reader/guard/goroutine, consumers, tests (`task inventory:verify`: pins=35 ok=35)
 - [x] 1.2 `inventory-cron-and-lanes.md` at `7a91400a` — CronScheduler waits and fields, the lane shape repo-wide, sibling idioms, sanctioned-idiom search (`task inventory:verify`: pins=154 ok=154)
 
+- [ ] 1.3 Independent inventory review → `INVENTORY PASS` (architect contract step 3) — NOT RUN before design; docket Q0 on #1283 asks the owner to waive or run
+
 ## 2. Design
 
-- [ ] 2.1 `design.md` — § 0 rulings verbatim, premises pinned, options with costs, docket cheaper-row-first, acceptance, residuals to file
+- [x] 2.1 `design.md` — § 0 rulings verbatim, premises pinned, options with costs, docket cheaper-row-first, acceptance, residuals to file; § 7 coordinator amendments A0–A2
 - [ ] 2.2 Owner read of the docket; rulings transcribed into § 0
 
-## 3. Implementation (rows are filled from the accepted design)
+## 3. Implementation (rows from design § 6, amended by § 7; the owner's docket rulings select 3.1/3.2's form)
 
-- [ ] 3.1 The fix, per the accepted option
-- [ ] 3.2 Deterministic `synctest` tests with mutation evidence rows
-- [ ] 3.3 Independent review (`semstreams-reviewer`)
-- [ ] 3.4 `scripts/run-integration-tests.sh ./processor/rule/...` green at the final code revision
+- [ ] 3.1 Q-A: `processor/rule/owner_lane.go` — one unexported lane with close-under-mutex; `Processor` and `CronScheduler` adopt it; `lifecycle_owner_test.go` / `lifecycle_runtime_test.go` field reads updated (if the owner rules Q-A(a): the two in-place moves + fence nil-done parity instead)
+- [ ] 3.2 Q-C: `CronScheduler.Stop(ctx context.Context) error`; `cleanup` calls it at step 2 where `:1343-1345` is (A1); delete `cronStopContext`; 10 test sites (if the owner rules Q-C(a): one doc line instead)
+- [ ] 3.3 Q-B/Q-D doc sentences: `ApplyConfigUpdate`, `UpdateWatchBuckets`, lane `submit`; one comment at the `hotReloadMgr.Stop()` call
+- [ ] 3.4 Q-E: `messageCache` under `rp.mu` at all four sites; `startManagedEntityWatcher` refuses on nil `wg`
+- [ ] 3.5 Tests T1–T6 (design § 4) with mutation rows in the PR body (`cp` + checksum)
+- [ ] 3.6 Spec delta: `openspec/specs/rule-engine/spec.md` ADDED requirement phrased per A2; `docs/operations/migration-rule-stop-bounded.md` (Q-C row: 0 adopters found)
+- [ ] 3.7 File design § 5 residuals (two issues, milestones as named) after the owner's docket read
+- [ ] 3.8 `semstreams-reviewer` round; `task check:push`; `scripts/run-integration-tests.sh ./processor/rule/...` at the final code revision; `task inventory:verify` both files; archive as the last content commit
