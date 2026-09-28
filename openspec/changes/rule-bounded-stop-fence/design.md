@@ -85,7 +85,7 @@ Gap between "must know" and "should know" (nothing): closed for rows 1 and 3; ro
 | Q-A | (1) in place, ≈ 22 lines, 4 tests | (2) unexported `ownerLane`, net ≈ −70, 1 class test | Take (2): the copies already drifted; (1) if unblocking #1404 today outweighs clearing the duplicate. |
 | Q-C | (1) keep + doc | (3) `Stop(ctx) error`, exported break, 0 adopters | Take (3): the sibling idiom; deletes the only hand-rolled Context; migration row "no adopter found". |
 
-Q-B, Q-D, Q-E: cheaper row == recommended; no exported change. Q-C is the only exported-surface change → `docs/operations/migration-rule-stop-bounded.md` (rows: `CronScheduler.Stop` signature — 0 adopters; `ApplyConfigUpdate`, `ConfigManager` unchanged).
+Q-B, Q-D, Q-E: cheaper row == recommended; no exported change. Q-C is the only exported-surface change → `docs/operations/migration-beta164-to-beta165.md` (the repo's per-tag name; the design draft said `migration-rule-stop-bounded.md`) (rows: `CronScheduler.Stop` signature — 0 adopters; `ApplyConfigUpdate`, `ConfigManager` unchanged).
 
 ## § 4 Acceptance
 
@@ -117,7 +117,7 @@ Existing coverage: `readiness_integration_test.go:197` remains the wall-clock ab
 - [ ] 3.3 Doc sentences: `ApplyConfigUpdate`, `UpdateWatchBuckets`, lane `submit` (Q-B(1)); one comment at the `hotReloadMgr.Stop()` call (Q-D(1))
 - [ ] 3.4 `messageCache` under `rp.mu` at all four sites; `startManagedEntityWatcher` refuses on nil `wg` (Q-E)
 - [ ] 3.5 Tests T1–T6 with mutation rows in the PR body (`cp` + checksum)
-- [ ] 3.6 Spec delta: `openspec/specs/rule-engine/spec.md` ADDED "Runtime lanes settle every admitted barrier" (I1–I3, three scenarios); `docs/operations/migration-rule-stop-bounded.md`
+- [ ] 3.6 Spec delta: `openspec/specs/rule-engine/spec.md` ADDED "Runtime lanes settle every admitted barrier" (I1–I3, three scenarios); `docs/operations/migration-beta164-to-beta165.md` (the repo's per-tag name; the design draft said `migration-rule-stop-bounded.md`)
 - [ ] 3.7 File § 5 residuals (two issues, milestones as named)
 - [ ] 3.8 `semstreams-reviewer` round; `task check:push`; `scripts/run-integration-tests.sh ./processor/rule/...` at the final code revision; `task inventory:verify` both files; archive as the last content commit
 
