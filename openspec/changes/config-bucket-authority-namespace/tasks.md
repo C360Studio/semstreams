@@ -18,9 +18,11 @@ landing choreography. Pins are at base `fe9482b7` (design.md § 1). Every gate l
       `Start(ctx, targets)` and `Stop()`. Add `(*Processor).LoadedRuleDefinitions` and the `HotReloadTarget` interface.
       Delete `InitializeKVStore`, `ensureKVStore`, the literal-name acquisition, `WatchRules`, and the
       component-internal construction and stop (`processor/rule/processor.go:1019-1028`, `:1335`).
+      *Superseded by 4.9: `Stop()` is now `Stop(ctx)`.*
 - [x] 1.3 In the root, construct the one rule manager and register its family through `StartValidatedConfigManager`.
       Serve it to the tools, and wrap `runtimeManager` so that `StartAll` then seeds and reconciles, and `StopAll`
       stops the loop first (design D3).
+      *Superseded by 4.9: the wrapper is deleted; the manager is the registered `rule-config` service.*
 - [x] 1.4 Add `TestRootRuleManagerHotReloadsIntoTheProcessor`: write `rules.x` through the root's manager and observe
       the processor's `ApplyConfigUpdate` (real NATS, `-race`, explicit synchronization). Migrate the rule package's
       hot-reload, seeding and lifecycle tests to the new seam.
@@ -54,6 +56,7 @@ landing choreography. Pins are at base `fe9482b7` (design.md § 1). Every gate l
       `FuzzBucketName`), M7 `ruleHotReloadRuntime.targets` set to `nil` in `run.go`
       (`TestBinaryBootOrder`), M8 the sibling-bucket refusal ignored on the mint branch
       (`TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance`); checksums restored each time.
+      *M2 and M7 are superseded by 4.9: the wrapper they mutated is deleted; M17 and M15 are their successors.*
 - [x] 3.2 Gates green before each push: `go build ./...`, `task lint`, `go vet ./...`, `go vet -tags=integration
       ./...`, `go run ./cmd/entity-id-audit .`, `task test:race`, `task test:integration`, `task schema:generate`
       with a clean `git diff schemas/ specs/`, and `openspec validate config-bucket-authority-namespace --strict`.
@@ -146,9 +149,9 @@ re-run by the coordinating session at the new final code revision.
       - MEDIUM-2, commit `020704e4`: `TestConfigManagerStopDuringSeedingJoinsStart` never binds the family, so any
         reconcile fails at `ListRules` before an apply and its "no apply" assertion could not fail (the reviewer's
         mutation survived 5/5). It now records the manager's logs and asserts "Initial rule reconcile failed" is never
-        logged (`processor/rule/kv_config_stop_fence_test.go:147`), with a positive control that Start's own log was
-        recorded (`:144`). M13 `if runCtx.Err() == nil {` replaced by `if true {` at
-        `processor/rule/kv_config_integration.go:139` (cp backup plus md5, restored checksum
+        logged (`processor/rule/kv_config_stop_fence_test.go:148`), with a positive control that Start's own log was
+        recorded (`:145`). M13 `if runCtx.Err() == nil {` replaced by `if true {` at
+        `processor/rule/kv_config_integration.go:140` (cp backup plus md5, restored checksum
         `e022a84fe065d010f38bbfb673eda8f9` verified): the test fails 5/5, "a cancelled Start attempted its initial
         reconcile".
       - MEDIUM-3, commit `0e66ff12`: `KeyFamily.Names` logs a Warn naming a key under the prefix that is not one
@@ -166,8 +169,8 @@ re-run by the coordinating session at the new final code revision.
 - [x] 4.9 Owner ruling on #1188, docket 6 Q11 (b-full) (issuecomment-5873491391; the debt outside this change is #1415).
       Commit `87bcfa78` (code), `8c427184` (design, spec delta, proposal, migration note).
       - The rule `ConfigManager` is the registered framework service `rule-config`: the adapter `ruleConfigService`
-        (`internal/boot/rule_config_service.go:27`, name at `:16`) embeds `*service.BaseService`, and
-        `registerRuleConfigService` (`:77`, `RegisterInstance` at `:82`) binds `service.ComponentsImplementing` targets
+        (`internal/boot/rule_config_service.go:31`, name at `:16`) embeds `*service.BaseService`, and
+        `registerRuleConfigService` (`:81`, `RegisterInstance` at `:86`) binds `service.ComponentsImplementing` targets
         and refuses when the component manager is not yet registered. The root calls it at `internal/boot/run.go:339`,
         right after `configureAndCreateServices` and `service.ConfigureRulePackMutations`, and passes `manager` itself
         to `runUntilShutdown`; `service.Manager`'s registration-order `StartAll` and exact-reverse `StopAll` give D3.
@@ -198,3 +201,31 @@ re-run by the coordinating session at the new final code revision.
       test files / 0 DATA RACE; `task schema:generate` exit 0 with an empty `git diff schemas/ specs/`; `openspec validate
       config-bucket-authority-namespace --strict` valid; `openspec validate --all --strict` 58/58; `task spec:properties`
       451/451.
+
+- [ ] 4.10 Review round 4 on PR #1404 (CHANGES REQUESTED at `03a330d0`, no production defect; PR comment 2026-09-28).
+      Rebased onto `7303858d` (#1413, tests and docs only, no conflict); 4.9's `87bcfa78` is now `64a34476` and
+      `8c427184` is `7c341428`. Pins in 4.9 are re-measured after the NIT-3 doc comment.
+      - HIGH-1, the CI red: `startedRuleProcessor` started the processor with the test's context, which the test's
+        deferred cancel and `t.Context()` end before cleanups run, so the processor's Stop cleanup always ran on the
+        component contract's abort path (`component/lifecycle.go:52-56`), where a non-nil terminal result is
+        legitimate; the test's `t.Errorf` was the defect. Controlled shutdown per the contract keeps the Start context
+        live until a bounded Stop returns, so the helper now owns its Start context and cancels it in a cleanup
+        registered before the Stop cleanup (`internal/boot/rule_hot_reload_integration_test.go:87`; cleanups run
+        last-in first-out). Evidence: registering that cancel after the Stop cleanup (cp backup plus md5, restored)
+        fails at once, `rule_hot_reload_integration_test.go:92: rule processor Stop within 30s: context canceled`;
+        with the fix, `scripts/run-integration-tests.sh ./internal/boot/ -count=20 -v` exit 0, 20/20 PASS of
+        `TestRootRuleManagerHotReloadsIntoTheProcessor`, 0 FAIL, 0 DATA RACE.
+      - MEDIUM-1: `TestRuleConfigServiceStopIsBoundedAndReportsStoppedOnlyWhenJoined`
+        (`internal/boot/rule_config_service_integration_test.go:52`, real NATS) drives the adapter with a target
+        holding `ApplyConfigUpdate`: a 100 ms Stop returns `context.DeadlineExceeded` and `Status()` is not stopped;
+        after release a second Stop returns nil and the status is stopped. M18 `s.rules.Stop(ctx)` deleted from the
+        adapter's Stop (`internal/boot/rule_config_service.go:70`, cp backup plus md5, restored checksum
+        `b7b280b15d43d3e746a8fbf6fd284a15`): that test fails "a Stop whose bound wins returns its context's error, got
+        <nil>" (it survived every test at `03a330d0`).
+      - NIT-3: the adapter doc and migration obligation 4 state that `rule-config` starts after every configured
+        service and stops before all of them, publishes `health.service.rule-config` to `HEALTH` every 5 s, raises
+        the startup `Admitted` count by one, and holds readiness for the seeding and initial reconcile (inside
+        `StartAll`, before startup commits, as each processor's own seeding did in beta.162).
+      - NIT-4: rows 1.2, 1.3 and 3.1's M2 and M7 are marked superseded by 4.9; 4.8's M13 pins are corrected.
+      - MEDIUM-2 (health for at most one tick after a Stop whose bound won): owner docket 7 Q12, pending.
+      Gates: GATES.
