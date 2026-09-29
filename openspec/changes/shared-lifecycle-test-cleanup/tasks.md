@@ -2,9 +2,9 @@
 
 ## 1. Inventory and design
 
-- [ ] 1.1 Enumerate shared test-support cleanup ownership, adopters, existing patterns, exact baseline/dependency
+- [x] 1.1 Enumerate shared test-support cleanup ownership, adopters, existing patterns, exact baseline/dependency
   exposure, and the #1416 condition; retain line-pinned evidence.
-- [ ] 1.2 Obtain independent INVENTORY PASS before drafting target state.
+- [x] 1.2 Obtain independent INVENTORY PASS before drafting target state.
 - [ ] 1.3 Review a bounded design, failure proof, PBT decision, and spec delta; accept the design before implementation.
 
 ## 2. Implementation and proof
@@ -18,4 +18,5 @@
 
 ## Current hold
 
-Inventory and design are not yet approved. Implementation must wait for the required independent reviews.
+Inventory received independent INVENTORY PASS at the checkpoint recorded in `review/inventory-review.md`.
+Design is in progress; implementation waits for independent design review and coordinator acceptance.
