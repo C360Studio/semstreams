@@ -1,6 +1,6 @@
 # Evidence: e2e-tiered-warn-only-stages task 2.1 (issue #1426)
 
-Branch `claude/gh1426-warn-only-stages`, base `6cd459bb`. Commits: `01882ff4` (structural query stages), `ce4d334d`
+Branch `claude/gh1426-warn-only-stages`, base `6cd459bb`. Commits (§ 4 adds `1751e27f`, `c418ec2e`): `01882ff4` (structural query stages), `ce4d334d`
 (NL intent), `eb4bdd34` (community path + recorder arms), `b74a0f63` (disabled-engine and duplicate stages leave;
 validate-rules thresholds), `b8ebea30` (unit tests). Host: darwin, Docker Desktop, 2026-09-29. Every mutant was
 made from a `cp` backup with its SHA-256 recorded and restored the same way; no stash, checkout, or restore was used.
@@ -319,3 +319,111 @@ probe ("today", keyword-routed, 30 ms idle) also timed out in the run; that it q
 request is inferred, not measured. The LLM's answer is also empty (count 0) where statistical returns entities for the
 same probe. `includeSummaries:false` does not reach the classifier. This does not affect the statistical gate; it
 affects the semantic variant (the #1425 path-only run after rebase, and the full semantic tier).
+
+## 4. Coordinator decisions on the two reds (2026-09-29), applied in `1751e27f` and `c418ec2e`
+
+### 4.1 Red 1: test-graphrag-global decodes snake_case (second instance of the D4(a) class)
+
+`graphRAGGlobalResponse` now reads `community_summaries` / `community_id` (`tiered_statistical.go:40-60`), matching
+the handler (`processor/graph-query/graphrag.go:195`, `:236`). The unit stubs serve the snake body, and
+`TestGraphRAGGlobal_ReadsSnakeCaseSummaries` proves two summaries decode.
+
+Left alone on purpose: `sendNLQuery`'s `globalSearchResponse` (`tiered_structural.go`, `communitySummaries {
+communityId … }`) carries the same camelCase tags. No assertion reads them, and with `includeSummaries:false` the body
+carries no summaries anyway. A reviewer does not need to re-find it.
+
+Mutation check (unit seam; the live-stack halves are § 2.1 camelCase → `[38/42] test-graphrag-global FAILED` and
+§ 4.3 snake → completed). `$SP` is the session scratchpad; `camel-tiered_statistical.go` is the file as committed
+at `eb4bdd34`..`feacf3db`:
+
+```
+===== MUTANT: camelCase graphRAGGlobalResponse tags restored (committed eb4bdd34 file)
+$ cp $SP/camel-tiered_statistical.go test/e2e/scenarios/tiered_statistical.go && shasum -a 256 test/e2e/scenarios/tiered_statistical.go
+726550e25aaf9496b558a427264a44f6984a2fcf03302c92b7c4829393b78a7a  test/e2e/scenarios/tiered_statistical.go
+$ grep -n 'json:"communitySummaries"\|json:"communityId"' test/e2e/scenarios/tiered_statistical.go
+27:			CommunityID string `json:"communityId"`
+45:				CommunityID string   `json:"communityId"`
+57:			} `json:"communitySummaries"`
+$ go test -count=1 -v -run 'TestGraphRAG|TestWarnOnlyStages' ./test/e2e/scenarios/ | grep -E -- '--- FAIL|Error:|^(ok|FAIL)'
+        	Error:      	"GraphRAG global search returned no community summaries for query \"logistics warehouse operations\"" does not contain "answer field empty"
+--- FAIL: TestGraphRAGGlobal_EmptyAnswerBesideSummariesFails (0.00s)
+        	Error:      	Received unexpected error:
+--- FAIL: TestGraphRAGGlobal_ReadsSnakeCaseSummaries (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	0.322s
+FAIL
+$ cp $SP/snake-tiered_statistical.go test/e2e/scenarios/tiered_statistical.go && shasum -a 256 test/e2e/scenarios/tiered_statistical.go
+8b32dacb3a17eb107778517c58927ac3a096c25da994ada6a90f7209dac4f309  test/e2e/scenarios/tiered_statistical.go
+$ go test -count=1 -run 'TestGraphRAG|TestWarnOnlyStages' ./test/e2e/scenarios/
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	0.298s
+```
+
+### 4.2 Red 2: test-nl-temporal-intent leaves the semantic variant
+
+Decision: the row's `variants` go from `{"statistical", "semantic"}` to `{"statistical"}` (`tiered.go:347`); the row
+comment at `tiered.go:337-345` is rewritten. `test-nl-path-intent` stays in every variant. The 10 s client deadline is
+unchanged.
+
+Reason: the path probes are answered by the keyword tier in every variant. The "last hour" temporal probe misses the
+keyword tier and is routed through `query_classification`, which under the semantic tier resolves to the answer model.
+A model-owned outcome is not graded per-PR (spec delta, requirement 1, third scenario), and the temporal routing fact
+is proven under statistical in ms.
+
+Measurement (§ 3; idle semantic stack, `includeSummaries:false`; app log `"LLM query classifier enabled",
+"model":"qwen3-1.7b","timeout":30000000000`):
+
+| probe | latency | strategy | entities |
+|---|---|---|---|
+| "What happened in the last hour?" (cold) | 17.49 s | temporal | 0 |
+| "What happened in the last hour?" (warm) | 5.61 s | temporal | 0 |
+| "What happened in the last hour?" (+ summarizeThreshold 0) | 5.64 s | temporal | 0 |
+| "Show events from today" | 0.03 s | temporal | 83 |
+| "What is related to temp-sensor-001?" | 0.03 s | pathrag | 29 |
+
+In the full semantic run both temporal probes hit the 10 s deadline (`[25/45] test-nl-temporal-intent FAILED after
+20.004472208s`); that the keyword-routed "today" probe queued behind the abandoned "last hour" request is inferred, not
+measured. For the coordinating session: design § 2 row 2 ("A (all variants)", "predicted ms") and P3 / § 9 ("keyword-only
+in every tier") need amending; P3 does not hold for `configs/semantic.json`, where `query_classification` resolves to
+the registry default model.
+
+`TestStageTable_WarnOnlyDecisions` pins the table decisions. Mutation check:
+
+```
+===== MUTANT: test-nl-temporal-intent row back to {"statistical", "semantic"} (tiered.go as committed at eb4bdd34..b8ebea30)
+$ cp $SP/fix/tiered.go test/e2e/scenarios/tiered.go && shasum -a 256 test/e2e/scenarios/tiered.go
+78e80f43a34c7ca54aec60a9344a25eeaea0fa4f56aa99ddd4a9b4a86970db4d  test/e2e/scenarios/tiered.go
+341:		{"test-nl-temporal-intent", s.executeTestNLTemporalIntent, []string{"statistical", "semantic"}},
+$ go test -count=1 -v -run TestStageTable ./test/e2e/scenarios/ | grep -E -- '--- FAIL|Error:|Messages:|^(ok|FAIL)'
+        	Error:      	Should be false
+        	Messages:   	test-nl-temporal-intent must not run in semantic (model-owned outcome)
+--- FAIL: TestStageTable_WarnOnlyDecisions (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	0.318s
+FAIL
+$ cp $SP/rowfix-tiered.go test/e2e/scenarios/tiered.go && shasum -a 256 test/e2e/scenarios/tiered.go
+137c1c8c48fd0dea4f3c519371cc71a45994e38b063f6ab4d0eb0dbbce56581a  test/e2e/scenarios/tiered.go
+347:		{"test-nl-temporal-intent", s.executeTestNLTemporalIntent, []string{"statistical"}},
+$ go test -count=1 -run TestStageTable ./test/e2e/scenarios/
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	0.277s
+```
+
+### 4.3 Statistical gate at `c418ec2e`
+
+`task e2e:statistical`, task exit 0. Host check first: `docker ps --format '{{.Names}}'` printed nothing;
+`pgrep -fl 'e2e'` exited 1. There were 42 `completed` stage lines and 0 `FAILED`. The changed stages:
+
+```
+[18/42] test-spatial-query completed in 1.390959ms
+[19/42] test-temporal-query completed in 1.874042ms
+[20/42] test-zone-relationships completed in 1.668459ms
+[21/42] test-nl-path-intent completed in 35.85525ms
+[22/42] test-nl-temporal-intent completed in 19.616125ms
+[24/42] test-predicate-list completed in 3.598292ms
+[25/42] test-predicate-stats completed in 4.360417ms
+[31/42] validate-community-structure completed in 23.965588458s
+[37/42] test-graphrag-local completed in 11.632583ms
+[38/42] test-graphrag-global completed in 7.811584ms
+[40/42] validate-rules completed in 54.891667ms
+time=2026-09-29T15:03:55.994-05:00 level=INFO msg="Scenario completed successfully" duration=25.006969209s assertions_run=0
+(metrics excerpt: actions_dispatched:7 graphrag_global_communities_found:5 nl_temporal_intent_tests_passed:2 predicate_stats_entity_count:58 rules_firings_count:3)
+```
