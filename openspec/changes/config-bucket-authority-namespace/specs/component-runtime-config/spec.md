@@ -252,10 +252,15 @@ configuration bucket itself.
 - **AND** a Stop whose context ends while the target holds the work returns the context's error, and the loop still
   exits once the target is released
 - **AND** a nil context is refused before any action
+- **AND** after a completed Stop, a repeated Stop returns nil even when its context is already canceled or its deadline
+  has already passed, directly and through the `rule-config` service
 - **AND** the manager, registered after the component manager, starts after it and stops before it
 - **AND** the tests that verify this are `TestConfigManagerStopDuringSeedingJoinsStart`,
   `TestConfigManagerConcurrentStopsBothJoinTheLoop`, `TestConfigManagerStopReturnsWhenItsContextEnds`,
-  `TestConfigManagerStopRefusesANilContext` and `TestRuleConfigServiceStartsAfterAndStopsBeforeTheComponents`
+  `TestConfigManagerStopRefusesANilContext`, `TestConfigManagerRepeatedStopAfterCompletionIgnoresACanceledContext`,
+  `TestConfigManagerRepeatedStopAfterCompletionIgnoresAnExpiredDeadline`,
+  `TestRuleConfigServiceRepeatedStopAfterCompletionIgnoresACanceledContext` and
+  `TestRuleConfigServiceStartsAfterAndStopsBeforeTheComponents`
 
 #### Scenario: a rule written through the root's manager reaches the running processor
 
