@@ -1114,10 +1114,11 @@ func (s *TieredScenario) executeTestSpatialQuery(ctx context.Context, result *Re
 		"message":        fmt.Sprintf("Spatial query returned %d entities within bounding box", entityCount),
 	}
 
-	// Note: We don't require a minimum count since spatial indexing depends on
-	// the processor creating geo.location.* triples. If count is 0, it's a warning.
+	// The bounding box encloses the SF test sensors, so an empty answer is the
+	// outcome this stage exists to detect (#1426). A transport failure already
+	// returned above with its own wrapped error.
 	if entityCount == 0 {
-		result.Warnings = append(result.Warnings, "Spatial query returned 0 entities - check if geo triples are being indexed")
+		return fmt.Errorf("spatial query returned 0 entities - check if geo triples are being indexed")
 	}
 
 	return nil
@@ -1222,10 +1223,11 @@ func (s *TieredScenario) executeTestTemporalQuery(ctx context.Context, result *R
 		"message":           fmt.Sprintf("Temporal query returned %d entities within time range", entityCount),
 	}
 
-	// Note: We don't require a minimum count since temporal indexing depends on
-	// entity UpdatedAt timestamps. If count is 0, it's a warning.
+	// The window brackets this run's ingest, so an empty answer is the outcome
+	// this stage exists to detect (#1426). A transport failure already returned
+	// above with its own wrapped error.
 	if entityCount == 0 {
-		result.Warnings = append(result.Warnings, "Temporal query returned 0 entities - check if temporal index is being populated")
+		return fmt.Errorf("temporal query returned 0 entities - check if temporal index is being populated")
 	}
 
 	return nil
@@ -1481,10 +1483,11 @@ func (s *TieredScenario) executeTestZoneRelationships(ctx context.Context, resul
 		"message":             fmt.Sprintf("Zone %s has %d incoming relationships", zoneEntityID, relationshipCount),
 	}
 
-	// Note: We don't require a minimum count since this depends on the zone existing
-	// and sensors being in that zone. If count is 0, it's a warning.
+	// The IoT processor mints this zone from the fixture's sensors, so zero
+	// incoming relationships is the outcome this stage exists to detect (#1426).
+	// A transport failure already returned above with its own wrapped error.
 	if relationshipCount == 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Zone %s has 0 incoming relationships - check if zone triples are being indexed", zoneEntityID))
+		return fmt.Errorf("zone %s has 0 incoming relationships - check if zone triples are being indexed", zoneEntityID)
 	}
 
 	return nil
@@ -1988,7 +1991,7 @@ type predicateListResponse struct {
 		Predicates struct {
 			Predicates []struct {
 				Predicate   string `json:"predicate"`
-				EntityCount int    `json:"entityCount"`
+				EntityCount int    `json:"entity_count"`
 			} `json:"predicates"`
 			Total int `json:"total"`
 		} `json:"predicates"`
@@ -2003,8 +2006,8 @@ type predicateStatsResponse struct {
 	Data struct {
 		PredicateStats struct {
 			Predicate      string   `json:"predicate"`
-			EntityCount    int      `json:"entityCount"`
-			SampleEntities []string `json:"sampleEntities"`
+			EntityCount    int      `json:"entity_count"`
+			SampleEntities []string `json:"sample_entities"`
 		} `json:"predicateStats"`
 	} `json:"data"`
 	Errors []struct {
@@ -2098,9 +2101,10 @@ func (s *TieredScenario) executeTestPredicateList(ctx context.Context, result *R
 		"message":         fmt.Sprintf("Found %d predicates in graph", predicateCount),
 	}
 
+	// An empty listing over an ingested graph is the outcome this stage exists
+	// to detect (#1426); a transport failure already returned above.
 	if predicateCount == 0 {
-		result.Warnings = append(result.Warnings,
-			"No predicates found - graph may be empty or PREDICATE_INDEX not populated")
+		return fmt.Errorf("no predicates found - graph may be empty or PREDICATE_INDEX not populated")
 	}
 
 	return nil
@@ -2125,16 +2129,17 @@ func (s *TieredScenario) executeTestPredicateStats(ctx context.Context, result *
 
 	listResp, err := http.DefaultClient.Do(listReq)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to list predicates: %v", err))
-		return nil
+		return fmt.Errorf("predicate list request failed: %w", err)
 	}
 	defer listResp.Body.Close()
 
 	listBody, _ := io.ReadAll(listResp.Body)
 	var predicatesResp predicateListResponse
-	if err := json.Unmarshal(listBody, &predicatesResp); err != nil || len(predicatesResp.Data.Predicates.Predicates) == 0 {
-		result.Warnings = append(result.Warnings, "No predicates available for stats test")
-		return nil
+	if err := json.Unmarshal(listBody, &predicatesResp); err != nil {
+		return fmt.Errorf("failed to parse predicate list response: %w", err)
+	}
+	if len(predicatesResp.Data.Predicates.Predicates) == 0 {
+		return fmt.Errorf("no predicates available for stats test")
 	}
 
 	// Pick the first predicate
@@ -2201,6 +2206,13 @@ func (s *TieredScenario) executeTestPredicateStats(ctx context.Context, result *
 		"latency_ms":      latency.Milliseconds(),
 		"success":         entityCount > 0,
 		"message":         fmt.Sprintf("Predicate '%s' has %d entities", targetPredicate, entityCount),
+	}
+
+	// The list emits a predicate only when at least one membership key parsed,
+	// and stats reads the same keys, so a listed predicate has at least one
+	// entity; zero is the outcome this stage exists to detect (#1426).
+	if entityCount == 0 {
+		return fmt.Errorf("predicateStats(%q) reported 0 entities for a listed predicate", targetPredicate)
 	}
 
 	return nil
