@@ -19,5 +19,6 @@ is authorized by this package batch. #1421 remains open after the separate #1432
 
 ## Status
 
-Initial claim only. Inventory, design and validation remain unperformed for this batch. The subsequent reviewed
-inventory will define the precise change and spec delta. No cleanup count reduction or merge-readiness is claimed.
+Independent inventory review passed at inventory SHA-256 `990e720cca7b45f62bd7400674bda662e39390ad7c9b38b65b5092517ab5eaa2`.
+Design and implementation wait while the new #1421 main-CI recurrence is investigated. No cleanup count reduction,
+implementation validation or merge-readiness is claimed.
