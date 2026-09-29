@@ -1,0 +1,802 @@
+{
+  "baseline_sha256": "909d254426e4b190d3fe10c86f936dcea742d8a6998b7b90a93bbe02ccab2615",
+  "all_debt_count": 297,
+  "all_resolution_count": 90,
+  "rule_entries": [
+    {
+      "identity": "processor/rule/actions_run_scope_integration_test.go|newRunScopeHarness|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "fingerprint": "20fe7bb88f41eaf9b46afa372ae3af3b8001bf0bfdde7b12fc06dbdcdc16abea",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/cron_scheduler_integration_test.go|startCronProcessorForTest|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "1e8b453968ffdeb130db613485896063395df28536845ad285cb0f2ae0c82378",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/cron_scheduler_test.go|TestCronScheduler_StartActuallyFiresFromRobfig|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.CronScheduler|unbounded|1",
+      "fingerprint": "65db16e7a63891f3b5367f04425e0e7ea7f06beea8a536973ce93faaa4ddb0bc",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/cron_scheduler_test.go|TestCronScheduler_StartTwiceFails|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.CronScheduler|unbounded|1",
+      "fingerprint": "b06349b2d2756a67d64c6dca999643846dabaaff14a90f4d56043b52e825ca34",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/cron_scheduler_test.go|startSchedulerForTest|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.CronScheduler|unbounded|1",
+      "fingerprint": "9d8cb39caff1be1e3b787794e611d84726656972c6875e80d606740d78884750",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceNonZero_CoalescingSetCreated|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_ConfigValidation|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_EdgeCases|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_ImmediateProcessing|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_NoCoalescingSet|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_NoTickerSpinning|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_Transition|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/entity_watcher_hardening_integration_test.go|TestEntityWatcherHardeningRealNATS|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "99b7bd090194cdd5ee2f7567f4d0c152136c209b0f70b02965e8dc75c447251f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/entity_watcher_integration_test.go|TestEntityWatcher_BoundedEvaluations|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "931056e7b9f9ce079d13d1b449469390ee703875c8b58b9abd4963d494bd30a6",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/entity_watcher_integration_test.go|TestEntityWatcher_RuleTriggerDebouncing|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "931056e7b9f9ce079d13d1b449469390ee703875c8b58b9abd4963d494bd30a6",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/rule_integration_test.go|TestIntegration_DynamicRuleCRUD|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "05b964672ffbe699aa63ef060f7743a159fdd16267487f6c77ba16b7a471a585",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/rule_integration_test.go|TestIntegration_DynamicWatchPatterns|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "05b964672ffbe699aa63ef060f7743a159fdd16267487f6c77ba16b7a471a585",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/rule_integration_test.go|TestIntegration_GraphIntegration|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "05b964672ffbe699aa63ef060f7743a159fdd16267487f6c77ba16b7a471a585",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/rule_integration_test.go|TestIntegration_KVEntityStateWatch|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "ce9d5d44dea25feee649a327a3932f3ee96c84ce53b8b8a840eca69bd47d290f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/rule_integration_test.go|TestIntegration_PrometheusMetrics|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "ce9d5d44dea25feee649a327a3932f3ee96c84ce53b8b8a840eca69bd47d290f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/rule_integration_test.go|TestIntegration_TransitionOperator_UpdateKV|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "ce9d5d44dea25feee649a327a3932f3ee96c84ce53b8b8a840eca69bd47d290f",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/state_cleanup_integration_test.go|TestEntityWatcher_DeletedEntityCleansRuleState|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "7189ae8fed11c03416e576756eb2baca5f37319f38fb970750beef5315473338",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/stateful_integration_test.go|TestStatefulEvaluator_Integration|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+      "fingerprint": "a206871483bc50a441e2bd2ecafea34e809764fb2a45bfd86e1b42e54211dee0",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    },
+    {
+      "identity": "processor/rule/triple_mutator_revision_integration_test.go|newRevisionClaimHarness|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "fingerprint": "20fe7bb88f41eaf9b46afa372ae3af3b8001bf0bfdde7b12fc06dbdcdc16abea",
+      "classification": "unbounded-terminal-cleanup",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+      "owner_issue": "#1064"
+    }
+  ],
+  "exposed_resolutions": [
+    {
+      "identity": "processor/rule/config_validation_test.go|TestValidateExpressionRule_RejectsRuleOpaqueField|defer|vocabulary.SnapshotRegistry()|unresolved callback|unknown|1",
+      "site_fingerprint": "6b6cefe527407d252c1ea4ace5dd3c078ff2a475c93d2efe7f7c089ee3c66994",
+      "classification": "non-lifecycle-stop",
+      "question": "function-valued expression target unresolved on cleanup path",
+      "reason": "This exact direct deferred invocation calls the closure returned by vocabulary SnapshotRegistry. That closure restores predicateRegistry under registryMu and performs no lifecycle dispatch. The complete caller and registry declarations preserve the binding; this classification does not guarantee mutex completion.",
+      "reviewer": "semstreams-reviewer / test_reliability_review; exact direct-return registry callback source review retained in the #1064 OpenSpec review packet",
+      "owner_issue": "#1064",
+      "dependencies": [
+        {
+          "path": "processor/rule/config_validation_test.go",
+          "declaration": "TestValidateExpressionRule_RejectsRuleOpaqueField",
+          "fingerprint": "8397280355e0a43456746a7b625a9f9bb6e3b3ab812200e742b3b61c68e60924"
+        },
+        {
+          "path": "vocabulary/registry.go",
+          "declaration": "SnapshotRegistry",
+          "fingerprint": "6ec45e9f432e72389355ee420d163bcf32c9e677f14cc3af13754d1bda6fe713"
+        },
+        {
+          "path": "vocabulary/registry.go",
+          "declaration": "registryMu",
+          "fingerprint": "d4d70ccb287664c3e936236d3252acff4a4befcd5e569f4fec428243d1422012"
+        },
+        {
+          "path": "vocabulary/registry.go",
+          "declaration": "predicateRegistry",
+          "fingerprint": "387baf96bc42b987dfa8bfaf0772b682a074dbc5a808142d12cd50a34cba0897"
+        },
+        {
+          "path": "vocabulary/predicates.go",
+          "declaration": "PredicateMetadata",
+          "fingerprint": "2947118e9e493326a880241e0890463692231fdf0cf6c7939bddefee4b97b26d"
+        }
+      ]
+    },
+    {
+      "identity": "processor/rule/lifecycle_integration_test.go|(*ruleLifecycleObservation).Stop|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
+      "site_fingerprint": "a0203b3a4f418423387f70bd80f7011e3a5bef9b2d8d41ca4e45212045425900",
+      "classification": "deliberate-contract-call",
+      "question": "context provenance unresolved",
+      "reason": "The first exact forwarding branch receives nil from the portable NilStopContext probe and preserves that nil argument so the real rule component must reject it; this is a distinct contract assertion.",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; candidate 20ddeb17716e170afd8f230ce20371225059f3163eefb740ee67af1745e397d4; implementation-review.md",
+      "owner_issue": "#1418",
+      "dependencies": [
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "ruleLifecycleObservation",
+          "fingerprint": "f4501e2955c506a9c856efedba63f4d12bc127eedca28e8a4002758ad5eb7f12"
+        },
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "ruleLifecycleObservation.Stop",
+          "fingerprint": "c4588a31b82db7c8da537919117ba7c04f0c63bb45c378dc28aaf49dfd1b45c5"
+        },
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "TestIntegration_RuleStandardLifecycle",
+          "fingerprint": "6ed4fdd260b03a51f50d6a4db60921e441479493b2bb191a638bf0e633e58a2f"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "testNilStopContext",
+          "fingerprint": "ffb560ebe76bc7458186eb090a02444dd24383ba9858244a1d513b8b1b3f1302"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "testPortableLifecycleFloor",
+          "fingerprint": "5c0043d7ca91c20a96bff94f47db45ea70532e21908b656fb90b4f7ee59315f7"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "StandardLifecycleTests",
+          "fingerprint": "7cf09e4c45fa9e21f2cbd6e62e634200bd6825fa91366913ceeae540e737c46f"
+        },
+        {
+          "path": "component/lifecycle.go",
+          "declaration": "LifecycleComponent",
+          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779"
+        }
+      ]
+    },
+    {
+      "identity": "processor/rule/lifecycle_integration_test.go|(*ruleLifecycleObservation).Stop|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|2",
+      "site_fingerprint": "97ca9f835d447493724d066e1a674ca2e8ec515f8221e83fc629ae5fa6c71d59",
+      "classification": "bounded-cleanup",
+      "question": "context provenance unresolved",
+      "reason": "The observer forwards the finite nonnil Stop context supplied by the shared owner to the real rule processor and records return. The explicit completed-repeat probe supplies its separate finite second context. The suite invokes that wrapper for each returned factory instance; this proves finite caller authority and observed return, not complete internal joining after abort.",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; budget candidate 687959ee4baabae38bcf14b3a59db6bed0be74a84f061f8ba9bf3aea9fc9dd3f; implementation-review.md",
+      "owner_issue": "#1418",
+      "dependencies": [
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "ruleLifecycleObservation",
+          "fingerprint": "f4501e2955c506a9c856efedba63f4d12bc127eedca28e8a4002758ad5eb7f12"
+        },
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "ruleLifecycleObservation.Stop",
+          "fingerprint": "c4588a31b82db7c8da537919117ba7c04f0c63bb45c378dc28aaf49dfd1b45c5"
+        },
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "TestIntegration_RuleStandardLifecycle",
+          "fingerprint": "6ed4fdd260b03a51f50d6a4db60921e441479493b2bb191a638bf0e633e58a2f"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "newLifecycleTestOwner",
+          "fingerprint": "4508a2bfb54a2ff0a4e45068a288b14001da98af0799aee031237700a759e9f2"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.stop",
+          "fingerprint": "cd20c17b7f149a3021b36e8e274d762bcbb54e007ddff3aa2f031ae962f9fa75"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.stopWithContext",
+          "fingerprint": "9984a4769bab3d397bfd86aff9bd290db7282c04ed96b7ed670975ded9054ea5"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "testPortableLifecycleFloor",
+          "fingerprint": "5c0043d7ca91c20a96bff94f47db45ea70532e21908b656fb90b4f7ee59315f7"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "testCompletedRepeatedStop",
+          "fingerprint": "14e5ed5970c4d2e4375819d673e93f88faa6875bbc141b64a6d9354223915595"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "runLifecycleCycle",
+          "fingerprint": "a0ca9175c709a702e625059f400cf9d0153ede8de19246f2a2e71147e9a641d0"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "StandardLifecycleTests",
+          "fingerprint": "7cf09e4c45fa9e21f2cbd6e62e634200bd6825fa91366913ceeae540e737c46f"
+        },
+        {
+          "path": "component/lifecycle.go",
+          "declaration": "LifecycleComponent",
+          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779"
+        }
+      ]
+    },
+    {
+      "identity": "processor/rule/lifecycle_runtime_test.go|TestRuleMessageCacheOneGuard|defer|cancelStart|unresolved callback|unknown|1",
+      "site_fingerprint": "cd280e40cf5f43238633ec3b15c8be535076f7b8b385c32049981bb3ccd347fb",
+      "classification": "non-lifecycle-stop",
+      "question": "deferred or cleanup callback variable target unresolved",
+      "reason": "The helper returns the unchanged second result of context.WithCancel in result slot one; this exact caller defers that genuine cancellation function.",
+      "reviewer": "semstreams-reviewer / test_reliability_review; exact source review retained in the #1064 OpenSpec review packet",
+      "owner_issue": "#1064",
+      "dependencies": [
+        {
+          "path": "processor/rule/lifecycle_runtime_test.go",
+          "declaration": "TestRuleMessageCacheOneGuard",
+          "fingerprint": "8f467a25a81e75f1b1b2e442539a8b3cc9d473a9fe5286ed965bd4ae5aec2213"
+        },
+        {
+          "path": "processor/rule/lifecycle_runtime_test.go",
+          "declaration": "startRuleRuntimeForTest",
+          "fingerprint": "e5ef031e45f56b51628af6729ffdb715d5d298030f66c29b3ba3c84cc799ee02"
+        }
+      ]
+    },
+    {
+      "identity": "processor/rule/lifecycle_runtime_test.go|TestRuleStopDeadlineArmCancelsAndJoinsCoordinator|defer|cancelStart|unresolved callback|unknown|1",
+      "site_fingerprint": "cd280e40cf5f43238633ec3b15c8be535076f7b8b385c32049981bb3ccd347fb",
+      "classification": "non-lifecycle-stop",
+      "question": "deferred or cleanup callback variable target unresolved",
+      "reason": "The helper returns the unchanged second result of context.WithCancel in result slot one; this exact caller defers that genuine cancellation function.",
+      "reviewer": "semstreams-reviewer / test_reliability_review; exact source review retained in the #1064 OpenSpec review packet",
+      "owner_issue": "#1064",
+      "dependencies": [
+        {
+          "path": "processor/rule/lifecycle_runtime_test.go",
+          "declaration": "TestRuleStopDeadlineArmCancelsAndJoinsCoordinator",
+          "fingerprint": "d84621820de8161051215fbfd18096e8c5077da6224d7c3df49f36f4be346d82"
+        },
+        {
+          "path": "processor/rule/lifecycle_runtime_test.go",
+          "declaration": "startRuleRuntimeForTest",
+          "fingerprint": "e5ef031e45f56b51628af6729ffdb715d5d298030f66c29b3ba3c84cc799ee02"
+        }
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "baseline": {
+        "identity": "processor/rule/actions_run_scope_integration_test.go|newRunScopeHarness|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "20fe7bb88f41eaf9b46afa372ae3af3b8001bf0bfdde7b12fc06dbdcdc16abea",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/actions_run_scope_integration_test.go",
+      "function": "newRunScopeHarness",
+      "line": 130,
+      "source_line": "_ = ingest.Stop(context.Background())",
+      "function_line": 108,
+      "function_end": 161,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/cron_scheduler_integration_test.go|startCronProcessorForTest|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "1e8b453968ffdeb130db613485896063395df28536845ad285cb0f2ae0c82378",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/cron_scheduler_integration_test.go",
+      "function": "startCronProcessorForTest",
+      "line": 87,
+      "source_line": "t.Cleanup(func() { _ = proc.Stop(context.Background()) })",
+      "function_line": 60,
+      "function_end": 95,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/cron_scheduler_test.go|TestCronScheduler_StartActuallyFiresFromRobfig|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.CronScheduler|unbounded|1",
+        "fingerprint": "65db16e7a63891f3b5367f04425e0e7ea7f06beea8a536973ce93faaa4ddb0bc",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/cron_scheduler_test.go",
+      "function": "TestCronScheduler_StartActuallyFiresFromRobfig",
+      "line": 585,
+      "source_line": "if err := s.Stop(context.Background()); err != nil {",
+      "function_line": 557,
+      "function_end": 603,
+      "package": "package rule",
+      "build": "default",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/cron_scheduler_test.go|TestCronScheduler_StartTwiceFails|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.CronScheduler|unbounded|1",
+        "fingerprint": "b06349b2d2756a67d64c6dca999643846dabaaff14a90f4d56043b52e825ca34",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/cron_scheduler_test.go",
+      "function": "TestCronScheduler_StartTwiceFails",
+      "line": 245,
+      "source_line": "if err := s.Stop(context.Background()); err != nil {",
+      "function_line": 236,
+      "function_end": 254,
+      "package": "package rule",
+      "build": "default",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/cron_scheduler_test.go|startSchedulerForTest|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.CronScheduler|unbounded|1",
+        "fingerprint": "9d8cb39caff1be1e3b787794e611d84726656972c6875e80d606740d78884750",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/cron_scheduler_test.go",
+      "function": "startSchedulerForTest",
+      "line": 100,
+      "source_line": "if err := scheduler.Stop(context.Background()); err != nil {",
+      "function_line": 94,
+      "function_end": 105,
+      "package": "package rule",
+      "build": "default",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceNonZero_CoalescingSetCreated|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/entity_watcher_debounce_integration_test.go",
+      "function": "TestIntegration_Processor_DebounceNonZero_CoalescingSetCreated",
+      "line": 202,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 178,
+      "function_end": 213,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_ConfigValidation|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/entity_watcher_debounce_integration_test.go",
+      "function": "TestIntegration_Processor_DebounceZero_ConfigValidation",
+      "line": 324,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 299,
+      "function_end": 335,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_EdgeCases|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/entity_watcher_debounce_integration_test.go",
+      "function": "TestIntegration_Processor_DebounceZero_EdgeCases",
+      "line": 390,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 336,
+      "function_end": 405,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_ImmediateProcessing|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/entity_watcher_debounce_integration_test.go",
+      "function": "TestIntegration_Processor_DebounceZero_ImmediateProcessing",
+      "line": 118,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 90,
+      "function_end": 133,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_NoCoalescingSet|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/entity_watcher_debounce_integration_test.go",
+      "function": "TestIntegration_Processor_DebounceZero_NoCoalescingSet",
+      "line": 70,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 18,
+      "function_end": 89,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_NoTickerSpinning|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/entity_watcher_debounce_integration_test.go",
+      "function": "TestIntegration_Processor_DebounceZero_NoTickerSpinning",
+      "line": 158,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 134,
+      "function_end": 177,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/entity_watcher_debounce_integration_test.go|TestIntegration_Processor_DebounceZero_Transition|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "e02e1246de4c0c02f903b6fbf9bc66c5b2374bc802a18d15eeb46992abfadc9f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/entity_watcher_debounce_integration_test.go",
+      "function": "TestIntegration_Processor_DebounceZero_Transition",
+      "line": 280,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 214,
+      "function_end": 298,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/entity_watcher_hardening_integration_test.go|TestEntityWatcherHardeningRealNATS|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "99b7bd090194cdd5ee2f7567f4d0c152136c209b0f70b02965e8dc75c447251f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/entity_watcher_hardening_integration_test.go",
+      "function": "TestEntityWatcherHardeningRealNATS",
+      "line": 75,
+      "source_line": "_ = processor.Stop(context.Background())",
+      "function_line": 25,
+      "function_end": 132,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/entity_watcher_integration_test.go|TestEntityWatcher_BoundedEvaluations|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "931056e7b9f9ce079d13d1b449469390ee703875c8b58b9abd4963d494bd30a6",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/entity_watcher_integration_test.go",
+      "function": "TestEntityWatcher_BoundedEvaluations",
+      "line": 411,
+      "source_line": "processor.Stop(context.Background())",
+      "function_line": 278,
+      "function_end": 527,
+      "package": "package rule_test",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/entity_watcher_integration_test.go|TestEntityWatcher_RuleTriggerDebouncing|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "931056e7b9f9ce079d13d1b449469390ee703875c8b58b9abd4963d494bd30a6",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/entity_watcher_integration_test.go",
+      "function": "TestEntityWatcher_RuleTriggerDebouncing",
+      "line": 122,
+      "source_line": "processor.Stop(context.Background())",
+      "function_line": 46,
+      "function_end": 277,
+      "package": "package rule_test",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/rule_integration_test.go|TestIntegration_DynamicRuleCRUD|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "05b964672ffbe699aa63ef060f7743a159fdd16267487f6c77ba16b7a471a585",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/rule_integration_test.go",
+      "function": "TestIntegration_DynamicRuleCRUD",
+      "line": 247,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 210,
+      "function_end": 323,
+      "package": "package rule_test",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/rule_integration_test.go|TestIntegration_DynamicWatchPatterns|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "05b964672ffbe699aa63ef060f7743a159fdd16267487f6c77ba16b7a471a585",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/rule_integration_test.go",
+      "function": "TestIntegration_DynamicWatchPatterns",
+      "line": 541,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 478,
+      "function_end": 623,
+      "package": "package rule_test",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/rule_integration_test.go|TestIntegration_GraphIntegration|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "05b964672ffbe699aa63ef060f7743a159fdd16267487f6c77ba16b7a471a585",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/rule_integration_test.go",
+      "function": "TestIntegration_GraphIntegration",
+      "line": 681,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 624,
+      "function_end": 727,
+      "package": "package rule_test",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/rule_integration_test.go|TestIntegration_KVEntityStateWatch|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "ce9d5d44dea25feee649a327a3932f3ee96c84ce53b8b8a840eca69bd47d290f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/rule_integration_test.go",
+      "function": "TestIntegration_KVEntityStateWatch",
+      "line": 147,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 69,
+      "function_end": 209,
+      "package": "package rule_test",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/rule_integration_test.go|TestIntegration_PrometheusMetrics|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "ce9d5d44dea25feee649a327a3932f3ee96c84ce53b8b8a840eca69bd47d290f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/rule_integration_test.go",
+      "function": "TestIntegration_PrometheusMetrics",
+      "line": 447,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 389,
+      "function_end": 477,
+      "package": "package rule_test",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/rule_integration_test.go|TestIntegration_TransitionOperator_UpdateKV|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "ce9d5d44dea25feee649a327a3932f3ee96c84ce53b8b8a840eca69bd47d290f",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/rule_integration_test.go",
+      "function": "TestIntegration_TransitionOperator_UpdateKV",
+      "line": 831,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 728,
+      "function_end": 911,
+      "package": "package rule_test",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/state_cleanup_integration_test.go|TestEntityWatcher_DeletedEntityCleansRuleState|cleanup|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "7189ae8fed11c03416e576756eb2baca5f37319f38fb970750beef5315473338",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/state_cleanup_integration_test.go",
+      "function": "TestEntityWatcher_DeletedEntityCleansRuleState",
+      "line": 47,
+      "source_line": "t.Cleanup(func() { _ = proc.Stop(context.Background()) })",
+      "function_line": 25,
+      "function_end": 91,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/stateful_integration_test.go|TestStatefulEvaluator_Integration|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
+        "fingerprint": "a206871483bc50a441e2bd2ecafea34e809764fb2a45bfd86e1b42e54211dee0",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/stateful_integration_test.go",
+      "function": "TestStatefulEvaluator_Integration",
+      "line": 44,
+      "source_line": "defer processor.Stop(context.Background())",
+      "function_line": 17,
+      "function_end": 91,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    },
+    {
+      "baseline": {
+        "identity": "processor/rule/triple_mutator_revision_integration_test.go|newRevisionClaimHarness|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "20fe7bb88f41eaf9b46afa372ae3af3b8001bf0bfdde7b12fc06dbdcdc16abea",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/rule/triple_mutator_revision_integration_test.go",
+      "function": "newRevisionClaimHarness",
+      "line": 74,
+      "source_line": "_ = ingest.Stop(context.Background())",
+      "function_line": 46,
+      "function_end": 92,
+      "package": "package rule",
+      "build": "integration",
+      "skip_lines": []
+    }
+  ],
+  "base": "caa98f5acae60efbc669ad1e1795ab6e903abd42"
+}
