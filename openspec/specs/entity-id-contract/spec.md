@@ -643,7 +643,7 @@ per-deployment by construction and cannot be cloned through a template.
 #### Scenario: an operator-provisioned identity record is adopted unsuffixed
 
 - **GIVEN** a configuration declaring `platform.id` `field-ops-7`
-- **AND** an operator who created `semstreams_config/platform_identity` as `{"org":"acme","stem":"field-ops-7","id":"field-ops-7"}` before the deployment's first boot
+- **AND** an operator who created `semstreams_config_acme_field-ops-7/platform_identity` as `{"org":"acme","stem":"field-ops-7","id":"field-ops-7"}` before the deployment's first boot
 - **WHEN** the deployment boots
 - **THEN** its effective `platform` position is exactly `field-ops-7` and no suffix is minted
 - **AND** the test that verifies this is `TestPreCreatedIdentityRecordIsAdoptedUnsuffixed`
