@@ -1741,16 +1741,21 @@ func (s *TieredScenario) sendNLQuery(ctx context.Context, query string) (*global
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
 	nlQuery := map[string]any{
-		"query": `query($query: String!, $maxCommunities: Int) {
-			globalSearch(query: $query, maxCommunities: $maxCommunities) {
+		"query": `query($query: String!, $maxCommunities: Int, $includeSummaries: Boolean) {
+			globalSearch(query: $query, maxCommunities: $maxCommunities, includeSummaries: $includeSummaries) {
 				entities { id type }
 				communitySummaries { communityId summary relevance }
 				count
 			}
 		}`,
+		// includeSummaries:false: the NL stages assert on entities only, so the
+		// probe never pays for community enrichment and answer synthesis it does
+		// not read (#1426; under a model synthesizer that cost exceeded the 10 s
+		// client deadline on every probe).
 		"variables": map[string]any{
-			"query":          query,
-			"maxCommunities": 10,
+			"query":            query,
+			"maxCommunities":   10,
+			"includeSummaries": false,
 		},
 	}
 
@@ -1828,6 +1833,7 @@ func (s *TieredScenario) executeTestNLPathIntent(ctx context.Context, result *Re
 
 	allResults := make([]map[string]any, 0, len(testCases))
 	passedCount := 0
+	firstFailure := ""
 
 	for _, tc := range testCases {
 		resp, latency, err := s.sendNLQuery(ctx, tc.query)
@@ -1843,6 +1849,9 @@ func (s *TieredScenario) executeTestNLPathIntent(ctx context.Context, result *Re
 		if err != nil {
 			testResult["success"] = false
 			testResult["error"] = err.Error()
+			if firstFailure == "" {
+				firstFailure = fmt.Sprintf("%s: %v", tc.name, err)
+			}
 			allResults = append(allResults, testResult)
 			continue
 		}
@@ -1866,6 +1875,9 @@ func (s *TieredScenario) executeTestNLPathIntent(ctx context.Context, result *Re
 			testResult["message"] = fmt.Sprintf("NL path intent query returned %d entities", entityCount)
 		} else if tc.expectResults && entityCount == 0 {
 			testResult["message"] = "Expected results but got none - path routing may not be working"
+			if firstFailure == "" {
+				firstFailure = fmt.Sprintf("%s: returned 0 entities", tc.name)
+			}
 		}
 
 		allResults = append(allResults, testResult)
@@ -1881,10 +1893,13 @@ func (s *TieredScenario) executeTestNLPathIntent(ctx context.Context, result *Re
 		"message":      fmt.Sprintf("NL path intent: %d/%d tests passed", passedCount, len(testCases)),
 	}
 
-	// Warn if no tests passed, but don't fail - this allows gradual rollout
+	// No probe returning entities is the outcome this stage exists to detect
+	// (#1426). firstFailure carries a probe's transport error verbatim (a client
+	// deadline reads "Client.Timeout exceeded") or "returned 0 entities", so the
+	// two never share a message.
 	if passedCount == 0 {
-		result.Warnings = append(result.Warnings,
-			"NL path intent tests returned no results - classifier routing may need attention")
+		return fmt.Errorf("NL path intent: 0/%d probes returned entities; first failure: %s",
+			len(testCases), firstFailure)
 	}
 
 	return nil
@@ -1917,6 +1932,7 @@ func (s *TieredScenario) executeTestNLTemporalIntent(ctx context.Context, result
 
 	allResults := make([]map[string]any, 0, len(testCases))
 	passedCount := 0
+	firstFailure := ""
 
 	for _, tc := range testCases {
 		resp, latency, err := s.sendNLQuery(ctx, tc.query)
@@ -1932,6 +1948,9 @@ func (s *TieredScenario) executeTestNLTemporalIntent(ctx context.Context, result
 		if err != nil {
 			testResult["success"] = false
 			testResult["error"] = err.Error()
+			if firstFailure == "" {
+				firstFailure = fmt.Sprintf("%s: %v", tc.name, err)
+			}
 			allResults = append(allResults, testResult)
 			continue
 		}
@@ -1959,6 +1978,9 @@ func (s *TieredScenario) executeTestNLTemporalIntent(ctx context.Context, result
 			testResult["message"] = fmt.Sprintf("NL temporal query returned %d entities", entityCount)
 		} else if tc.expectResults && entityCount == 0 {
 			testResult["message"] = "Expected results but got none - temporal filtering may be too restrictive"
+			if firstFailure == "" {
+				firstFailure = fmt.Sprintf("%s: returned 0 entities", tc.name)
+			}
 		}
 
 		allResults = append(allResults, testResult)
@@ -1974,10 +1996,11 @@ func (s *TieredScenario) executeTestNLTemporalIntent(ctx context.Context, result
 		"message":      fmt.Sprintf("NL temporal intent: %d/%d tests passed", passedCount, len(testCases)),
 	}
 
-	// Warn if no tests passed
+	// No probe returning entities is the outcome this stage exists to detect
+	// (#1426); firstFailure keeps a deadline distinct from an empty answer.
 	if passedCount == 0 {
-		result.Warnings = append(result.Warnings,
-			"NL temporal intent tests returned no results - temporal filtering may need attention")
+		return fmt.Errorf("NL temporal intent: 0/%d probes returned entities; first failure: %s",
+			len(testCases), firstFailure)
 	}
 
 	return nil

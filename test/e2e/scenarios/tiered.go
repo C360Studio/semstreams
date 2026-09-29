@@ -330,7 +330,9 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// validate_partition_colocation.go header). Only an unreachable partition
 		// index (GetAllCommunities) fails.
 		{"validate-partition-colocation", s.executePartitionColocation, []string{"semantic"}},
-		// NL intent routing tests (validates classifier → strategy routing through globalSearch)
+		// NL intent routing tests (validates classifier → strategy routing through globalSearch).
+		// The probes send includeSummaries:false, so no variant's synthesizer is on
+		// their path, and 0 probes returning entities fails the stage (#1426).
 		{"test-nl-path-intent", s.executeTestNLPathIntent, nil},
 		{"test-nl-temporal-intent", s.executeTestNLTemporalIntent, []string{"statistical", "semantic"}},
 		// Alias resolution via ALIAS_INDEX (structural - no ML)
