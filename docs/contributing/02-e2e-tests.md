@@ -81,7 +81,7 @@ Neural embeddings + LLM. Full ML stack validation.
 
 | Duration | Purpose | Dependencies |
 |----------|---------|--------------|
-| ~90s | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
+| ~15 min on CI (gh#1117, 2026-09-29) | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
 
 **Coverage**:
 - All statistical tier coverage
