@@ -1,0 +1,368 @@
+diff --git a/openspec/changes/archive/2026-09-29-owner-load-reliability/evidence/native-kv-lifecycle-diagnostic.go.txt b/natsclient/kv_lifecycle_diagnostic_integration_test.go
+index 59536d53..56b4b73d 100644
+--- a/openspec/changes/archive/2026-09-29-owner-load-reliability/evidence/native-kv-lifecycle-diagnostic.go.txt
++++ b/natsclient/kv_lifecycle_diagnostic_integration_test.go
+@@ -29,8 +29,8 @@ const (
+ 	kvDiagnosticServer      = "2.14.4-alpine@sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66"
+ 	kvDiagnosticWorkBudget  = 18 * time.Second
+ 	kvDiagnosticExitBudget  = 8 * time.Second
+-	kvDiagnosticKillAfter   = 27 * time.Second
+-	kvDiagnosticJoinReserve = 3 * time.Second
++	kvDiagnosticKillAfter   = 35 * time.Second
++	kvDiagnosticJoinReserve = 5 * time.Second
+ )
+ 
+ type kvDiagnosticEvent struct {
+@@ -110,7 +110,7 @@ func TestIntegration_KVFilterLifecycleDiagnostic(t *testing.T) {
+ 		t.Skip("opt-in native lifecycle diagnostic")
+ 	}
+ 	started := time.Now()
+-	cooperativeDeadline := started.Add(140 * time.Second)
++	cooperativeDeadline := started.Add(120 * time.Second)
+ 	setupCtx, setupCancel := context.WithTimeout(t.Context(), 20*time.Second)
+ 	defer setupCancel()
+ 	fixture, err := newTestClient(setupCtx, productionTestClientFactoryDeps,
+@@ -141,9 +141,9 @@ func TestIntegration_KVFilterLifecycleDiagnostic(t *testing.T) {
+ 	t.Logf("DIAGNOSTIC fixture bucket=%s filter=%s count=%d setup=%s server=%s SDK=nats.go/v1.52.0",
+ 		kvDiagnosticBucket, kvDiagnosticFilter, kvDiagnosticCount, time.Since(started), kvDiagnosticServer)
+ 
+-	for _, name := range []string{"control", "cancel", "deadline"} {
++	for _, name := range []string{"control", "deadline"} {
+ 		if time.Until(cooperativeDeadline) < kvDiagnosticKillAfter+kvDiagnosticJoinReserve {
+-			t.Fatalf("DIAGNOSTIC admission stopped before %s: remaining=%s need=30s", name, time.Until(cooperativeDeadline))
++			t.Fatalf("DIAGNOSTIC admission stopped before %s: remaining=%s need=40s", name, time.Until(cooperativeDeadline))
+ 		}
+ 		if err := runKVFilterDiagnosticChild(t, name, fixture.URL, started); err != nil {
+ 			t.Fatalf("DIAGNOSTIC case=%s failed after %s: %v; following cases skipped", name, time.Since(started), err)
+@@ -158,6 +158,7 @@ func TestIntegration_KVFilterLifecycleDiagnosticChild(t *testing.T) {
+ 		t.Skip("diagnostic child only")
+ 	}
+ 	r := &kvDiagnosticReporter{start: time.Now(), name: name}
++	r.emit("child_entry", fmt.Sprintf("pid=%d", os.Getpid()))
+ 	if err := runKVFilterDiagnosticCase(t, r, os.Getenv("SEMSTREAMS_KV_LIFECYCLE_DIAGNOSTIC_URL")); err != nil {
+ 		r.emit("failure", err.Error())
+ 		t.Error(err)
+@@ -170,7 +171,7 @@ func runKVFilterDiagnosticChild(t *testing.T, name, url string, parentStart time
+ 	if err != nil {
+ 		return err
+ 	}
+-	cmd := exec.Command(exe, "-test.run=^TestIntegration_KVFilterLifecycleDiagnosticChild$", "-test.v", "-test.timeout=30s")
++	cmd := exec.Command(exe, "-test.run=^TestIntegration_KVFilterLifecycleDiagnosticChild$", "-test.v", "-test.timeout=33s")
+ 	cmd.Env = append(os.Environ(),
+ 		"SEMSTREAMS_KV_LIFECYCLE_DIAGNOSTIC_CHILD="+name,
+ 		"SEMSTREAMS_KV_LIFECYCLE_DIAGNOSTIC_URL="+url)
+@@ -206,12 +207,19 @@ func runKVFilterDiagnosticChild(t *testing.T, name, url string, parentStart time
+ 	}()
+ 	deadline := time.NewTimer(kvDiagnosticKillAfter)
+ 	defer deadline.Stop()
++	entryDeadline := time.NewTimer(5 * time.Second)
++	defer entryDeadline.Stop()
++	entryC := entryDeadline.C
+ 	seenDone := false
+ 	var lastEvent kvDiagnosticEvent
+ 	for waitDone != nil {
+ 		select {
+ 		case event := <-events:
+ 			lastEvent = event
++			if event.Kind == "child_entry" {
++				entryDeadline.Stop()
++				entryC = nil
++			}
+ 			if event.Kind == "done" {
+ 				seenDone = true
+ 			}
+@@ -219,6 +227,8 @@ func runKVFilterDiagnosticChild(t *testing.T, name, url string, parentStart time
+ 		case waitErr = <-waitDone:
+ 			joined = true
+ 			waitDone = nil
++		case <-entryC:
++			return fmt.Errorf("child pid=%d failed 5s startup-to-entry allowance; last_event=%+v", cmd.Process.Pid, lastEvent)
+ 		case <-deadline.C:
+ 			return fmt.Errorf("child pid=%d exceeded %s; last_event=%+v; parent_elapsed=%s",
+ 				cmd.Process.Pid, kvDiagnosticKillAfter, lastEvent, time.Since(parentStart))
+@@ -258,20 +268,110 @@ func kvDiagnosticTerminate(kill func() error, done <-chan error, budget time.Dur
+ 	return killErr, waitErr, joined
+ }
+ 
++// Trace is an SDK callback: it only takes a bounded current-goroutine snapshot
++// and appends to a synchronized fixed-capacity buffer. Attribution requires a
++// source-specific stack frame; timing and subject alone never assign an owner.
++const (
++	kvDiagnosticTraceLimit = 128
++	kvDiagnosticStackLimit = 16 << 10
++)
++
++type kvDiagnosticTraceRecord struct {
++	Kind     string `json:"kind"`
++	Elapsed  string `json:"elapsed"`
++	Subject  string `json:"subject"`
++	Consumer string `json:"consumer,omitempty"`
++	Origin   string `json:"origin"`
++	Stack    string `json:"stack"`
++}
++
++type kvDiagnosticTrace struct {
++	mu        sync.Mutex
++	start     time.Time
++	records   []kvDiagnosticTraceRecord
++	overflow  bool
++	truncated bool
++}
++
++func kvDiagnosticDeletionOrigin(subject, stack string) string {
++	if !strings.Contains(subject, ".CONSUMER.DELETE.") {
++		return "not_deletion"
++	}
++	switch {
++	case strings.Contains(stack, "resetOrderedConsumer.func"):
++		return "async_ordered_recovery"
++	case strings.Contains(stack, "jetstream.(*kvs).ListKeysFiltered.func1") &&
++		strings.Contains(stack, "(*watcher).Stop"):
++		return "native_forward_deferred_stop"
++	case strings.Contains(stack, "(*kvDiagnosticStopObserver).Stop") &&
++		strings.Contains(stack, "collectFilteredKeys"):
++		return "framework_delegated_stop"
++	case strings.Contains(stack, "(*js).subscribe.func") &&
++		strings.Contains(stack, "(*Subscription).Unsubscribe"):
++		return "context_completion_unsubscribe"
++	default:
++		return "unknown"
++	}
++}
++
++func (tr *kvDiagnosticTrace) record(kind, subject string) {
++	buf := make([]byte, kvDiagnosticStackLimit)
++	n := runtime.Stack(buf, false)
++	stack := string(buf[:n])
++	consumer := ""
++	if prefix, suffix, found := strings.Cut(subject, ".CONSUMER.DELETE."); found && prefix != "" {
++		tokens := strings.Split(suffix, ".")
++		if len(tokens) == 2 {
++			consumer = tokens[1]
++		}
++	}
++	rec := kvDiagnosticTraceRecord{Kind: kind, Elapsed: time.Since(tr.start).String(),
++		Subject: subject, Consumer: consumer, Origin: kvDiagnosticDeletionOrigin(subject, stack), Stack: stack}
++	tr.mu.Lock()
++	defer tr.mu.Unlock()
++	if n == len(buf) {
++		tr.truncated = true
++	}
++	if len(tr.records) >= kvDiagnosticTraceLimit {
++		tr.overflow = true
++		return
++	}
++	tr.records = append(tr.records, rec)
++}
++
++func (tr *kvDiagnosticTrace) snapshot() ([]kvDiagnosticTraceRecord, error) {
++	tr.mu.Lock()
++	defer tr.mu.Unlock()
++	records := append([]kvDiagnosticTraceRecord(nil), tr.records...)
++	if tr.overflow || tr.truncated {
++		return records, fmt.Errorf("trace incomplete: overflow=%t truncated=%t", tr.overflow, tr.truncated)
++	}
++	return records, nil
++}
++
+ type kvDiagnosticBucketDecorator struct {
+ 	jetstream.KeyValue
+-	r            *kvDiagnosticReporter
+-	injected     bool
+-	acquired     chan *kvDiagnosticFacade
+-	observer     *kvDiagnosticStopObserver
+-	frameworkCtx context.Context
++	r              *kvDiagnosticReporter
++	injected       bool
++	acquired       chan *kvDiagnosticFacade
++	observer       *kvDiagnosticStopObserver
++	frameworkCtx   context.Context
++	completionStop func() bool
++	completionDone chan struct{}
+ }
+ 
+ func (b *kvDiagnosticBucketDecorator) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+ 	deadline, ok := ctx.Deadline()
+ 	b.r.emit("acquire", fmt.Sprintf("filter=%q deadline_present=%t remaining=%s", filters, ok, time.Until(deadline)))
+ 	b.frameworkCtx = ctx
++	b.completionDone = make(chan struct{})
++	b.completionStop = context.AfterFunc(ctx, func() {
++		b.r.emit("framework_context_done", fmt.Sprintf("error=%v", ctx.Err()))
++		close(b.completionDone)
++	})
++	constructionStart := time.Now()
+ 	native, err := b.KeyValue.ListKeysFiltered(ctx, filters...)
++	b.r.emit("acquire_return", fmt.Sprintf("duration=%s error=%v", time.Since(constructionStart), err))
+ 	if err != nil {
+ 		b.r.emit("acquire_error", err.Error())
+ 		return nil, err
+@@ -290,6 +390,18 @@ func (b *kvDiagnosticBucketDecorator) ListKeysFiltered(ctx context.Context, filt
+ 	return facade, nil
+ }
+ 
++func (b *kvDiagnosticBucketDecorator) joinCompletion(ctx context.Context) error {
++	if b.completionStop == nil || b.completionStop() {
++		return nil
++	}
++	select {
++	case <-b.completionDone:
++		return nil
++	case <-ctx.Done():
++		return fmt.Errorf("framework context callback join unresolved: %w", ctx.Err())
++	}
++}
++
+ type kvDiagnosticStopObserver struct {
+ 	jetstream.KeyLister
+ 	r     *kvDiagnosticReporter
+@@ -410,6 +522,7 @@ type kvDiagnosticCaseOwner struct {
+ 	listDone       <-chan kvDiagnosticListResult
+ 	facade         *kvDiagnosticFacade
+ 	injected       bool
++	decorator      *kvDiagnosticBucketDecorator
+ 	listJoined     bool
+ 	forwardJoined  bool
+ 	closed         bool
+@@ -515,6 +628,13 @@ func (o *kvDiagnosticCaseOwner) finish() error {
+ 			return fmt.Errorf("terminal join exceeded shared allowance: %w", ctx.Err())
+ 		}
+ 	}
++	if o.decorator != nil {
++		if err := o.decorator.joinCompletion(ctx); err != nil {
++			o.conn.Close()
++			o.r.emit("ownership_unresolved", err.Error())
++			return err
++		}
++	}
+ 	if !o.closed {
+ 		if err := ctx.Err(); err != nil {
+ 			o.conn.Close()
+@@ -625,7 +745,19 @@ func runKVFilterDiagnosticCase(t *testing.T, r *kvDiagnosticReporter, url string
+ 		return fmt.Errorf("connect child client: %w", err)
+ 	}
+ 	conn := client.GetConnection()
++	trace := &kvDiagnosticTrace{start: r.start}
+ 	var owner *kvDiagnosticCaseOwner
++	defer func() {
++		records, traceErr := trace.snapshot()
++		for i, rec := range records {
++			data, _ := json.Marshal(rec)
++			r.emit("sdk_trace", fmt.Sprintf("index=%d %s", i, data))
++		}
++		if owner != nil && (!owner.listJoined || (owner.facade != nil && !owner.forwardJoined)) {
++			r.emit("trace_limit", "owned completion unresolved; trace snapshot may omit later requests")
++		}
++		retErr = errors.Join(retErr, traceErr)
++	}()
+ 	defer func() {
+ 		if owner == nil {
+ 			closeCtx, closeCancel := context.WithTimeout(context.Background(), kvDiagnosticExitBudget)
+@@ -635,7 +767,14 @@ func runKVFilterDiagnosticCase(t *testing.T, r *kvDiagnosticReporter, url string
+ 			conn.Close() // Last process-local fallback after an unresolved owner.
+ 		}
+ 	}()
+-	bucket, err := client.GetKeyValueBucket(workCtx, kvDiagnosticBucket)
++	tracedJS, err := jetstream.New(conn, jetstream.WithClientTrace(&jetstream.ClientTrace{
++		RequestSent:      func(subject string, _ []byte) { trace.record("request", subject) },
++		ResponseReceived: func(subject string, _ []byte, _ nats.Header) { trace.record("response", subject) },
++	}))
++	if err != nil {
++		return fmt.Errorf("construct traced JetStream: %w", err)
++	}
++	bucket, err := tracedJS.KeyValue(workCtx, kvDiagnosticBucket)
+ 	if err != nil {
+ 		return fmt.Errorf("get child bucket: %w", err)
+ 	}
+@@ -644,6 +783,7 @@ func runKVFilterDiagnosticCase(t *testing.T, r *kvDiagnosticReporter, url string
+ 		KeyValue: bucket, r: r, injected: injected, acquired: make(chan *kvDiagnosticFacade, 1),
+ 	}
+ 	store := client.NewKVStore(decorator)
++	r.emit("operation_entry", fmt.Sprintf("framework_default=%s", DefaultKVOptions().Timeout))
+ 	listCtx, cancelList := context.WithCancel(workCtx)
+ 	listDone := make(chan kvDiagnosticListResult, 1)
+ 	go func() {
+@@ -652,7 +792,7 @@ func runKVFilterDiagnosticCase(t *testing.T, r *kvDiagnosticReporter, url string
+ 	}()
+ 	owner = &kvDiagnosticCaseOwner{
+ 		r: r, client: client, conn: conn, caseStart: r.start, cancelList: cancelList,
+-		acquired: decorator.acquired, listDone: listDone, injected: injected,
++		acquired: decorator.acquired, listDone: listDone, injected: injected, decorator: decorator,
+ 	}
+ 	defer func() { retErr = errors.Join(retErr, owner.finish()) }()
+ 	var facade *kvDiagnosticFacade
+@@ -686,10 +826,6 @@ func runKVFilterDiagnosticCase(t *testing.T, r *kvDiagnosticReporter, url string
+ 		}
+ 		r.emit("native_blocked", fmt.Sprintf("forward_id=%s watcher_id=%s\nFORWARD_STACK:\n%s\nWATCHER_STACK:\n%s",
+ 			forwardID, watcherID, forwardStack, watcherStack))
+-		if r.name == "cancel" {
+-			cancelList()
+-			r.emit("cancel", "after both native blocked-stage witnesses")
+-		}
+ 	}
+ 	var result kvDiagnosticListResult
+ 	select {
+@@ -718,10 +854,7 @@ func runKVFilterDiagnosticCase(t *testing.T, r *kvDiagnosticReporter, url string
+ 		}
+ 		r.emit("control_exact_set", fmt.Sprintf("matched all %d seeded keys", len(want)))
+ 	} else {
+-		want := context.Canceled
+-		if r.name == "deadline" {
+-			want = context.DeadlineExceeded
+-		}
++		want := context.DeadlineExceeded
+ 		if !errors.Is(result.err, want) || result.keys != nil {
+ 			return fmt.Errorf("invalid failed snapshot: keys=%d nil=%t error=%v want=%v", len(result.keys), result.keys == nil, result.err, want)
+ 		}
+@@ -746,7 +879,7 @@ func runKVFilterDiagnosticCase(t *testing.T, r *kvDiagnosticReporter, url string
+ 		r.emit("native_after_release", fmt.Sprintf("forward_id=%s present=%t watcher_id=%s present=%t",
+ 			forwardID, forwardPresent, watcherID, watcherPresent))
+ 	}
+-	r.emit("done", "case completed; native callback state reported separately")
++	r.emit("done", "case completed; native callback join remains unproven")
+ 	return nil
+ }
+ 
+@@ -831,3 +964,43 @@ func TestKVFilterDiagnosticExpiredGate(t *testing.T) {
+ 		t.Fatalf("expired framework context classified as blocked witness: %v", err)
+ 	}
+ }
++
++func TestKVFilterDiagnosticTraceBoundedAndUnknown(t *testing.T) {
++	tr := &kvDiagnosticTrace{start: time.Now()}
++	tr.record("request", "$JS.API.CONSUMER.DELETE.KV_X.C")
++	records, err := tr.snapshot()
++	if err != nil || len(records) != 1 || records[0].Origin != "unknown" || records[0].Consumer != "C" {
++		t.Fatalf("unattributed deletion: records=%+v err=%v", records, err)
++	}
++	for range kvDiagnosticTraceLimit {
++		tr.record("request", "$JS.API.INFO")
++	}
++	_, err = tr.snapshot()
++	if err == nil || !strings.Contains(err.Error(), "overflow=true") {
++		t.Fatalf("bounded recorder silently overflowed: %v", err)
++	}
++	cases := []struct{ stack, want string }{
++		{"nats.(*Subscription).resetOrderedConsumer.func1", "async_ordered_recovery"},
++		{"jetstream.(*kvs).ListKeysFiltered.func1\njetstream.(*watcher).Stop", "native_forward_deferred_stop"},
++		{"natsclient.(*kvDiagnosticStopObserver).Stop\nnatsclient.collectFilteredKeys", "framework_delegated_stop"},
++		{"nats.(*js).subscribe.func3\nnats.(*Subscription).Unsubscribe", "context_completion_unsubscribe"},
++		{"natsclient.(*kvDiagnosticStopObserver).Stop", "unknown"},
++	}
++	for _, tc := range cases {
++		if got := kvDiagnosticDeletionOrigin("$JS.API.CONSUMER.DELETE.KV_X.C", tc.stack); got != tc.want {
++			t.Errorf("origin=%q want=%q stack=%q", got, tc.want, tc.stack)
++		}
++	}
++	if got := kvDiagnosticDeletionOrigin("$JS.API.CONSUMER.INFO.KV_X.C", cases[0].stack); got != "not_deletion" {
++		t.Fatalf("non-delete attribution=%q", got)
++	}
++}
++
++func TestKVFilterDiagnosticCompletionJoinBound(t *testing.T) {
++	ctx, cancel := context.WithCancel(t.Context())
++	decorator := &kvDiagnosticBucketDecorator{completionStop: func() bool { return false }, completionDone: make(chan struct{})}
++	cancel()
++	if err := decorator.joinCompletion(ctx); !errors.Is(err, context.Canceled) {
++		t.Fatalf("unjoined context callback did not report cancellation: %v", err)
++	}
++}

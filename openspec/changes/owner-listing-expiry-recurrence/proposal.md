@@ -19,7 +19,10 @@ The bounded inventory refresh passed independent review at SHA-256
 `6f3479feb76d24d9768fe05abd815df2187b9baf6c89ea01e0fa15d1d2ecfc5a`.
 The reduced two-case measurement design passed independent review at SHA-256
 `5e1e18c10f1d0aacda7d6b95e1042e44cc0c73d97862ce772997e2b891afd1f4`; root accepted the bounded diagnostic slice.
-The next gate is focused implementation and one measured pass, followed by independent evidence review.
+The focused checks, selected attribution mutation and single native measurement pass are complete and independently
+reviewed (review/measurement-evidence-final.md). The pass did not reproduce CI's additional interval.
+The next design question is phase/Stop evidence from the actual repeated predicate-forward workload; additional
+synthetic fault machinery and production repair remain unsupported by these observations.
 Production changes require measured cause and independent design/implementation review. Preserve the real framework
 five-second deadline, workloads, latency assertions and error propagation. No blind repetition, retry-to-green,
 timeout increase or weakened success criterion is authorized.
