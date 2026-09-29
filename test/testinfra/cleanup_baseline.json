@@ -2074,41 +2074,6 @@
       "owner_issue": "#1064"
     },
     {
-      "identity": "processor/rule/kv_hot_reload_integration_test.go|TestHotReload_DebounceCoalescing|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
-      "fingerprint": "e3d8c58514358b88fe81badb40b9f7b8461ba7bc8edf1e714d11933a2c6352d6",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/rule/kv_hot_reload_integration_test.go|TestHotReload_ReconcileFromKV|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
-      "fingerprint": "e3d8c58514358b88fe81badb40b9f7b8461ba7bc8edf1e714d11933a2c6352d6",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/rule/kv_hot_reload_integration_test.go|TestHotReload_SeedIdempotency|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
-      "fingerprint": "e3d8c58514358b88fe81badb40b9f7b8461ba7bc8edf1e714d11933a2c6352d6",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/rule/kv_hot_reload_integration_test.go|TestHotReload_SeedRespectsOperatorEdits|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
-      "fingerprint": "e3d8c58514358b88fe81badb40b9f7b8461ba7bc8edf1e714d11933a2c6352d6",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/rule/kv_hot_reload_integration_test.go|TestHotReload_WatcherPicksUpNewRule|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
-      "fingerprint": "e3d8c58514358b88fe81badb40b9f7b8461ba7bc8edf1e714d11933a2c6352d6",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
       "identity": "processor/rule/rule_integration_test.go|TestIntegration_DynamicRuleCRUD|defer|github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|unbounded|1",
       "fingerprint": "05b964672ffbe699aa63ef060f7743a159fdd16267487f6c77ba16b7a471a585",
       "classification": "unbounded-terminal-cleanup",
