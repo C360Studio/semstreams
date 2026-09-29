@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -210,7 +212,77 @@ func TestVerifySearchQuality(t *testing.T) {
 // B1 (owner Q1, "wait but bound"): validate-rules waits for the asserted counters
 // up to ValidationTimeout instead of sampling them once. The counters rise on a
 // chosen scrape, so the test synchronises on scrapes, not on sleeps.
+func TestValidateRules_WaitsForThresholdsWithinTheBound(t *testing.T) {
+	scenario := func(t *testing.T, riseOnScrape int64, timeout time.Duration) *TieredScenario {
+		t.Helper()
+		reg := prometheus.NewRegistry()
+		counter := func(name string, v float64) prometheus.Counter {
+			c := prometheus.NewCounter(prometheus.CounterOpts{Name: name, Help: name})
+			c.Add(v)
+			require.NoError(t, reg.Register(c))
+			return c
+		}
+		counter("semstreams_rule_evaluations_total", 200) // >= 100 skips the evaluation wait
+		firings := counter("semstreams_rule_triggers_total", 1)
+		counter("semstreams_rule_events_published_total", 5)
+		var scrapes atomic.Int64
+		prom := promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if scrapes.Add(1) == riseOnScrape {
+				firings.Add(2)
+			}
+			prom.ServeHTTP(w, r)
+		}))
+		t.Cleanup(srv.Close)
+		return &TieredScenario{
+			metrics: client.NewMetricsClient(srv.URL),
+			config: &TieredConfig{
+				MinRuleFirings: 2, MinActionsDispatched: 1,
+				ValidationTimeout: timeout, PollInterval: time.Millisecond,
+			},
+		}
+	}
+
+	// Scrapes 1-2 are the baseline read and the presence check; the counter
+	// rises inside the bounded wait.
+	result := newResult()
+	require.NoError(t, scenario(t, 5, 30*time.Second).executeValidateRules(context.Background(), result))
+	require.Equal(t, 3, result.Metrics["rules_firings_count"])
+	require.Contains(t, result.Metrics, "rules_threshold_wait_ms")
+
+	// Never rises: the bound is the assertion's deadline.
+	err := scenario(t, -1, 20*time.Millisecond).executeValidateRules(context.Background(), newResult())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rule firings 1 < MinRuleFirings 2")
+}
+
 // M1: a failed rule-metrics read fails the stage instead of warning.
+func TestRuleStages_FailedMetricsReadFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "down", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	s := &TieredScenario{
+		metrics: client.NewMetricsClient(srv.URL),
+		// A bounded ValidationTimeout keeps the evaluation wait from polling a dead
+		// endpoint for the 30 s default.
+		config: &TieredConfig{
+			MinRuleFirings: 2, MinActionsDispatched: 1,
+			ValidationTimeout: 20 * time.Millisecond, PollInterval: time.Millisecond,
+		},
+	}
+	for name, stage := range map[string]func(context.Context, *Result) error{
+		"validate-rules":              s.executeValidateRules,
+		"wait-for-rule-stabilization": s.executeWaitForRuleStabilization,
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := stage(context.Background(), newResult())
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "rule metrics")
+		})
+	}
+}
+
 // H1: test-graphrag-global asserts on synthesized fields, so its client deadline
 // comes from globalSearchClientTimeout and a variant overlay can change it. The
 // stub holds the request until the client gives up; the 5 s ceiling is far above

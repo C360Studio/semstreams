@@ -488,11 +488,13 @@ func (s *TieredScenario) executeValidateRules(ctx context.Context, result *Resul
 	// Wait for rule evaluations if needed
 	s.waitForRuleEvaluations(ctx, baselineMetrics, sentCount, result)
 
-	// Get final metrics
-	finalMetrics, err := s.metrics.ExtractRuleMetrics(ctx)
+	// Wait (bounded) for the asserted counters, then read them once more as final.
+	// The firing count is fixture- and timing-driven (measured 1, 2, 3 at the read),
+	// so the assertion waits for it instead of sampling it (#1426 B1, owner Q1).
+	finalMetrics, waited, err := s.awaitRuleThresholds(ctx)
+	result.Metrics["rules_threshold_wait_ms"] = waited.Milliseconds()
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get final rule metrics: %v", err))
-		return nil
+		return fmt.Errorf("failed to read final rule metrics: %w", err)
 	}
 
 	// Record validation results
@@ -511,6 +513,30 @@ func (s *TieredScenario) executeValidateRules(ctx context.Context, result *Resul
 	}
 
 	return nil
+}
+
+// awaitRuleThresholds polls the rule metrics until firings >= MinRuleFirings and
+// actions >= MinActionsDispatched, or ValidationTimeout elapses, and returns the
+// last read with the time spent. The timeout is the assertion's deadline, not a
+// sleep: the caller asserts on whatever the last read says. A read that never
+// succeeds within the deadline is returned as the error.
+func (s *TieredScenario) awaitRuleThresholds(ctx context.Context) (*client.RuleMetrics, time.Duration, error) {
+	start := time.Now()
+	deadline := start.Add(s.config.ValidationTimeout)
+	for {
+		m, err := s.metrics.ExtractRuleMetrics(ctx)
+		met := err == nil &&
+			int(m.Firings) >= s.config.MinRuleFirings &&
+			int(m.ActionsDispatched) >= s.config.MinActionsDispatched
+		if met || !time.Now().Before(deadline) {
+			return m, time.Since(start), err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, time.Since(start), ctx.Err()
+		case <-time.After(s.config.PollInterval):
+		}
+	}
 }
 
 // checkReactiveMetricsPresence checks for rule engine metrics and returns presence map and count.
@@ -723,8 +749,7 @@ func (s *TieredScenario) executeWaitForRuleStabilization(ctx context.Context, re
 	// Get initial evaluation count
 	initialMetrics, err := s.metrics.ExtractRuleMetrics(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get initial rule metrics: %v", err))
-		return nil
+		return fmt.Errorf("failed to get initial rule metrics: %w", err)
 	}
 
 	// Poll until evaluation count stabilizes (no change for 2 consecutive polls)
