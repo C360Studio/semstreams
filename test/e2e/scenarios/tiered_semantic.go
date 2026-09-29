@@ -943,8 +943,7 @@ func (s *TieredScenario) validateEmbeddingQueueHealth(ctx context.Context, resul
 // Phase 8: Uses SSE streaming to wait for container groups before counting.
 func (s *TieredScenario) validateHierarchyInference(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping hierarchy inference validation")
-		return nil
+		return fmt.Errorf("NATS client not available for hierarchy inference validation")
 	}
 
 	fmt.Println("[HIERARCHY] Validating hierarchy inference container creation...")
@@ -964,8 +963,7 @@ func (s *TieredScenario) validateHierarchyInference(ctx context.Context, result 
 	// Get all entity IDs from ENTITY_STATES bucket
 	allIDs, err := s.natsClient.GetAllEntityIDs(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get entity IDs: %v", err))
-		return nil
+		return fmt.Errorf("failed to get entity IDs: %w", err)
 	}
 
 	// Count containers and source entities (non-container entities from testdata)
@@ -1004,15 +1002,6 @@ func (s *TieredScenario) validateHierarchyInference(ctx context.Context, result 
 	fmt.Printf("[HIERARCHY] Container types: group=%d, container=%d, level=%d\n",
 		containerTypes["group"], containerTypes["container"], containerTypes["level"])
 
-	// Validation: check if hierarchy inference is working
-	if containerCount < expectedMinContainers {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Hierarchy inference may not be working: only %d containers for %d source entities (expected at least %d)",
-				containerCount, sourceEntityCount, expectedMinContainers))
-	} else {
-		fmt.Printf("[HIERARCHY] Success: hierarchy inference validated (%d containers created)\n", containerCount)
-	}
-
 	result.Details["hierarchy_inference"] = map[string]any{
 		"container_count":         containerCount,
 		"source_entity_count":     sourceEntityCount,
@@ -1020,6 +1009,14 @@ func (s *TieredScenario) validateHierarchyInference(ctx context.Context, result 
 		"inference_working":       containerCount >= expectedMinContainers,
 		"container_types":         containerTypes,
 	}
+
+	// Too few containers is the outcome this stage exists to detect (#1426); an
+	// empty graph (0 < 0 is false) is caught by verify-entity-count earlier.
+	if containerCount < expectedMinContainers {
+		return fmt.Errorf("hierarchy inference not working: only %d containers for %d source entities (expected at least %d)",
+			containerCount, sourceEntityCount, expectedMinContainers)
+	}
+	fmt.Printf("[HIERARCHY] Success: hierarchy inference validated (%d containers created)\n", containerCount)
 
 	return nil
 }
@@ -1147,17 +1144,18 @@ func validateHierarchyProvenance(matches []client.AuthorityTripleMatch) (int, in
 // Phase 5: Verifies the IncomingIndex asymmetry fix is working (stores []IncomingEntry, not []string).
 func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client unavailable for incoming index validation")
-		return nil
+		return fmt.Errorf("NATS client unavailable for incoming index validation")
 	}
 
 	fmt.Println("[INCOMING INDEX] Validating incoming index predicate storage...")
 
 	// Get all entity IDs to find a container entity
 	allIDs, err := s.natsClient.GetAllEntityIDs(ctx)
-	if err != nil || len(allIDs) == 0 {
-		result.Warnings = append(result.Warnings, "No entities found for incoming index validation")
-		return nil
+	if err != nil {
+		return fmt.Errorf("failed to get entity IDs for incoming index validation: %w", err)
+	}
+	if len(allIDs) == 0 {
+		return fmt.Errorf("no entities found for incoming index validation")
 	}
 
 	// Look for a .group entity (created by hierarchy inference, has incoming edges)
@@ -1170,14 +1168,16 @@ func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, re
 	}
 
 	if containerID == "" {
-		// No container entities - may be structural tier (no hierarchy inference)
+		// Hierarchy inference runs in every tier this stage runs in and
+		// validate-hierarchy-inference asserts its containers earlier, so no
+		// container here is the stage validating nothing (#1426).
 		result.Metrics["incoming_predicate_validation"] = 0
 		result.Details["incoming_index_validation"] = map[string]any{
 			"container_found":      false,
 			"message":              "No container entities found (hierarchy inference may not have run)",
 			"predicate_validation": false,
 		}
-		return nil
+		return fmt.Errorf("no .group container entity found for incoming index validation")
 	}
 
 	// Get incoming entries for the container. A reader error is unambiguous — fail.
@@ -1233,13 +1233,6 @@ func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, re
 
 	// Validation
 	predicateValidation := predicateCount > 0
-	if len(entries) > 0 && predicateCount == 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("IncomingIndex has %d entries but none have predicates - index may use old []string format", len(entries)))
-	} else if predicateValidation {
-		fmt.Printf("[INCOMING INDEX] Success: bidirectional traversal preserves predicates (%d entries with predicates)\n", predicateCount)
-	}
-
 	result.Details["incoming_index_validation"] = map[string]any{
 		"container_id":            containerID,
 		"total_entries":           len(entries),
@@ -1249,6 +1242,14 @@ func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, re
 		"predicate_validation":    predicateValidation,
 	}
 
+	// Entries without predicates is the outcome this stage exists to detect (#1426).
+	if len(entries) > 0 && predicateCount == 0 {
+		return fmt.Errorf("IncomingIndex has %d entries for %s but none have predicates - index may use old []string format", len(entries), containerID)
+	}
+	if predicateValidation {
+		fmt.Printf("[INCOMING INDEX] Success: bidirectional traversal preserves predicates (%d entries with predicates)\n", predicateCount)
+	}
+
 	return nil
 }
 
@@ -1256,17 +1257,18 @@ func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, re
 // Phase 6: Story - "As an app developer, I can find who references a container and WHY."
 func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client unavailable for bidirectional traversal")
-		return nil
+		return fmt.Errorf("NATS client unavailable for bidirectional traversal")
 	}
 
 	fmt.Println("[BIDIRECTIONAL] Demonstrating predicate-aware reverse traversal...")
 
 	// Get all entity IDs to find a container
 	allIDs, err := s.natsClient.GetAllEntityIDs(ctx)
-	if err != nil || len(allIDs) == 0 {
-		result.Warnings = append(result.Warnings, "No entities found for bidirectional traversal")
-		return nil
+	if err != nil {
+		return fmt.Errorf("failed to get entity IDs for bidirectional traversal: %w", err)
+	}
+	if len(allIDs) == 0 {
+		return fmt.Errorf("no entities found for bidirectional traversal")
 	}
 
 	// Find a .group container entity
@@ -1284,14 +1286,13 @@ func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, res
 			"container_found": false,
 			"message":         "No container entities found (hierarchy inference may not have run)",
 		}
-		return nil
+		return fmt.Errorf("no .group container entity found for bidirectional traversal")
 	}
 
 	// Get incoming relationships WITH predicate information
 	incomingEntries, err := s.natsClient.GetIncomingEntries(ctx, containerID)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("incoming entries query failed: %v", err))
-		return nil
+		return fmt.Errorf("incoming entries query failed for %s: %w", containerID, err)
 	}
 
 	// Filter by predicate type - "Who are the MEMBERS of this container?"
@@ -1332,6 +1333,12 @@ func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, res
 		"predicates_present": memberCount > 0,
 	}
 
+	// No incoming "member" edge means the reverse traversal cannot say WHY an
+	// entity points at the container: the outcome this stage exists to detect (#1426).
+	if memberCount == 0 {
+		return fmt.Errorf("container %s has %d incoming edges but none is hierarchy.type.member", containerID, len(incomingEntries))
+	}
+
 	return nil
 }
 
@@ -1339,17 +1346,18 @@ func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, res
 // Phase 6: Story - "As a graph analyst, containers explicitly know their members via 'contains' edges."
 func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client unavailable for inverse edges validation")
-		return nil
+		return fmt.Errorf("NATS client unavailable for inverse edges validation")
 	}
 
 	fmt.Println("[INVERSE EDGES] Demonstrating materialized inverse relationships...")
 
 	// Get all entity IDs to find a container
 	allIDs, err := s.natsClient.GetAllEntityIDs(ctx)
-	if err != nil || len(allIDs) == 0 {
-		result.Warnings = append(result.Warnings, "No entities found for inverse edges validation")
-		return nil
+	if err != nil {
+		return fmt.Errorf("failed to get entity IDs for inverse edges validation: %w", err)
+	}
+	if len(allIDs) == 0 {
+		return fmt.Errorf("no entities found for inverse edges validation")
 	}
 
 	// Find a .group container entity
@@ -1367,11 +1375,14 @@ func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, r
 			"container_found": false,
 			"message":         "No container entities found (hierarchy inference may not have run)",
 		}
-		return nil
+		return fmt.Errorf("no .group container entity found for inverse edges validation")
 	}
 
 	// Get container's OUTGOING relationships (should include 'contains' edges after Phase 6 change)
-	outgoingEntries, _ := s.natsClient.GetOutgoingEntries(ctx, containerID)
+	outgoingEntries, err := s.natsClient.GetOutgoingEntries(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("outgoing entries query failed for %s: %w", containerID, err)
+	}
 
 	// Filter for 'contains' predicates
 	containsCount := 0
@@ -1384,7 +1395,10 @@ func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, r
 	}
 
 	// Cross-reference with incoming 'member' edges
-	incomingEntries, _ := s.natsClient.GetIncomingEntries(ctx, containerID)
+	incomingEntries, err := s.natsClient.GetIncomingEntries(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("incoming entries query failed for %s: %w", containerID, err)
+	}
 	memberCount := 0
 	for _, entry := range incomingEntries {
 		if entry.Predicate == "hierarchy.type.member" ||
@@ -1418,18 +1432,6 @@ func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, r
 			}
 		}
 		fmt.Println("[INVERSE EDGES] Success: Containers explicitly know their members via 'contains' edges")
-	} else if containsCount == 0 {
-		if s.config.Variant == "structural" || s.config.Variant == "statistical" {
-			// Short-running tiers may not have completed async index updates
-			// Hierarchy inference creates inverse edges but outgoing index update is async
-			fmt.Println("[INVERSE EDGES] Note: Contains edges not indexed yet (async update pending)")
-		} else {
-			result.Warnings = append(result.Warnings,
-				"No 'contains' edges found - inverse materialization may not be working")
-		}
-	} else if containsCount != memberCount {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Edge count mismatch: %d member edges vs %d contains edges", memberCount, containsCount))
 	}
 
 	result.Details["inverse_edges"] = map[string]any{
@@ -1439,6 +1441,18 @@ func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, r
 		"symmetry_valid":  symmetryValid,
 		"edges_match":     containsCount == memberCount,
 		"inverse_working": containsCount > 0,
+	}
+
+	// Asymmetry is the outcome this stage exists to detect (#1426). Structural keeps
+	// its not-yet-indexed note: it runs this stage without the community wait that
+	// precedes it in statistical/semantic, is not a per-PR variant, and is unmeasured
+	// here. Statistical and semantic measured 1 member / 1 contains in every run.
+	if containsCount == 0 && s.config.Variant == "structural" {
+		fmt.Println("[INVERSE EDGES] Note: Contains edges not indexed yet (async update pending)")
+		return nil
+	}
+	if !symmetryValid {
+		return fmt.Errorf("inverse edges asymmetric for %s: %d member edges vs %d contains edges", containerID, memberCount, containsCount)
 	}
 
 	return nil

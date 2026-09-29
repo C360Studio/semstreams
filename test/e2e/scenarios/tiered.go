@@ -358,6 +358,10 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		{"validate-zero-clusters", s.executeValidateZeroClusters, []string{"structural"}},
 		{"validate-entity-triples", s.executeValidateEntityTriples, []string{"structural"}},
 		// === Tier 1+: Statistical capabilities (statistical + semantic) ===
+		// verify-search-quality: a query that errors or returns no hits fails in both
+		// variants; a missed known answer fails under statistical (BM25 ranks, pure
+		// Go) and is a RECORDER under semantic (the embedding model ranks); the
+		// average-score arm is a RECORDER in both (#1426).
 		{"verify-search-quality", s.executeVerifySearchQuality, []string{"statistical", "semantic"}},
 		{"test-http-gateway", s.executeTestHTTPGateway, []string{"statistical", "semantic"}},
 		// gh#768: gateway response SHAPE. Every other gateway stage decodes into

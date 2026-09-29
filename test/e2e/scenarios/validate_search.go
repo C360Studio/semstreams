@@ -38,6 +38,35 @@ func (s *TieredScenario) executeVerifySearchQuality(ctx context.Context, result 
 	// Record results in legacy format for backward compatibility
 	s.recordSearchQualityResultsFromStats(result, stats)
 
+	return s.searchQualityVerdict(stats)
+}
+
+// searchQualityVerdict is the stage's gate (#1426). Path arm, every variant the
+// stage runs in: a query that errors or returns no hits is the search path
+// failing, which the framework owns. Known-answer arm, by variant: under
+// statistical the ranker is BM25 (pure Go, deterministic over the fixed corpus),
+// so a missing known answer is a framework outcome and fails; under semantic the
+// ranking is the embedding model's, so the arm is a RECORDER (the warnings
+// recordSearchQualityResultsFromStats already wrote). The average-score warning
+// is a RECORDER in both: 0.5 is not calibrated to either scorer (BM25 measured
+// 0.28 on every run).
+func (s *TieredScenario) searchQualityVerdict(stats *search.Stats) error {
+	var broken []string
+	for _, r := range stats.Results {
+		switch {
+		case r.Error != "":
+			broken = append(broken, fmt.Sprintf("%q: %s", r.Query, r.Error))
+		case len(r.Hits) == 0:
+			broken = append(broken, fmt.Sprintf("%q: returned no hits", r.Query))
+		}
+	}
+	if len(broken) > 0 {
+		return fmt.Errorf("search failed for %d/%d queries: %s", len(broken), stats.TotalQueries, strings.Join(broken, "; "))
+	}
+	if s.config.Variant == "statistical" && len(stats.KnownAnswerFailures) > 0 {
+		return fmt.Errorf("known-answer search failed under BM25 (%d/%d passed): %s",
+			stats.KnownAnswerTestsPassed, stats.KnownAnswerTestsTotal, strings.Join(stats.KnownAnswerFailures, "; "))
+	}
 	return nil
 }
 

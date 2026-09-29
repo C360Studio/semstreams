@@ -21,8 +21,9 @@ quality, or by an engine the tier's configuration disables, SHALL leave the per-
 Recorder exception: a stage, or one arm of a stage, declared RECORDER in its stage-table comment records its
 measurement into `Result.Metrics`/`Result.Details` without gating, and MUST fail only on an unreachable transport or a
 failed read. The declared recorders are B0 `validate-thematic-answer-eval`, B2 `validate-partition-colocation`,
-`validate-llm-enhancement`'s enhancement-throughput and summary-quality arms, and `validate-community-structure`'s
-ground-truth arm. A recorder SHALL NOT be added without the declaration.
+`validate-llm-enhancement`'s enhancement-throughput and summary-quality arms, `validate-community-structure`'s
+ground-truth arm, and `verify-search-quality`'s average-score arm (every variant) and known-answer arm (semantic only).
+A recorder SHALL NOT be added without the declaration.
 
 #### Scenario: The detected outcome occurs in a per-PR variant
 - **GIVEN** a stage in a per-PR variant whose probe returns nothing, or whose read reports the framework outcome the stage exists to detect

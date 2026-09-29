@@ -162,15 +162,13 @@ func (s *TieredScenario) executeValidateProcessing(ctx context.Context, result *
 		"graph-gateway": false,
 	}
 	graphStatus := make(map[string]map[string]any)
+	var unhealthyGraph []string
 
 	for _, comp := range components {
 		if _, isGraphComp := graphComponents[comp.Name]; isGraphComp {
 			graphComponents[comp.Name] = true
 			if !comp.Healthy {
-				result.Warnings = append(
-					result.Warnings,
-					fmt.Sprintf("Graph component %s not healthy: state=%s", comp.Name, comp.State),
-				)
+				unhealthyGraph = append(unhealthyGraph, fmt.Sprintf("%s (state=%s)", comp.Name, comp.State))
 			}
 			graphStatus[comp.Name] = map[string]any{
 				"name":      comp.Name,
@@ -196,6 +194,12 @@ func (s *TieredScenario) executeValidateProcessing(ctx context.Context, result *
 	}
 
 	result.Details["graph_processor_status"] = graphStatus
+
+	// An unhealthy graph component is the outcome this stage exists to detect;
+	// no later stage reads component health (#1426).
+	if len(unhealthyGraph) > 0 {
+		return fmt.Errorf("graph components not healthy: %v", unhealthyGraph)
+	}
 
 	result.Metrics["component_count"] = len(components)
 	result.Details["processing_validation"] = fmt.Sprintf(
@@ -232,16 +236,17 @@ func (s *TieredScenario) executeVerifyOutputs(ctx context.Context, result *Resul
 		}
 	}
 
-	if len(missingOutputs) > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Missing outputs: %v", missingOutputs))
-	}
-
 	result.Metrics["outputs_found"] = len(foundOutputs)
 	result.Metrics["outputs_expected"] = len(expectedOutputs)
 	result.Details["output_validation"] = map[string]any{
 		"expected": expectedOutputs,
 		"found":    foundOutputs,
 		"missing":  missingOutputs,
+	}
+
+	// A missing output component is the outcome this stage exists to detect (#1426).
+	if len(missingOutputs) > 0 {
+		return fmt.Errorf("missing outputs: %v", missingOutputs)
 	}
 
 	return nil
@@ -422,6 +427,12 @@ func (s *TieredScenario) executeTestEmbeddingFallback(ctx context.Context, resul
 		"message":                 "Graph embedding operational regardless of semembed availability",
 	}
 
+	// An unhealthy (or absent) graph-embedding is the outcome this stage exists to
+	// detect: neither the BM25 fallback nor hybrid mode is working (#1426).
+	if !graphEmbeddingHealthy {
+		return fmt.Errorf("graph-embedding not healthy (semembed_available=%v): neither BM25 fallback nor hybrid mode is working", semembedAvailable)
+	}
+
 	// If semembed was unavailable but graph-embedding is healthy, BM25 fallback is working
 	if !semembedAvailable && graphEmbeddingHealthy {
 		result.Metrics["fallback_verified"] = 1
@@ -434,8 +445,7 @@ func (s *TieredScenario) executeTestEmbeddingFallback(ctx context.Context, resul
 	// Send test message to verify search works in current mode
 	conn, err := net.Dial("udp", s.udpAddr)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to connect for fallback test: %v", err))
-		return nil // Don't fail the whole test
+		return fmt.Errorf("failed to connect for fallback test: %w", err)
 	}
 	defer conn.Close()
 
