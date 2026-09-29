@@ -1,6 +1,6 @@
 # Listing recurrence tasks
 
-- [ ] Preserve exact recurrence evidence and independently review a bounded refresh of the existing inventory.
+- [x] Preserve exact recurrence evidence and independently review a bounded refresh of the existing inventory.
 - [ ] Review and accept a causal experiment/repair design with discriminating assertions and finite ownership.
 - [ ] Establish the failing mechanism and implement the reviewed repair without changing deadline or success semantics.
 - [ ] Prove failure sensitivity and actual owned-work completion; pass focused race/native and required gate stages.

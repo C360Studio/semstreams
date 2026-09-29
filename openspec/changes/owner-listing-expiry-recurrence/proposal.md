@@ -15,7 +15,9 @@ starting evidence. Refresh only changed facts and the paths implicated by this r
 backpressure, a runner stall, the old fifteen-second drain error or the harness repair caused this event.
 The captured stack is after listing return and before harness teardown; it is not an in-operation trace.
 
-The next gate is a bounded source/evidence inventory refresh, independent review and a causal experiment design.
+The bounded inventory refresh passed independent review at SHA-256
+`6f3479feb76d24d9768fe05abd815df2187b9baf6c89ea01e0fa15d1d2ecfc5a`.
+The next gate is independent review and acceptance of a causal experiment design.
 Production changes require measured cause and independent design/implementation review. Preserve the real framework
 five-second deadline, workloads, latency assertions and error propagation. No blind repetition, retry-to-green,
 timeout increase or weakened success criterion is authorized.
