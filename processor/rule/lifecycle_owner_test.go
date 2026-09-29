@@ -7,43 +7,52 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-type ruleLifecycleTestConsumer struct {
-	drained chan struct{}
-	closed  chan struct{}
-}
+// processorStopBudget bounds a test processor's Stop. The rule processor has
+// no stop budget of its own; this is the production root's: the
+// --shutdown-timeout default (internal/boot/flags.go, 30s) that bounds the
+// whole runtime's StopAll. An unbounded Stop turned the #1283 barrier hang
+// into a 20-minute CI job timeout.
+const processorStopBudget = 30 * time.Second
 
-type lateConfigWatcher struct {
-	updates     chan jetstream.KeyValueEntry
-	stopStarted chan struct{}
-	releaseStop chan struct{}
-	stopCalls   atomic.Int32
-}
-
-func newLateConfigWatcher() *lateConfigWatcher {
-	return &lateConfigWatcher{
-		updates:     make(chan jetstream.KeyValueEntry),
-		stopStarted: make(chan struct{}),
-		releaseStop: make(chan struct{}),
+// stopProcessorWithinBudget stops proc under processorStopBudget and fails the
+// test if Stop reports an error.
+func stopProcessorWithinBudget(t *testing.T, proc *Processor) {
+	t.Helper()
+	stopCtx, cancel := context.WithTimeout(context.Background(), processorStopBudget)
+	defer cancel()
+	if err := proc.Stop(stopCtx); err != nil {
+		t.Errorf("rule processor Stop within %s: %v", processorStopBudget, err)
 	}
 }
 
-func (w *lateConfigWatcher) Updates() <-chan jetstream.KeyValueEntry { return w.updates }
-func (w *lateConfigWatcher) Stop() error {
-	w.stopCalls.Add(1)
-	close(w.stopStarted)
-	<-w.releaseStop
-	return nil
+// configManagerStopBudget bounds a test rule ConfigManager's Stop. It is the
+// same production number as processorStopBudget: the root stops the
+// "rule-config" service under StopAll's one shutdown context.
+const configManagerStopBudget = processorStopBudget
+
+// stopConfigManagerWithinBudget stops rcm under configManagerStopBudget and
+// fails the test if Stop reports an error. Safe to call from a goroutine.
+func stopConfigManagerWithinBudget(t *testing.T, rcm *ConfigManager) {
+	t.Helper()
+	stopCtx, cancel := context.WithTimeout(context.Background(), configManagerStopBudget)
+	defer cancel()
+	if err := rcm.Stop(stopCtx); err != nil {
+		t.Errorf("rule ConfigManager Stop within %s: %v", configManagerStopBudget, err)
+	}
+}
+
+type ruleLifecycleTestConsumer struct {
+	drained chan struct{}
+	closed  chan struct{}
 }
 
 type bootstrapActionRule struct{}
@@ -270,115 +279,64 @@ func TestRuleCleanupDeadlineCancelsAdmittedBootstrapEvaluationWithoutGateWait(t 
 }
 
 func TestConfigManagerStartIsOneShot(t *testing.T) {
-	rcm := NewConfigManager(nil, nil, slog.Default())
-	if err := rcm.Start(context.Background()); err != nil {
+	rcm, err := NewConfigManager(slog.Default())
+	if err != nil {
+		t.Fatalf("NewConfigManager: %v", err)
+	}
+	if err := rcm.Start(context.Background(), nil); err != nil {
 		t.Fatalf("first Start: %v", err)
 	}
-	if err := rcm.Start(context.Background()); err == nil {
+	if err := rcm.Start(context.Background(), nil); err == nil {
 		t.Fatal("duplicate Start succeeded")
 	}
-	if err := rcm.Stop(); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+	stopConfigManagerWithinBudget(t, rcm)
 }
 
-func TestConfigManagerStopCancelsAndJoinsWatcherAcquisition(t *testing.T) {
-	rcm := NewConfigManager(&Processor{ruleConfigs: make(map[string]map[string]any)}, nil, slog.Default())
-	rcm.kvStore = &natsclient.KVStore{}
-	acquiring := make(chan struct{})
-	acquisitionCanceled := make(chan struct{})
-	rcm.watchRules = func(ctx context.Context, _ *natsclient.KVStore) (jetstream.KeyWatcher, error) {
-		close(acquiring)
-		<-ctx.Done()
-		close(acquisitionCanceled)
-		return nil, ctx.Err()
-	}
-
-	startDone := make(chan error, 1)
-	go func() { startDone <- rcm.Start(context.Background()) }()
-	<-acquiring
-	if err := rcm.Start(context.Background()); err == nil {
-		t.Fatal("duplicate Start succeeded while watcher acquisition was active")
-	}
-	stopDone := make(chan error, 1)
-	go func() { stopDone <- rcm.Stop() }()
-	select {
-	case <-acquisitionCanceled:
-	case <-time.After(time.Second):
-		t.Fatal("Stop did not cancel the published watcher acquisition attempt")
-	}
-	if err := <-startDone; err != nil {
-		t.Fatalf("Start with unavailable hot-reload watcher: %v", err)
-	}
-	if err := <-stopDone; err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+// fakeRuleTarget records every ApplyConfigUpdate it receives.
+type fakeRuleTarget struct {
+	loaded  map[string]Definition
+	applied chan map[string]any
 }
 
-func TestConfigManagerStopDisposesSuccessfulWatcherReturnedAfterCancellation(t *testing.T) {
-	rcm := NewConfigManager(&Processor{ruleConfigs: make(map[string]map[string]any)}, nil, slog.Default())
-	rcm.kvStore = &natsclient.KVStore{}
-	watcher := newLateConfigWatcher()
-	acquiring := make(chan struct{})
-	acquisitionCanceled := make(chan struct{})
-	releaseAcquisition := make(chan struct{})
-	rcm.watchRules = func(ctx context.Context, _ *natsclient.KVStore) (jetstream.KeyWatcher, error) {
-		close(acquiring)
-		<-ctx.Done()
-		close(acquisitionCanceled)
-		<-releaseAcquisition
-		return watcher, nil
+func (f *fakeRuleTarget) LoadedRuleDefinitions() map[string]Definition { return f.loaded }
+func (f *fakeRuleTarget) ValidateConfigUpdate(map[string]any) error    { return nil }
+func (f *fakeRuleTarget) ApplyConfigUpdate(changes map[string]any) error {
+	f.applied <- changes
+	return nil
+}
+
+// TestConfigManagerStopJoinsTheReconcileLoop proves Stop returns only after
+// the loop it started has exited, and that Start after Stop is refused. The
+// family is unbound (no config manager started it), so every reconcile fails
+// at ListRules and no target is applied — the loop still runs and must join.
+func TestConfigManagerStopJoinsTheReconcileLoop(t *testing.T) {
+	rcm, err := NewConfigManager(slog.Default())
+	if err != nil {
+		t.Fatalf("NewConfigManager: %v", err)
 	}
-
-	startDone := make(chan error, 1)
-	go func() { startDone <- rcm.Start(context.Background()) }()
-	<-acquiring
-
-	stopDone := make(chan error, 1)
-	go func() { stopDone <- rcm.Stop() }()
-	<-acquisitionCanceled
+	target := &fakeRuleTarget{applied: make(chan map[string]any, 1)}
+	if err := rcm.Start(context.Background(), []HotReloadTarget{target}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	rcm.lifecycleMu.Lock()
+	done := rcm.done
+	rcm.lifecycleMu.Unlock()
+	if done == nil {
+		t.Fatal("Start with a target must run the reconcile loop")
+	}
+	stopConfigManagerWithinBudget(t, rcm)
 	select {
-	case err := <-stopDone:
-		t.Fatalf("Stop returned before the canceled acquisition settled: %v", err)
+	case <-done:
 	default:
+		t.Fatal("Stop returned before the reconcile loop exited")
 	}
-
-	close(releaseAcquisition)
+	if err := rcm.Start(context.Background(), []HotReloadTarget{target}); err == nil {
+		t.Fatal("Start after Stop succeeded")
+	}
 	select {
-	case <-watcher.stopStarted:
-	case <-time.After(time.Second):
-		t.Fatal("the canceled acquisition did not stop its successful late watcher")
-	}
-	rcm.lifecycleMu.Lock()
-	if rcm.watcher != nil || rcm.done != nil {
-		t.Fatalf("late watcher was published as running before cleanup: watcher=%v done=%v", rcm.watcher, rcm.done)
-	}
-	rcm.lifecycleMu.Unlock()
-	close(watcher.releaseStop)
-	if err := <-startDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("Start error = %v, want context canceled without running publication", err)
-	}
-	if err := <-stopDone; err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	if got := watcher.stopCalls.Load(); got != 1 {
-		t.Fatalf("late watcher Stop calls = %d, want 1", got)
-	}
-
-	rcm.lifecycleMu.Lock()
-	if !rcm.lifecycleUsed || !rcm.terminal || rcm.stopping || rcm.cleanupPending ||
-		rcm.startDone != nil || rcm.cancel != nil || rcm.watcher != nil || rcm.done != nil {
-		t.Fatalf("terminal fields retain running authority: %+v", rcm)
-	}
-	rcm.lifecycleMu.Unlock()
-	if err := rcm.Start(context.Background()); err == nil {
-		t.Fatal("restart succeeded after terminal Stop")
-	}
-	if err := rcm.Stop(); err != nil {
-		t.Fatalf("repeated Stop: %v", err)
-	}
-	if got := watcher.stopCalls.Load(); got != 1 {
-		t.Fatalf("repeated Stop changed late watcher Stop calls to %d", got)
+	case changes := <-target.applied:
+		t.Fatalf("an unbound family must not apply anything, got %v", changes)
+	default:
 	}
 }
 
@@ -513,7 +471,9 @@ func TestRuleFailedStartRollsBackPublishedAuthority(t *testing.T) {
 	if !terminal || cleanupPending {
 		t.Fatalf("failed Start authority: terminal=%v cleanupPending=%v", terminal, cleanupPending)
 	}
-	if err := processor.Stop(context.Background()); err != nil {
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), processorStopBudget)
+	defer cancelStop()
+	if err := processor.Stop(stopCtx); err != nil {
 		t.Fatalf("Stop after successful failed-Start rollback: %v", err)
 	}
 	if err := processor.Start(context.Background()); err == nil {

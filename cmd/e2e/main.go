@@ -366,7 +366,7 @@ func createScenario(
 		// platform.id are the STEM of the authority the graph accepts (ADR-102
 		// d5); the pair itself carries the entropy suffix the framework minted
 		// at first boot (ADR-104), so the probe reads it from
-		// semstreams_config/platform_identity and uses this value to check it is
+		// semstreams_config_<org>_<stem>/platform_identity and uses this value to check it is
 		// driving the configuration it was pointed at.
 		return scenarios.NewGraphRoundTripScenario(
 			config.DefaultEndpoints.NATS,

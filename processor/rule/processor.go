@@ -236,12 +236,6 @@ type Processor struct {
 	// Logger
 	logger *slog.Logger
 
-	// kvConfigManager is the component-internal hot-reload manager. It owns a
-	// KV watcher on semstreams_config:rules.* and calls ApplyConfigUpdate when
-	// the watcher fires. Constructed in Start; nil when NATS is unavailable.
-	// See also: internal/boot/run.go buildRuleManager — a second ConfigManager
-	// instance (processor=nil) for agent CRUD tools. Both share the same KV bucket.
-	kvConfigManager *ConfigManager
 	streamConsumers []ruleStreamConsumer
 
 	projectionTargets    *projectionTargetIndex
@@ -566,6 +560,22 @@ func (rp *Processor) Initialize() error {
 
 // watchEntityStates and handleEntityUpdates are in entity_watcher.go
 // loadRuleDefinitionsFromFiles and loadRules are in rule_loader.go
+
+// LoadedRuleDefinitions returns a copy of the rules this processor holds —
+// loaded from files and inline configuration by Initialize, then changed by
+// hot reload. The composition root's rule ConfigManager seeds them into the
+// configuration bucket's `rules.*` family (HotReloadTarget).
+func (rp *Processor) LoadedRuleDefinitions() map[string]Definition {
+	rp.mu.RLock()
+	defer rp.mu.RUnlock()
+	defs := make(map[string]Definition, len(rp.ruleDefinitions))
+	for id, def := range rp.ruleDefinitions {
+		defs[id] = def
+	}
+	return defs
+}
+
+var _ HotReloadTarget = (*Processor)(nil)
 
 type ruleStreamConsumer struct {
 	handle      jetstream.ConsumeContext
@@ -938,16 +948,6 @@ func (rp *Processor) Start(ctx context.Context) (startErr error) {
 		rp.statusLoopDone = make(chan struct{})
 		go rp.statusMetricsLoop(runCtx, rp.statusLoopDone)
 	}
-	if rp.natsClient != nil {
-		rcm := NewConfigManager(rp, nil, rp.logger)
-		if err := rcm.InitializeKVStore(runCtx, rp.natsClient); err != nil {
-			rp.logger.Warn("Failed to initialize KV store for rule hot-reload; running with file rules only", slog.Any("error", err))
-		} else if err := rcm.Start(runCtx); err != nil {
-			rp.logger.Warn("Failed to start rule hot-reload watcher; running with file rules only", slog.Any("error", err))
-		} else {
-			rp.kvConfigManager = rcm
-		}
-	}
 	runtimeWG.Add(1)
 	go func() {
 		defer runtimeWG.Done()
@@ -1258,7 +1258,6 @@ func (rp *Processor) cleanup(ctx context.Context) error {
 	// below are therefore final for this owner lifetime.
 	rp.lifecycleMu.Lock()
 	cronScheduler := rp.cronScheduler
-	hotReloadMgr := rp.kvConfigManager
 	consumers := rp.streamConsumers
 	subscriptions := append([]*natsclient.Subscription(nil), rp.subscriptions...)
 	runtimeDone := rp.runtimeDone
@@ -1313,13 +1312,6 @@ func (rp *Processor) cleanup(ctx context.Context) error {
 	}
 	if err := awaitEntityBorrowSettlement(ctx, entityBorrowDone, cancel); err != nil {
 		stopErrors = append(stopErrors, err)
-	}
-	if hotReloadMgr != nil {
-		// Contextless but bounded in practice: its KV goroutine selects on its
-		// own ctx, which Stop cancels before joining; its only other wait is a
-		// runtime command, refused since the step-1 fence or, if admitted
-		// before it, already settled by the step-1 barrier.
-		stopErrors = append(stopErrors, hotReloadMgr.Stop())
 	}
 	// 6. Watcher admission is closed; now no new work can enter the coalescer.
 	if err := rp.closeEntityEvaluationQueue(); err != nil {
@@ -1440,7 +1432,6 @@ func (rp *Processor) clearLifecycleHandles() {
 	rp.runtimeDone = nil
 	rp.runtimeWG = nil
 	rp.streamConsumers = nil
-	rp.kvConfigManager = nil
 	rp.subscriptions = nil
 	rp.cronScheduler = nil
 	rp.statusLoopDone = nil

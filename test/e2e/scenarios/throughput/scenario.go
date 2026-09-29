@@ -71,7 +71,7 @@ type Config struct {
 	NATSURL string `json:"nats_url"`
 
 	// Authority is `org.platform` as the running stack RECORDS it, read from
-	// semstreams_config/platform_identity during Setup. It is not configuration:
+	// semstreams_config_<org>_<stem>/platform_identity during Setup. It is not configuration:
 	// nothing may set it, because predicting it from a config file has been
 	// wrong by the minted entropy suffix since ADR-104.
 	Authority string `json:"-"`

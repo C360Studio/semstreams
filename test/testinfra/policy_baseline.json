@@ -1122,11 +1122,6 @@
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },
     {
-      "key": "integration-time-sleep|processor/rule/kv_hot_reload_integration_test.go|TestHotReload_WatcherPicksUpNewRule|time.Sleep(400 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
       "key": "integration-time-sleep|processor/rule/kv_hot_reload_integration_test.go|pollReconcileCount|time.Sleep(25 * time.Millisecond)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"

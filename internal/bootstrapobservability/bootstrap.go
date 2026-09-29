@@ -155,11 +155,12 @@ func StartConfigManager(
 	initial *config.Config,
 	client *natsclient.Client,
 	logger *slog.Logger,
+	opts ...config.ManagerOption,
 ) (*config.Manager, *config.Config, error) {
 	if logger == nil {
 		return nil, nil, fmt.Errorf("config-manager logger cannot be nil")
 	}
-	manager, err := config.NewConfigManager(initial, client, logger)
+	manager, err := config.NewConfigManager(initial, client, logger, opts...)
 	if err != nil {
 		return nil, nil, logBootFailure(
 			logger, "config-manager-create", fmt.Errorf("create config manager: %w", err),
@@ -180,8 +181,9 @@ func StartValidatedConfigManager(
 	initial *config.Config,
 	client *natsclient.Client,
 	logger *slog.Logger,
+	opts ...config.ManagerOption,
 ) (*config.Manager, *config.Config, error) {
-	manager, effective, err := StartConfigManager(ctx, initial, client, logger)
+	manager, effective, err := StartConfigManager(ctx, initial, client, logger, opts...)
 	if err != nil {
 		return nil, nil, err
 	}

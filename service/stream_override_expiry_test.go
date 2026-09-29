@@ -188,7 +188,10 @@ func composeComponentManagerWithOverride(
 		_ = client.Close(closeCtx)
 	})
 
-	bootConfig := &config.Config{StreamMigrationOverrides: overrides}
+	bootConfig := &config.Config{
+		Platform:                 config.PlatformConfig{Org: "test", ID: "override-expiry"},
+		StreamMigrationOverrides: overrides,
+	}
 	configManager, err := config.NewConfigManager(bootConfig, client, logger)
 	require.NoError(t, err)
 

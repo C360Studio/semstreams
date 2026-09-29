@@ -33,9 +33,12 @@ var catalogSeams = map[string]bool{
 // TestCatalogBucketNamesAreNeverAcquiredDirectly, which needs no list at all.
 // Without it, an owner that silently stopped using the seam would leave both
 // checks vacuous: it would name a catalog bucket, make no direct call, and pass.
+//
+// The configuration bucket has one acquirer since #1188: the rule
+// ConfigManager reaches it only through the key family config.Manager serves
+// it, so processor/rule no longer names or acquires it.
 var catalogResolvingOwners = []string{
 	"config/manager.go",
-	"processor/rule/kv_config_integration.go",
 }
 
 // TestCatalogBucketNamesAreNeverAcquiredDirectly is the structural half of the
@@ -71,8 +74,8 @@ func TestCatalogBucketNamesAreNeverAcquiredDirectly(t *testing.T) {
 
 // TestCatalogResolvingOwnersUseTheSeam is the positive half. The structural
 // check above passes vacuously for a file that stops acquiring altogether, so
-// the two owners of the shared configuration bucket are asserted to still
-// resolve it through the descriptor.
+// the owner of the configuration bucket is asserted to still resolve it
+// through the descriptor.
 func TestCatalogResolvingOwnersUseTheSeam(t *testing.T) {
 	root := repoRootForKVCatalogScan(t)
 	byPath := make(map[string]goFile)

@@ -4,21 +4,47 @@ package rule
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
-// TestListRules_KVStorePath verifies the kvStore branch added in ADR-029
-// step 1: after InitializeKVStore the manager reads rule definitions
-// directly from the semstreams_config bucket, filtering to the rules.*
-// namespace and skipping other keys. Before the change, ListRules called
-// processor.GetRuntimeConfig unconditionally and would have panicked
-// here (processor is nil in this setup).
-func TestListRules_KVStorePath(t *testing.T) {
+// startRulesFamily is the production wiring from internal/boot: the one rule
+// ConfigManager registers its `rules` family with a real config.Manager, and
+// reaches the configuration bucket only through it. It returns the rule
+// manager and a raw handle on the same bucket for fixtures that must write
+// outside the family.
+func startRulesFamily(t *testing.T, ctx context.Context, tc *natsclient.TestClient) (*ConfigManager, jetstream.KeyValue) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	rcm, err := NewConfigManager(logger)
+	require.NoError(t, err)
+	cfg := &config.Config{
+		Version:  "1.0.0",
+		Platform: config.PlatformConfig{Org: "c360", ID: "rule-kv-test"},
+	}
+	manager, err := config.NewConfigManager(cfg, tc.Client, logger, config.WithKeyFamily(rcm.KeyFamily()))
+	require.NoError(t, err)
+	require.NoError(t, manager.Start(ctx))
+	t.Cleanup(func() { _ = manager.Stop(5 * time.Second) })
+	name, err := config.BucketName(cfg.Platform.Org, cfg.Platform.ID)
+	require.NoError(t, err)
+	bucket, err := tc.Client.GetKeyValueBucket(ctx, name)
+	require.NoError(t, err)
+	return rcm, bucket
+}
+
+// TestListRules_ReadsOnlyTheRulesFamily verifies ListRules reads rule
+// definitions from the configuration bucket's `rules.*` family and skips
+// every other key in that bucket.
+func TestListRules_ReadsOnlyTheRulesFamily(t *testing.T) {
 	tc := natsclient.NewTestClient(t,
 		natsclient.WithJetStream(),
 		natsclient.WithKV())
@@ -26,18 +52,8 @@ func TestListRules_KVStorePath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Construct a bare ConfigManager — no processor. The CRUD-only
-	// usage from internal/boot/run.go:buildRuleManager takes this
-	// exact shape so the test mirrors production.
-	rcm := NewConfigManager(nil, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(ctx, tc.Client))
-	rcm.mu.RLock()
-	kvStore := rcm.kvStore
-	rcm.mu.RUnlock()
-	require.NotNil(t, kvStore, "successful InitializeKVStore must publish immediate KV capability")
+	rcm, bucket := startRulesFamily(t, ctx, tc)
 
-	// Seed two rule definitions + one non-rule key in the same bucket.
-	// The non-rule key (config.other) proves the namespace filter works.
 	def := Definition{
 		ID:          "alpha",
 		Type:        "expression",
@@ -55,9 +71,10 @@ func TestListRules_KVStorePath(t *testing.T) {
 	}
 	require.NoError(t, rcm.SaveRule(ctx, "beta", def2))
 
-	// Poison the bucket with a non-rules key. Manager's ListRules must
-	// skip it (StringPrefix check on "rules.").
-	_, err := kvStore.Put(ctx, "config.unrelated", []byte(`{"junk": true}`))
+	// Poison the bucket with a non-rules key. ListRules must skip it; the
+	// config manager's own keys (version, platform, platform_identity) are
+	// already there and must be skipped too.
+	_, err := bucket.Put(ctx, "config.unrelated", []byte(`{"junk": true}`))
 	require.NoError(t, err)
 
 	rules, err := rcm.ListRules(ctx)
@@ -76,9 +93,9 @@ func TestListRules_KVStorePath(t *testing.T) {
 	require.False(t, beta.Enabled, "Enabled=false must round-trip")
 }
 
-// TestListRules_EmptyBucketReturnsEmptyMap — fresh bucket (nothing under
-// rules.*) returns an empty map rather than nil or an error. Callers can
-// range over the result without nil-checking.
+// TestListRules_EmptyBucketReturnsEmptyMap — nothing under rules.* returns an
+// empty map rather than nil or an error. Callers can range over the result
+// without nil-checking.
 func TestListRules_EmptyBucketReturnsEmptyMap(t *testing.T) {
 	tc := natsclient.NewTestClient(t,
 		natsclient.WithJetStream(),
@@ -87,8 +104,7 @@ func TestListRules_EmptyBucketReturnsEmptyMap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	rcm := NewConfigManager(nil, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
+	rcm, _ := startRulesFamily(t, ctx, tc)
 	rules, err := rcm.ListRules(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, rules)
@@ -106,21 +122,16 @@ func TestListRules_SkipsUnmarshalFailures(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	rcm := NewConfigManager(nil, nil, nil)
-	require.NoError(t, rcm.InitializeKVStore(context.Background(), tc.Client))
-	kvStore, err := rcm.ensureKVStore(ctx)
-	require.NoError(t, err)
+	rcm, bucket := startRulesFamily(t, ctx, tc)
 
-	// Write a valid rule + a corrupt one.
 	require.NoError(t, rcm.SaveRule(ctx, "good", Definition{
 		ID: "good", Type: "expression", Name: "Good", Enabled: true,
 	}))
-	_, err = kvStore.Put(ctx, "rules.bad", []byte("{not valid json"))
+	_, err := bucket.Put(ctx, "rules.bad", []byte("{not valid json"))
 	require.NoError(t, err)
 
 	rules, err := rcm.ListRules(ctx)
 	require.NoError(t, err, "ListRules must not fail on a single corrupt record")
-	// Only the valid rule appears; corrupt entry is skipped.
 	require.Len(t, rules, 1)
 	_, present := rules["good"]
 	require.True(t, present)

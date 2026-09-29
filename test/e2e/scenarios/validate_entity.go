@@ -33,7 +33,7 @@ func (s *TieredScenario) tierMinter(result *Result) (func(suffix string) string,
 	// here means a stage is running outside Execute, and guessing the pair from
 	// the shipped config would be wrong by exactly the minted suffix (ADR-104).
 	if s.effectiveAuthority == "" {
-		return nil, fmt.Errorf("the deployment authority has not been read from semstreams_config/platform_identity, so no fixture entity ID can be minted; Execute reads it before any stage runs")
+		return nil, fmt.Errorf("the deployment authority has not been read from semstreams_config_<org>_<stem>/platform_identity, so no fixture entity ID can be minted; Execute reads it before any stage runs")
 	}
 	authority := s.effectiveAuthority
 	return func(suffix string) string { return authority + "." + suffix }, nil

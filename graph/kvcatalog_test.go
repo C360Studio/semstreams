@@ -105,7 +105,7 @@ func TestKVCatalog_DeclaredPolicies(t *testing.T) {
 	// because the platform identity it holds is create-once and a silent TTL
 	// strip would conceal that the identity may already have expired (ADR-104;
 	// ADR-102 d7).
-	sharedConfig := spec(BucketSemStreamsConfig)
+	sharedConfig := spec(BucketSemStreamsConfig + "_acme_dep")
 	assert.Equal(t, natsclient.RetentionNoLifecycleStrict, sharedConfig.Retention.Kind)
 	assert.Equal(t, uint8(5), sharedConfig.History)
 	assert.Equal(t, natsclient.ClassOperational, sharedConfig.Class)
@@ -166,11 +166,10 @@ func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 		BucketEmbeddingIndex, BucketEmbeddingDedup, BucketCommunityIndex,
 		BucketCommunitySummaries, BucketAnomalyIndex,
 		BucketGraphIngestAppliedSeq, BucketToolCallOutcomes, BucketGraphStatus, BucketStorageReport,
-		// The shared configuration bucket joined the guard set with ADR-104: a
+		// The configuration bucket family joined the guard set with ADR-104: a
 		// generic update_kv into platform_identity forges an authority the next
-		// boot adopts, and one into platform_identity_guard reopens the
-		// concurrent-first-boot race.
-		BucketSemStreamsConfig,
+		// boot adopts. Members are per deployment since #1188.
+		BucketSemStreamsConfig + "_acme_dep",
 	} {
 		assert.True(t, IsFrameworkOwnedBucket(name), "%s must be framework-owned", name)
 	}
@@ -201,4 +200,36 @@ func TestSpecFor_UnknownNameResolvesFalse(t *testing.T) {
 // not-sound index, so classified consumers can never see the two drift apart.
 func TestErrorCodeBucketNotReady_MatchesIndexNotReady(t *testing.T) {
 	assert.Equal(t, ErrorCodeIndexNotReady, natsclient.ErrorCodeBucketNotReady)
+}
+
+// TestConfigBucketFamilyResolvesEveryMember pins the catalog's one name
+// family (#1188): every per-deployment configuration bucket resolves to the
+// strict, owner-only descriptor under its OWN name — so acquisition creates
+// that member and every update_kv guard refuses it — while the bare prefix,
+// the orphaned pre-#1188 bucket, is no longer framework state.
+func TestConfigBucketFamilyResolvesEveryMember(t *testing.T) {
+	for _, member := range []string{
+		BucketSemStreamsConfig + "_acme_dep",
+		BucketSemStreamsConfig + "_c360_semstreams-e2e-structural",
+		BucketSemStreamsConfig + "_a_b_c",
+		BucketSemStreamsConfig + "_x",
+	} {
+		got, ok := SpecFor(member)
+		require.True(t, ok, "%s must resolve to the configuration family", member)
+		assert.Equal(t, member, got.Name, "the descriptor must carry the member's concrete name")
+		assert.Equal(t, natsclient.RetentionNoLifecycleStrict, got.Retention.Kind)
+		assert.Equal(t, uint8(5), got.History)
+		assert.True(t, IsFrameworkOwnedBucket(member), "%s must stay owner-only", member)
+		assert.Contains(t, OwnerOf(member), "config.Manager")
+	}
+	for _, outside := range []string{
+		BucketSemStreamsConfig,
+		BucketSemStreamsConfig + "_",
+		BucketSemStreamsConfig + "x",
+		"semstreams_configuration",
+	} {
+		_, ok := SpecFor(outside)
+		assert.False(t, ok, "%q must not resolve to the configuration family", outside)
+		assert.False(t, IsFrameworkOwnedBucket(outside), "%q must not be framework-owned", outside)
+	}
 }

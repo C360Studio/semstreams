@@ -28,6 +28,7 @@ package graph
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -100,27 +101,27 @@ func KVCatalog() []natsclient.BucketSpec {
 	// account resource, and no retention needed to hold that line.
 	storageReport.History = 10
 
-	// The shared runtime configuration bucket entered the catalog for its
-	// RETENTION guarantee — ADR-104 made it the home of the create-once
-	// platform identity record, and an evicted identity is reminted as a second
-	// authority ADR-102 d7 forbids ever reconciling — and it is OWNER-ONLY for
-	// the same reason one level up.
+	// The runtime configuration bucket family entered the catalog for its
+	// RETENTION guarantee — ADR-104 made each member the home of the
+	// create-once platform identity record, and an evicted identity is
+	// reminted as a second authority ADR-102 d7 forbids ever reconciling — and
+	// it is OWNER-ONLY for the same reason one level up.
 	//
-	// Owner-only is not about who may write the bucket: two ConfigManagers
-	// legitimately do, and neither consults this policy (IsFrameworkOwnedBucket
-	// has exactly two callers, both rule update_kv guards). It is about who may
-	// NOT. A generic update_kv into platform_identity plain-Puts over the
-	// create-once record: a forged id whose org and stem match is ADOPTED on the
-	// next boot, because adoption validates grammar and byte budget and nothing
-	// else, so a rule pack could move the authority every entity is minted
-	// under; a forged id that does not match bricks the boot permanently. A
-	// write into platform_identity_guard reopens the concurrent-first-boot race
-	// that key exists to decide. Owner-only closes both through the guard
-	// predicate that already exists.
+	// The row is a NAME FAMILY (see nameFamilies): each deployment's bucket is
+	// "semstreams_config_<org>_<stem>" (#1188), and SpecFor resolves every
+	// member to this descriptor carrying the member's concrete name.
 	//
-	// The "two writers" the Owner string names are the two ConfigManagers, which
-	// is what a rejection message should tell an operator who legitimately
-	// writes here — not an invitation for a third.
+	// Owner-only is not about who may write the bucket: config.Manager acquires
+	// it, and processor/rule's ConfigManager writes rules.* through the key
+	// family config.Manager serves it; neither consults this policy
+	// (IsFrameworkOwnedBucket has exactly two callers, both rule update_kv
+	// guards). It is about who may NOT. A generic update_kv into
+	// platform_identity plain-Puts over the create-once record: a forged id
+	// whose org and stem match is ADOPTED on the next boot, because adoption
+	// validates grammar and byte budget and nothing else, so a rule pack could
+	// move the authority every entity is minted under; a forged id that does
+	// not match bricks the boot permanently. Owner-only closes that through the
+	// guard predicate that already exists.
 	//
 	// Its retention kind is STRICT no-lifecycle: verify and refuse, never
 	// reconcile. Stripping a TTL here would be silent repair of a bucket whose
@@ -129,7 +130,7 @@ func KVCatalog() []natsclient.BucketSpec {
 	// bucket has always carried.
 	semstreamsConfig := natsclient.BucketSpec{
 		Name:        BucketSemStreamsConfig,
-		Owner:       "config.Manager (configuration keys) and processor/rule.ConfigManager (rules.*)",
+		Owner:       "config.Manager (configuration keys, and rules.* through the key family it serves processor/rule.ConfigManager)",
 		Description: "SemStreams runtime configuration",
 		Class:       natsclient.ClassOperational,
 		Retention:   natsclient.RetentionPolicy{Kind: natsclient.RetentionNoLifecycleStrict},
@@ -181,12 +182,28 @@ func KVCatalog() []natsclient.BucketSpec {
 	}
 }
 
+// nameFamilies are the catalog rows whose Name is a PREFIX rather than a
+// bucket: every "<Name>_<suffix>" with a nonempty suffix is a member and
+// resolves to the row carrying its concrete name. The bare prefix is not a
+// member. The runtime configuration bucket is the one family: its members are
+// named per deployment by config.BucketName (#1188).
+var nameFamilies = map[string]bool{BucketSemStreamsConfig: true}
+
 // SpecFor resolves a bucket name to its catalog descriptor. The second return
 // is false for a name outside the catalog — the F2 boot-failure signal for a
 // configuration-supplied bucket name that resolves to nothing (an operator
-// typo may not silently create a stray unguarded bucket).
+// typo may not silently create a stray unguarded bucket). A member of a name
+// family resolves to its family's row with Name set to the member's name, so
+// acquisition creates the member and every owner-only guard refuses it.
 func SpecFor(name string) (natsclient.BucketSpec, bool) {
 	for _, spec := range KVCatalog() {
+		if nameFamilies[spec.Name] {
+			if suffix, ok := strings.CutPrefix(name, spec.Name+"_"); ok && suffix != "" {
+				spec.Name = name
+				return spec, true
+			}
+			continue
+		}
 		if spec.Name == name {
 			return spec, true
 		}

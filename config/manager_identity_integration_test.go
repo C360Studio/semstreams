@@ -61,6 +61,13 @@ func identityTestConfig(org, id string) *Config {
 	}
 }
 
+func mustBucketName(t *testing.T, org, stem string) string {
+	t.Helper()
+	name, err := BucketName(org, stem)
+	require.NoError(t, err)
+	return name
+}
+
 func newIdentityManager(t *testing.T, tc *natsclient.TestClient, org, id string) *Manager {
 	t.Helper()
 	manager, err := NewConfigManager(identityTestConfig(org, id), tc.Client, nil)
@@ -79,7 +86,7 @@ func readIdentityRecord(t *testing.T, ctx context.Context, manager *Manager) pla
 	return record
 }
 
-// directKVStore opens the shared configuration bucket independently of the
+// directKVStore opens the manager's configuration bucket independently of the
 // manager's lifecycle. Since the constructor no longer performs I/O (the
 // context hard rule), a manager has no bucket until Start acquires one, so a
 // test that seeds the bucket BEFORE Start opens it itself.
@@ -95,7 +102,7 @@ func directKVStore(t *testing.T, ctx context.Context, manager *Manager) *natscli
 func directBucket(t *testing.T, ctx context.Context, manager *Manager) jetstream.KeyValue {
 	t.Helper()
 	kv, err := manager.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      configBucketName,
+		Bucket:      manager.bucketName,
 		Description: "SemStreams runtime configuration",
 		History:     5,
 	})
@@ -175,9 +182,12 @@ func mapKeys(m map[string]any) []string {
 // later boot or a co-process takes the recorded identifier when the file
 // declares the record's STEM, and refuses otherwise — a different identifier, a
 // different organization, or the minted identifier itself (which is not a
-// declarable value; see TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance). The org comparison is the
-// reason this mechanism is correct WITHOUT the gh#459 guard, which #1188
-// retires.
+// declarable value; see TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance).
+//
+// Since #1188 the bucket is named by the declared pair, so the record is seeded
+// into the bucket the DECLARING manager names: a record for another pair can
+// reach it only through an alias (`_` is legal inside both parts) or by hand,
+// and this org/stem compare is what refuses it (owner ruling Q2 (a)).
 func TestConfigManagerAdoptsPersistedPlatformIdentity(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -197,10 +207,8 @@ func TestConfigManagerAdoptsPersistedPlatformIdentity(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			seeder := newIdentityManager(t, tc, "acme", "dep")
-			seedIdentityRecord(t, ctx, seeder, platformIdentityRecord{Org: "acme", Stem: "dep", ID: "dep-7f3a9c"})
-
 			manager := newIdentityManager(t, tc, tt.fileOrg, tt.fileID)
+			seedIdentityRecord(t, ctx, manager, platformIdentityRecord{Org: "acme", Stem: "dep", ID: "dep-7f3a9c"})
 			err := manager.Start(ctx)
 			if tt.wantError != "" {
 				require.ErrorContains(t, err, tt.wantError)
@@ -310,10 +318,7 @@ func TestPreCreatedIdentityRecordIsAdoptedUnsuffixed(t *testing.T) {
 // sends the boot down the subsequent-boot branch, where equal versions select
 // syncFromKV — which resets the in-memory service map before repopulating it
 // from a bucket that has nothing to repopulate it with. The deployment then
-// runs with no services AND never publishes its own. The environment guard
-// key is framework-internal for the same reason and seeded here too: a boot
-// that claimed and minted but failed its config push leaves exactly
-// {guard, record}, and that bucket must still read as a first boot.
+// runs with no services AND never publishes its own.
 func TestBootWithOnlyAnIdentityRecordIsStillAFirstBoot(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -330,10 +335,6 @@ func TestBootWithOnlyAnIdentityRecordIsStillAFirstBoot(t *testing.T) {
 	manager, err := NewConfigManager(cfg, tc.Client, nil)
 	require.NoError(t, err)
 	seedIdentityRecord(t, ctx, manager, platformIdentityRecord{Org: "acme", Stem: "dep", ID: "dep"})
-	guardVal, err := json.Marshal(cfg.Platform.Environment)
-	require.NoError(t, err)
-	_, err = directKVStore(t, ctx, manager).Create(ctx, platformEnvironmentGuardKey, guardVal)
-	require.NoError(t, err)
 
 	require.NoError(t, manager.Start(ctx))
 	defer manager.Stop(5 * time.Second)
@@ -364,10 +365,11 @@ func TestPreIdentityBucketRefusesStartWithoutMinting(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "predates framework-minted platform identity")
 	require.ErrorContains(t, err, platformIdentityKVKey)
-	// The refusal names WHICH keys it found, so an operator can tell the two
-	// causes apart — a carried-over bucket from a second writer's fresh one.
+	// The refusal names WHICH keys it found, and says the manager is the
+	// bucket's only writer until Start succeeds (#1188), so the keys came from
+	// a carried-over bucket or a hand-written one.
 	require.ErrorContains(t, err, "platform, version")
-	require.ErrorContains(t, err, "processor/rule")
+	require.ErrorContains(t, err, "only writer")
 
 	// Read independently: the refused Start left the manager's own writers
 	// disarmed, which is the point of the B6 fix.
@@ -471,14 +473,13 @@ func TestMaximumDeclarablePairMintsAndStarts(t *testing.T) {
 	require.Equal(t, effective, readIdentityRecord(t, ctx, manager).ID)
 }
 
-// preCreateConfigBucket creates `semstreams_config` with an explicit policy
-// BEFORE any Manager exists, the way another writer on a shared NATS server
-// would — processor/rule's ConfigManager creates the same bucket
-// (processor/rule/kv_config_integration.go), and CreateKeyValueBucket returns
-// an existing bucket unchanged rather than reconciling its policy.
+// preCreateConfigBucket creates the acme/dep configuration bucket with an
+// explicit policy BEFORE any Manager exists, the way an operator or tool
+// provisioning NATS storage would; CreateKeyValueBucket returns an existing
+// bucket unchanged rather than reconciling its policy.
 func preCreateConfigBucket(t *testing.T, ctx context.Context, tc *natsclient.TestClient, cfg jetstream.KeyValueConfig) {
 	t.Helper()
-	cfg.Bucket = configBucketName
+	cfg.Bucket = mustBucketName(t, "acme", "dep")
 	_, err := tc.Client.CreateKeyValueBucket(ctx, cfg)
 	require.NoError(t, err)
 }
@@ -487,7 +488,7 @@ func preCreateConfigBucket(t *testing.T, ctx context.Context, tc *natsclient.Tes
 //
 // `platform_identity` is create-once correctness state, but it inherits
 // whatever policy the bucket was created with. Codex pre-created
-// `semstreams_config` with TTL 250ms, booted, let the record expire, and booted
+// the configuration bucket with TTL 250ms, booted, let the record expire, and booted
 // again:
 //
 //	Minted platform identity ... platform=dep-a8fd5f
@@ -558,12 +559,12 @@ func TestEvictingConfigBucketRefusesStart(t *testing.T) {
 			manager := newIdentityManager(t, tc, "acme", "dep")
 			err := manager.Start(ctx)
 			require.Error(t, err, "a bucket that can evict the identity record must not be minted into")
-			require.ErrorContains(t, err, configBucketName)
+			require.ErrorContains(t, err, manager.bucketName)
 			require.ErrorContains(t, err, tt.names, "the refusal must name the offending policy value")
 
 			// Nothing was minted and nothing was created.
 			require.Equal(t, "dep", manager.GetConfig().Get().Platform.ID)
-			bucket, bErr := tc.Client.GetKeyValueBucket(ctx, configBucketName)
+			bucket, bErr := tc.Client.GetKeyValueBucket(ctx, manager.bucketName)
 			require.NoError(t, bErr)
 			_, gErr := bucket.Get(ctx, platformIdentityKVKey)
 			require.Error(t, gErr, "a refused acquisition must create no identity record")
@@ -571,88 +572,93 @@ func TestEvictingConfigBucketRefusesStart(t *testing.T) {
 	}
 }
 
-// TestConcurrentFirstBootRefusesASecondEnvironment is the Codex B2
-// reproduction. Two managers with the same org and stem but DIFFERENT
-// `environment` values, released together against an empty bucket: the winner
-// Creates the identity record and the loser adopts it through ErrKeyExists —
-// but both then took Start's first-boot branch, where the (org, id, environment)
-// guard does not run, and both published their configuration over each other's.
-// Codex reproduced two nil errors and two "First boot detected" lines 10/10.
-func TestConcurrentFirstBootRefusesASecondEnvironment(t *testing.T) {
+// TestEnvironmentDoesNotSeparateDeployments pins the owner ruling on #1188
+// (2026-09-01): "retire it — the bucket name is the separation."
+// platform.environment is a startup log label; two deployments declaring the
+// same org and platform.id are one deployment and share its configuration
+// bucket and its authority, whatever their environments. The environment
+// claim that used to refuse the second one (Codex B2) is retired with it.
+//
+// spec: component-runtime-config / Component configuration activates only during process construction
+func TestEnvironmentDoesNotSeparateDeployments(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	prodCfg := identityTestConfig("acme", "dep")
 	prodCfg.Platform.Environment = "prod"
-	devCfg := identityTestConfig("acme", "dep")
-	devCfg.Platform.Environment = "dev"
-
 	prod, err := NewConfigManager(prodCfg, tc.Client, nil)
 	require.NoError(t, err)
+	require.NoError(t, prod.Start(ctx))
+	defer prod.Stop(5 * time.Second)
+
+	devCfg := identityTestConfig("acme", "dep")
+	devCfg.Platform.Environment = "dev"
 	dev, err := NewConfigManager(devCfg, tc.Client, nil)
 	require.NoError(t, err)
-
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-	errs := make([]error, 2)
-	for i, manager := range []*Manager{prod, dev} {
-		wg.Add(1)
-		go func(i int, manager *Manager) {
-			defer wg.Done()
-			<-start
-			errs[i] = manager.Start(ctx)
-		}(i, manager)
-	}
-	close(start)
-	wg.Wait()
-	defer prod.Stop(5 * time.Second)
+	require.NoError(t, dev.Start(ctx), "an environment must not refuse a deployment that declares the same pair")
 	defer dev.Stop(5 * time.Second)
 
-	succeeded := 0
-	var refusal error
-	for _, err := range errs {
-		if err == nil {
-			succeeded++
-			continue
-		}
-		refusal = err
-	}
-	require.Equal(t, 1, succeeded,
-		"at most one environment may establish against one configuration bucket; prod=%v dev=%v", errs[0], errs[1])
-	require.ErrorContains(t, refusal, "prod")
-	require.ErrorContains(t, refusal, "dev")
+	require.Equal(t, prod.bucketName, dev.bucketName, "the same declared pair names one bucket")
+	require.Equal(t, prod.GetConfig().Get().Platform.ID, dev.GetConfig().Get().Platform.ID,
+		"the same declared pair adopts one authority")
+	keys, err := mustStore(t, dev).Keys(ctx)
+	require.NoError(t, err)
+	require.NotContains(t, keys, "platform_identity_guard", "the retired environment claim must not be written")
 }
 
-// TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance is the Codex B3
-// reproduction, from the other side of the contradiction it names.
+// TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance keeps ADR-104
+// decision 5 now that the bucket is named by the declared pair (#1188, Q4 (b)).
 //
-// The adopt arm accepted a file whose platform.id equalled the record's stem OR
-// its full identifier. But the load boundary treats every configured value as a
-// STEM and reserves seven bytes for the suffix, so at the legal boundary — a
-// 163-byte stem minting to a 170-byte identifier — putting that identifier in
-// the file is rejected at load and never reaches adopt. One field, two admitted
-// kinds, and the ADR's "no path sees both kinds" claim false.
-//
-// Resolved by making configuration always declare the stem. The refusal stays
-// observation-based: it compares against the STORED identifier, never detects a
-// minted value by grammar, and tells the operator what to write instead.
+// A file declaring the identifier minted from stem s names a different, empty
+// bucket, so nothing in that bucket can say the value was minted. The mint
+// branch therefore reads the org's sibling buckets before minting and refuses
+// when one recorded the declared value as its minted identifier — a
+// comparison against stored values, never a reading of the string's shape.
+// Both deployments are real managers; nothing is seeded by hand.
 func TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	seeder := newIdentityManager(t, tc, "acme", "dep")
-	require.NoError(t, seeder.Start(ctx))
-	minted := seeder.GetConfig().Get().Platform.ID
-	require.NoError(t, seeder.Stop(5*time.Second))
+	first := newIdentityManager(t, tc, "acme", "s")
+	require.NoError(t, first.Start(ctx))
+	defer first.Stop(5 * time.Second)
+	minted := first.GetConfig().Get().Platform.ID
+	require.NotEqual(t, "s", minted, "the first boot mints a suffixed identifier")
 
-	manager := newIdentityManager(t, tc, "acme", minted)
-	err := manager.Start(ctx)
+	copied := newIdentityManager(t, tc, "acme", minted)
+	err := copied.Start(ctx)
 	require.Error(t, err, "configuration declares the stem; the minted identifier is not a declarable value")
-	require.ErrorContains(t, err, "declare the stem")
-	require.ErrorContains(t, err, "dep")
+	require.ErrorContains(t, err, "declare the stem \"s\"")
 	require.ErrorContains(t, err, minted)
+	require.NotContains(t, bucketEntries(t, ctx, tc, copied.bucketName), platformIdentityKVKey,
+		"the refused deployment must mint nothing")
+
+	other := newIdentityManager(t, tc, "acme", "t")
+	require.NoError(t, other.Start(ctx), "a different stem is a different deployment, not a copied identifier")
+	defer other.Stop(5 * time.Second)
+	require.NotEqual(t, minted, other.GetConfig().Get().Platform.ID)
+}
+
+// TestAliasingPairsAreRefusedWithTheAliasMessage: `_` is legal inside both
+// parts, so org "a_b" + stem "c" and org "a" + stem "b_c" name one bucket. The
+// ruled answer is a refusal at adoption, not injective naming (#1188, Q2 (a)).
+func TestAliasingPairsAreRefusedWithTheAliasMessage(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	first := newIdentityManager(t, tc, "a_b", "c")
+	require.NoError(t, first.Start(ctx))
+	defer first.Stop(5 * time.Second)
+
+	alias := newIdentityManager(t, tc, "a", "b_c")
+	require.Equal(t, first.bucketName, alias.bucketName, "precondition: the two pairs alias to one bucket")
+	err := alias.Start(ctx)
+	require.ErrorContains(t, err, "config bucket platform identity mismatch")
+	require.ErrorContains(t, err, "two pairs alias to one name")
+	require.ErrorContains(t, err, first.bucketName)
 }
 
 // TestStartRejectsNilContextWithoutSideEffects pins the repository hard rule at
@@ -676,15 +682,15 @@ func TestStartRejectsNilContextWithoutSideEffects(t *testing.T) {
 	require.ErrorIs(t, storeErr, errBucketNotAcquired, "a rejected Start must not have acquired a bucket")
 
 	ctx := context.Background()
-	_, bucketErr := tc.Client.GetKeyValueBucket(ctx, configBucketName)
+	_, bucketErr := tc.Client.GetKeyValueBucket(ctx, manager.bucketName)
 	require.Error(t, bucketErr, "a rejected Start must not have created the configuration bucket")
 }
 
 // bucketEntries reads every key and value in a bucket, so a test can prove a
 // refused Start left it byte-for-byte unchanged.
-func bucketEntries(t *testing.T, ctx context.Context, tc *natsclient.TestClient) map[string]string {
+func bucketEntries(t *testing.T, ctx context.Context, tc *natsclient.TestClient, name string) map[string]string {
 	t.Helper()
-	bucket, err := tc.Client.GetKeyValueBucket(ctx, configBucketName)
+	bucket, err := tc.Client.GetKeyValueBucket(ctx, name)
 	require.NoError(t, err)
 	keys, err := bucket.Keys(ctx)
 	if err != nil {
@@ -715,15 +721,15 @@ func TestRefusedStartDisarmsEveryExportedWriter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// A foreign deployment owns this bucket.
-	foreign := newIdentityManager(t, tc, "foreignorg", "foreign-app")
-	require.NoError(t, foreign.Start(ctx))
-	require.NoError(t, foreign.Stop(5*time.Second))
-	before := bucketEntries(t, ctx, tc)
+	// The bucket this deployment names records a foreign identity — by hand,
+	// or through an alias (#1188: a foreign deployment no longer shares it).
+	local := newIdentityManager(t, tc, "acme", "dep")
+	seedIdentityRecord(t, ctx, local, platformIdentityRecord{Org: "foreignorg", Stem: "foreign-app", ID: "foreign-app-0a1b2c"})
+	putConfigValue(t, ctx, local, "version", "1.0.0")
+	before := bucketEntries(t, ctx, tc, local.bucketName)
 	require.NotEmpty(t, before)
 
-	local := newIdentityManager(t, tc, "acme", "dep")
-	require.Error(t, local.Start(ctx), "a foreign bucket must refuse Start")
+	require.Error(t, local.Start(ctx), "a foreign record must refuse Start")
 
 	require.ErrorIs(t, local.PushToKV(ctx), errBucketNotAcquired,
 		"a refused Start must leave PushToKV disarmed")
@@ -733,6 +739,6 @@ func TestRefusedStartDisarmsEveryExportedWriter(t *testing.T) {
 	require.ErrorIs(t, local.DeleteComponentFromKV(ctx, "intruder"), errBucketNotAcquired,
 		"a refused Start must leave component deletes disarmed")
 
-	require.Equal(t, before, bucketEntries(t, ctx, tc),
+	require.Equal(t, before, bucketEntries(t, ctx, tc, local.bucketName),
 		"a refused Start must leave the foreign bucket byte-for-byte unchanged")
 }

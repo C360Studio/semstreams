@@ -55,7 +55,7 @@ type GraphRoundTripProbe struct {
 	// declares — the stem, not the pair. Since ADR-102 d5 the graph refuses any
 	// subject outside its own authority, and since ADR-104 that authority is the
 	// declared id plus a framework-minted entropy suffix, so the probe READS the
-	// effective pair from semstreams_config/platform_identity at Run and uses
+	// effective pair from semstreams_config_<org>_<stem>/platform_identity at Run and uses
 	// this value only to assert it is driving the stack it thinks it is. It is
 	// no longer a fact the probe cannot observe from the outside — the whole
 	// point of recording it was to stop everyone predicting it.
