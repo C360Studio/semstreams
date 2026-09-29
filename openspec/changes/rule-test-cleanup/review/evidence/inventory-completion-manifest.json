@@ -1,0 +1,37 @@
+{
+  "source_base": "caa98f5acae60efbc669ad1e1795ab6e903abd42",
+  "initial_inventory_checkpoint": "8a305ed1b773e1b54d930ac342fa6440e9ae5546",
+  "ledger_unique_source_pins": 370,
+  "artifacts": [
+    {
+      "path": "review/ownership-ledger.md",
+      "bytes": 93076,
+      "sha256": "d94a80a8ce20d1501b8e51c3793d6178dafc8f9954f978a5b9b68a9505c8bb9b"
+    },
+    {
+      "path": "review/ownership-ledger-pins.md",
+      "bytes": 38871,
+      "sha256": "9e6d24e668c7946cbf011f2c376d9a5aef5cddb0c3302392e6f1f14ec4ccb4c1"
+    },
+    {
+      "path": "review/helper-query-supplement.json",
+      "bytes": 41319,
+      "sha256": "e1f816984610f8839a0edd219c62a426a6adb2c27a28278de816e3b80ee811d9"
+    },
+    {
+      "path": "review/inventory-review-initial.md",
+      "bytes": 12744,
+      "sha256": "b838415ed462bfff82d57691ba326036abb351118605cd0c431eee941e225a4c"
+    },
+    {
+      "path": "review/evidence/verified-claims.zip",
+      "bytes": 39286,
+      "sha256": "6846daec260ec2d7faa1f9a1835e27e6db142fe935984a58cc5c7d80635ea8f9"
+    },
+    {
+      "path": "review/evidence/verified-claims-manifest.json",
+      "bytes": 295,
+      "sha256": "b82d6624c09f9368969b7f5378cf234b77450e543d8b628e69d3edd7a2bacd31"
+    }
+  ]
+}

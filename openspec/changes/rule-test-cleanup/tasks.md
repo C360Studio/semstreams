@@ -2,8 +2,8 @@
 
 ## 1. Establish the surface
 
-- [ ] 1.1 Produce the complete line-pinned inventory and exact baseline/helper/caller companions at a frozen source.
-- [ ] 1.2 Obtain independent INVENTORY PASS and preserve that checkpoint before design.
+- [x] 1.1 Produce the complete line-pinned inventory and exact baseline/helper/caller companions at a frozen source.
+- [ ] 1.2 HOLD: Obtain independent INVENTORY PASS and preserve that checkpoint before design.
 
 ## 2. Design gate
 

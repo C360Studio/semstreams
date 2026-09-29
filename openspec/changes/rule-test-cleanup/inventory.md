@@ -1,4 +1,4 @@
-# Rule cleanup inventory handoff — incomplete review draft
+# Rule cleanup inventory — completed source ledger, review pending
 
 base: caa98f5acae60efbc669ad1e1795ab6e903abd42
 
@@ -165,7 +165,7 @@ All 55 original command/result records are retained in the raw archive. Indexes 
 
 This synthesis re-read only supplied records, required project/change documents, and already-recorded source ranges at the frozen base for exact pins. It ran no fresh gopls/source search, GitHub request, test, Docker operation, or repository mutation. No zero-hit search was converted into an absence claim.
 
-## INVENTORY GAPS — do not infer completeness
+## Initial inventory gaps — checkpoint 8a305ed1
 
 1. **Independent re-derivation outstanding.** This is packaging of prior evidence, not independent INVENTORY PASS. All completeness claims remain open to the reviewer.
 2. **Per-case ownership ledger incomplete.** The exact 24 roots and helper references are enumerated; the supplied annotations do not constitute a complete semantic ledger of every caller's acquired resources, fatal setup exits, Start/operation authority, transfer point, explicit terminal attempt, join observation and substrate teardown order. That gap must remain visible when judging inventory acceptance.
@@ -175,7 +175,29 @@ This synthesis re-read only supplied records, required project/change documents,
 6. **Source execution status.** Build tags and recorded `skip_lines` are annotations only; empty local skip lists do not prove all enclosing paths execute. No skipped-source or execution-success claim is made.
 7. **External adopter enumeration absent.** No exported change is proposed, but any later outward-facing design needs its own outside-repository adopter seam evidence; in-repo external test packages do not satisfy that obligation.
 
-Stop here for independent inventory review. No design or implementation authorization is issued by this handoff.
+## Completion supplement and current review boundary
+
+The initial checkpoint above is preserved at `8a305ed1`; its review is retained verbatim in
+`review/inventory-review-initial.md`. It requested one bounded correction: a per-case ownership ledger.
+The current supplement is `review/ownership-ledger.md`, SHA256
+`d94a80a8ce20d1501b8e51c3793d6178dafc8f9954f978a5b9b68a9505c8bb9b`.
+It maps B00–B23 to all 24 exact roots and H01–H37 to all 37 physical lifecycle-helper calls.
+It records acquisition, fallible exits, authority, explicit attempts, transfer, substrate ordering and actual
+completion observations. Shared source facts are factored without choosing a target-state abstraction.
+Its mechanical pin companion is `review/ownership-ledger-pins.md`; exact identities and hashes for this supplement
+are in `review/evidence/inventory-completion-manifest.json`.
+
+`review/helper-query-supplement.json` closes the four raw-only query annotations: 45 integration records with exact
+physical parity to the earlier default sets. These records add no lifecycle-helper callers.
+The coordinator successfully retrieved all 14 bounded adjacent issue/PR records on 2026-09-29; complete bytes and
+hashes are in `review/evidence/verified-claims.zip` and its manifest. Earlier retrieval failures remain historical
+failed evidence, not claims of absence. This confirms #1421 remains open, its waiver is limited to #1404, #1429 is
+an open draft, #1416 remains open for its recorded disposition, and Claude owns the separate #1426/#1427 work.
+
+Initial gaps 2, 3 and 5 now have concrete supplemental evidence. Gap 1 remains pending the independent final review.
+Gaps 4, 6 and 7 remain explicit evidence limits: no universal native deadline/join proof, no execution claim, and no
+external-adopter claim for a new exported surface. Those are not additional repair populations or authority to
+expand this test-only batch. No design or implementation authorization is issued by this inventory supplement.
 
 ## Verifier source pins
 
