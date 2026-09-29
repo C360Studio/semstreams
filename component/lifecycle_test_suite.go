@@ -21,12 +21,14 @@ import (
 type LifecycleFactory func() LifecycleComponent
 
 const lifecycleTestBudget = 5 * time.Second
+const benchmarkTerminalBudget = time.Second
 
 // lifecycleTestOwner is the lexical owner of one returned test component. It
 // stores only cancellation and terminal-attempt state; operation contexts stay
 // with the invoking case or iteration.
 type lifecycleTestOwner struct {
 	component       LifecycleComponent
+	stopBudget      time.Duration
 	cancelStart     context.CancelFunc
 	attempted       bool
 	concreteStopErr error
@@ -44,7 +46,7 @@ func newLifecycleTestOwner(component LifecycleComponent) *lifecycleTestOwner {
 			return nil
 		}
 	}
-	return &lifecycleTestOwner{component: component}
+	return &lifecycleTestOwner{component: component, stopBudget: lifecycleTestBudget}
 }
 
 func (o *lifecycleTestOwner) workContext(parent context.Context) context.Context {
@@ -54,7 +56,7 @@ func (o *lifecycleTestOwner) workContext(parent context.Context) context.Context
 }
 
 func (o *lifecycleTestOwner) stop(workCtx context.Context, abort bool) error {
-	stopCtx, cancelStop := context.WithTimeout(context.Background(), lifecycleTestBudget)
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), o.stopBudget)
 	defer cancelStop()
 	return o.stopWithContext(stopCtx, workCtx, abort)
 }
@@ -347,6 +349,7 @@ func benchmarkLifecycleIteration(b *testing.B, factory LifecycleFactory, mode st
 		b.StopTimer()
 		return errors.New("component factory returned nil")
 	}
+	owner.stopBudget = benchmarkTerminalBudget
 	var workCtx context.Context
 	defer func() {
 		b.StopTimer()

@@ -414,6 +414,27 @@ func TestSharedLifecycleOperationAndCleanupErrorsRemainDistinct(t *testing.T) {
 	}
 }
 
+func TestSharedLifecycleOrdinaryTerminalRetainsFiveSecondBudget(t *testing.T) {
+	probe := newLifecycleSupportProbe()
+	probe.onStop = func(_, stopCtx context.Context) error {
+		deadline, finite := stopCtx.Deadline()
+		if !finite {
+			return errors.New("ordinary Stop has no finite deadline")
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 2*time.Second || remaining > 5*time.Second {
+			return fmt.Errorf("ordinary Stop did not retain five-second budget: remaining=%s", remaining)
+		}
+		return nil
+	}
+	if err := runLifecycleCycle(t.Context(), func() LifecycleComponent { return probe }, "ordinary-budget"); err != nil {
+		t.Fatal(err)
+	}
+	if probe.stopCount() != 1 {
+		t.Fatalf("ordinary concrete Stop calls=%d, want one", probe.stopCount())
+	}
+}
+
 func BenchmarkSharedLifecycleFailureChild(b *testing.B) {
 	if os.Getenv("SEMSTREAMS_LIFECYCLE_CHILD") != "benchmark" {
 		return
@@ -427,6 +448,70 @@ func BenchmarkSharedLifecycleFailureChild(b *testing.B) {
 }
 
 func TestSharedLifecycleBenchmarkChecksOperationAndFinalizer(t *testing.T) {
+	output, runErr := runSharedLifecycleBenchmarkChild(t, "benchmark", "^BenchmarkSharedLifecycleFailureChild$/^Initialize$")
+	if runErr == nil || !strings.Contains(output, "benchmark Initialize failure") {
+		t.Fatalf("benchmark did not report operation failure: %v %s", runErr, output)
+	}
+	if strings.Count(output, "LIFECYCLE_EVENT factory") != 1 || strings.Count(output, "LIFECYCLE_EVENT stop") != 1 {
+		t.Fatalf("benchmark iteration lost or duplicated finalization: %s", output)
+	}
+}
+
+func BenchmarkSharedLifecycleBudgetChild(b *testing.B) {
+	marker := os.Getenv("SEMSTREAMS_LIFECYCLE_CHILD")
+	if marker != "benchmark_budget" && marker != "benchmark_stop_error" {
+		return
+	}
+	BenchmarkLifecycleMethods(b, func() LifecycleComponent {
+		probe := newLifecycleSupportProbe()
+		probe.onStop = func(_, stopCtx context.Context) error {
+			deadline, finite := stopCtx.Deadline()
+			if !finite {
+				return errors.New("benchmark Stop has no finite deadline")
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 || remaining > time.Second {
+				return fmt.Errorf("benchmark Stop terminal budget exceeded one second: remaining=%s", remaining)
+			}
+			fmt.Fprintln(os.Stdout, "LIFECYCLE_EVENT stop_budget_ok")
+			if marker == "benchmark_stop_error" {
+				return errors.New("benchmark concrete Stop failure")
+			}
+			return nil
+		}
+		return probe
+	})
+}
+
+func TestSharedLifecycleBenchmarkInitializeBudget(t *testing.T) {
+	assertSharedLifecycleBenchmarkBudget(t, "benchmark_budget", "Initialize", false)
+}
+
+func TestSharedLifecycleBenchmarkExplicitStopBudget(t *testing.T) {
+	assertSharedLifecycleBenchmarkBudget(t, "benchmark_budget", "Stop", false)
+}
+
+func TestSharedLifecycleBenchmarkStopErrorRetained(t *testing.T) {
+	assertSharedLifecycleBenchmarkBudget(t, "benchmark_stop_error", "Initialize", true)
+}
+
+func assertSharedLifecycleBenchmarkBudget(t *testing.T, marker, mode string, wantFailure bool) {
+	t.Helper()
+	pattern := "^BenchmarkSharedLifecycleBudgetChild$/^" + mode + "$"
+	output, runErr := runSharedLifecycleBenchmarkChild(t, marker, pattern)
+	if (runErr != nil) != wantFailure {
+		t.Fatalf("benchmark exit=%v, want failure=%t: %s", runErr, wantFailure, output)
+	}
+	if !strings.Contains(output, "LIFECYCLE_EVENT stop_budget_ok") || strings.Count(output, "LIFECYCLE_EVENT stop\n") != 1 {
+		t.Fatalf("benchmark failed one-second terminal proof or retried concrete Stop: %s", output)
+	}
+	if wantFailure && !strings.Contains(output, "benchmark concrete Stop failure") {
+		t.Fatalf("benchmark discarded concrete Stop error: %s", output)
+	}
+}
+
+func runSharedLifecycleBenchmarkChild(t *testing.T, marker, pattern string) (string, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 	defer cancel()
 	outputPath := filepath.Join(t.TempDir(), "benchmark-child.log")
@@ -434,8 +519,8 @@ func TestSharedLifecycleBenchmarkChecksOperationAndFinalizer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^$", "-test.bench=^BenchmarkSharedLifecycleFailureChild$/^Initialize$", "-test.benchtime=1x", "-test.v")
-	cmd.Env = append(os.Environ(), "SEMSTREAMS_LIFECYCLE_CHILD=benchmark")
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^$", "-test.bench="+pattern, "-test.benchtime=1x", "-test.v")
+	cmd.Env = append(os.Environ(), "SEMSTREAMS_LIFECYCLE_CHILD="+marker)
 	cmd.Stdout, cmd.Stderr = output, output
 	runErr := cmd.Run()
 	if err := output.Close(); err != nil {
@@ -445,10 +530,8 @@ func TestSharedLifecycleBenchmarkChecksOperationAndFinalizer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ctx.Err() != nil || runErr == nil || !strings.Contains(string(raw), "benchmark Initialize failure") {
-		t.Fatalf("benchmark did not report operation failure within child bound: context=%v run=%v output=%s", ctx.Err(), runErr, raw)
+	if ctx.Err() != nil {
+		t.Fatalf("benchmark child exceeded four-second containment bound: %v %s", ctx.Err(), raw)
 	}
-	if strings.Count(string(raw), "LIFECYCLE_EVENT factory") != 1 || strings.Count(string(raw), "LIFECYCLE_EVENT stop") != 1 {
-		t.Fatalf("benchmark iteration lost or duplicated finalization: %s", raw)
-	}
+	return string(raw), runErr
 }
