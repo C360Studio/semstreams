@@ -6,6 +6,6 @@
 - [x] Select bounded harness correction; obtain independent design review and record acceptance without weakening rulings.
 - [x] Implement private harness ownership, convergence and failure-evidence helpers.
 - [x] Add deterministic failure and terminal-expiry proofs with independently recoverable fixtures and mutation evidence.
-- [ ] Run focused race proofs, one CI-profile integration run and required push gates; reconcile exact guard fallout.
+- [x] Run focused race proofs, one CI-profile integration run and required push gate stages; reconcile exact guard fallout.
 - [x] Obtain independent implementation review and resolve findings.
 - [ ] Reconcile task/spec truth and unresolved historical-cause disposition; archive last and obtain archive/spec review.

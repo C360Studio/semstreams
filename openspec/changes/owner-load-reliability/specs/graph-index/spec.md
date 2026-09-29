@@ -36,4 +36,3 @@ or change owner-load workload and latency budgets.
 - **WHEN** its convergence context ends
 - **THEN** Info receives that cancellation
 - **AND** failure evidence retains last count, error and attempt count.
-
