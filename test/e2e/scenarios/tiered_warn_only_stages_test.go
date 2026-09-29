@@ -254,3 +254,27 @@ func TestGraphRAGGlobal_ReadsSnakeCaseSummaries(t *testing.T) {
 	require.NoError(t, s.executeTestGraphRAGGlobal(context.Background(), result))
 	require.Equal(t, 2, result.Metrics["graphrag_global_communities_found"])
 }
+
+// The stage table carries the #1426 A-by-variant and B decisions: a model-owned or
+// config-disabled outcome is absent from the semantic variant, and the
+// framework-owned path stays graded where it runs in ms.
+func TestStageTable_WarnOnlyDecisions(t *testing.T) {
+	names := func(variant string) map[string]bool {
+		out := map[string]bool{}
+		for _, st := range (&TieredScenario{}).getStagesForVariant(variant) {
+			out[st.name] = true
+		}
+		return out
+	}
+	statistical, semantic, structural := names("statistical"), names("semantic"), names("structural")
+
+	for _, name := range []string{"test-nl-temporal-intent", "test-graphrag-local", "test-graphrag-global"} {
+		require.True(t, statistical[name], "%s must run in statistical", name)
+		require.False(t, semantic[name], "%s must not run in semantic (model-owned outcome)", name)
+	}
+	for _, v := range []map[string]bool{structural, statistical, semantic} {
+		require.True(t, v["test-nl-path-intent"], "test-nl-path-intent runs in every variant")
+		require.False(t, v["validate-anomaly-detection"], "anomaly engine is disabled in every tier config")
+		require.False(t, v["validate-rule-transitions"], "duplicate of validate-rules")
+	}
+}
