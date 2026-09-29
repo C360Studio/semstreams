@@ -20,8 +20,10 @@
       read-error and empty-ID arms of the four NATS-seam stages
       (`validate-hierarchy-inference`, `validate-incoming-index-predicates`, `validate-bidirectional-traversal`,
       `validate-inverse-edges-materialized`) and `validate-entity-structure`'s sample read-error arm.
-- [ ] 2.2 `task e2e:statistical` green on the branch; the #1117 path-only semantic run green or its reds filed
-      with causes.
+- [x] 2.2 `task e2e:statistical` green on the branch (CI `e2e statistical` on the code head `263b60e2`, E2E Ladder
+      run 36641734740). The #1117 path-only semantic run is sequenced after this PR by the owner ruling on #1117
+      (2026-09-29, verbatim "the warn-only slice #1426 (beta.163) lands first"): its first measurement is PR #1425's
+      rebased run, and its reds are filed there.
 - [ ] 2.3 Review through the project reviewer contract; owner acceptance on #1426.
 
 Landing tasks (archive, spec sync, ticks) live on the PR checklist per the #1230 ruling, not here.
