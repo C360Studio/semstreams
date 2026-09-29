@@ -32,7 +32,8 @@ Nine focused race proofs, a meaningful omitted-join mutation with independent fi
 expired-baseline behavioral red/green passed. All required local gate stages passed: check:push completed through
 unit race, integration admission refused Claude's active lock, and only the remaining canonical integration stage
 was resumed with a bounded wait and passed. evidence/full-verification.md records exact results and limits.
-Final archive/spec review and hosted checks remain pending; no issue-closure or merge-readiness claim is made.
+Final archive/spec/evidence review passed. Hosted checks remain tracked on PR #1432; no issue-closure or
+merge-readiness claim is made.
 
 ## Issue Disposition
 

@@ -8,4 +8,4 @@
 - [x] Add deterministic failure and terminal-expiry proofs with independently recoverable fixtures and mutation evidence.
 - [x] Run focused race proofs, one CI-profile integration run and required push gate stages; reconcile exact guard fallout.
 - [x] Obtain independent implementation review and resolve findings.
-- [ ] Reconcile task/spec truth and unresolved historical-cause disposition; archive last and obtain archive/spec review.
+- [x] Reconcile task/spec truth and unresolved historical-cause disposition; archive last and obtain archive/spec review.
