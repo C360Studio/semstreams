@@ -5,9 +5,9 @@ package rule_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
@@ -15,6 +15,39 @@ import (
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/stretchr/testify/require"
 )
+
+// ruleLifecycleObservation forwards every lifecycle call to the real
+// processor. Stop records only what this caller can observe: finite caller
+// authority and a completed invocation, not a full internal join after abort.
+type ruleLifecycleObservation struct {
+	component.LifecycleComponent
+	mu           sync.Mutex
+	stopCalls    int
+	stopReturned int
+	stopFinite   bool
+}
+
+func (o *ruleLifecycleObservation) Stop(ctx context.Context) error {
+	if ctx == nil { // The portable nil-context probe must reach the real component.
+		return o.LifecycleComponent.Stop(ctx)
+	}
+	_, finite := ctx.Deadline()
+	o.mu.Lock()
+	o.stopCalls++
+	o.stopFinite = o.stopFinite && finite
+	o.mu.Unlock()
+	err := o.LifecycleComponent.Stop(ctx)
+	o.mu.Lock()
+	o.stopReturned++
+	o.mu.Unlock()
+	return err
+}
+
+func (o *ruleLifecycleObservation) observed() (int, int, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.stopCalls, o.stopReturned, o.stopFinite
+}
 
 func TestIntegration_RuleStandardLifecycle(t *testing.T) {
 	// The suite owns one fresh server. Its concurrent fresh processors share
@@ -34,23 +67,22 @@ func TestIntegration_RuleStandardLifecycle(t *testing.T) {
 	}
 
 	var mu sync.Mutex
-	var processors []component.LifecycleComponent
-	// Registered after NewTestClient: even an early suite failure gets a Stop
-	// attempt before the NATS substrate is torn down. One cooperative budget
-	// covers the whole cohort, rather than multiplying it by the instance count.
+	var processors []*ruleLifecycleObservation
+	var factoryErrors []error
+	// Registered after NewTestClient so this assertion runs before its NATS
+	// teardown. The shared suite owns and finalizes each returned instance.
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
 		mu.Lock()
-		owned := append([]component.LifecycleComponent(nil), processors...)
+		owned := append([]*ruleLifecycleObservation(nil), processors...)
+		errors := append([]error(nil), factoryErrors...)
 		mu.Unlock()
+		for _, err := range errors {
+			t.Errorf("rule lifecycle factory: %v", err)
+		}
 		for i, processor := range owned {
-			if err := ctx.Err(); err != nil {
-				t.Errorf("rule lifecycle cleanup: %d processors unattempted after aggregate budget: %v", len(owned)-i, err)
-				return
-			}
-			if err := processor.Stop(ctx); err != nil {
-				t.Errorf("rule lifecycle cleanup: processor %d of %d: %v", i+1, len(owned), err)
+			calls, returned, finite := processor.observed()
+			if calls < 1 || calls > 2 || returned != calls || !finite {
+				t.Errorf("rule lifecycle instance %d: nonnil Stop calls=%d returns=%d finite=%t", i, calls, returned, finite)
 			}
 		}
 	})
@@ -58,18 +90,22 @@ func TestIntegration_RuleStandardLifecycle(t *testing.T) {
 	component.StandardLifecycleTests(t, func() component.LifecycleComponent {
 		created, err := rule.CreateRuleProcessor(rawConfig, deps)
 		if err != nil {
-			// The suite also invokes this factory from worker goroutines.
-			t.Errorf("create rule lifecycle fixture: %v", err)
+			mu.Lock()
+			factoryErrors = append(factoryErrors, err)
+			mu.Unlock()
 			return nil
 		}
 		processor, ok := created.(component.LifecycleComponent)
 		if !ok {
-			t.Errorf("rule factory returned %T, which does not implement LifecycleComponent", created)
+			mu.Lock()
+			factoryErrors = append(factoryErrors, fmt.Errorf("factory returned %T without LifecycleComponent", created))
+			mu.Unlock()
 			return nil
 		}
+		observed := &ruleLifecycleObservation{LifecycleComponent: processor, stopFinite: true}
 		mu.Lock()
-		processors = append(processors, processor)
+		processors = append(processors, observed)
 		mu.Unlock()
-		return processor
+		return observed
 	})
 }

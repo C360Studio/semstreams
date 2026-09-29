@@ -1,0 +1,9 @@
+--- FAIL: TestSharedLifecycleEarlyFailureFinalizes (0.02s)
+    lifecycle_test_support_test.go:112: terminal calls = 0, want one after early Initialize failure: === RUN   TestSharedLifecycleEarlyFailureChild
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:299: NoLeaks iteration 0 Initialize: injected initialize failure
+        --- FAIL: TestSharedLifecycleEarlyFailureChild (0.00s)
+        FAIL
+FAIL
+FAIL	github.com/c360studio/semstreams/component	0.335s
+FAIL

@@ -1,0 +1,6 @@
+[INTEGRATION] docker info latency: 1000ms (integer-second clock fallback)
+[INTEGRATION] using cached nats:2.14-alpine (registry pull skipped)
+[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)
+ok  	github.com/c360studio/semstreams/processor/rule	2.772s
+[INTEGRATION] no latency distributions recorded
+[INTEGRATION] tests complete

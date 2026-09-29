@@ -1,0 +1,6 @@
+LIFECYCLE_EVENT stop
+--- FAIL: TestSharedLifecycleOperationAndCleanupErrorsRemainDistinct (0.00s)
+    lifecycle_test_support_test.go:399: cycle lost operation or cleanup error: two-errors Initialize: operation failure
+FAIL
+FAIL	github.com/c360studio/semstreams/component	0.318s
+FAIL

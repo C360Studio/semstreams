@@ -1,0 +1,6 @@
+MUTANT KILLED ownership: terminal calls = 0
+MUTANT KILLED premature_cancel: cycle error
+MUTANT KILLED missing_post_stop_cancel: live peer terminal/post-return cancellation
+MUTANT KILLED wrapper_finalizer: concrete Stop calls = 0
+MUTANT KILLED discarded_cleanup: cycle lost operation or cleanup error
+RESTORED PASS checksum=565a41db8b83ef7f2fd204b36b3567ff

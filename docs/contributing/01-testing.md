@@ -498,6 +498,29 @@ functions, so client close and container termination cannot derive from it. Each
 bounded `context.Background()` child. Those independent contexts preserve the measured 10-second cleanup ceiling
 even after test cancellation; they are not a general license to use `context.Background()` for test I/O.
 
+### Shared component lifecycle tests
+
+`component.StandardLifecycleTests`, `component.TestErrorInjection` and `component.BenchmarkLifecycleMethods` own each
+nonnil component returned by their factory. They install lexical finalization before assertions or lifecycle calls
+can exit the case or iteration. Controlled Stop runs synchronously with fresh finite cleanup authority while the
+accepted Start context is live; Start cancellation follows the terminal attempt. This ordering also holds when a
+fatal assertion exits the case, before the Go testing runner cancels `t.Context()` and invokes substrate cleanup.
+Do not add a second component cleanup registry around these suites. Keep NATS/client/container ownership with the
+canonical substrate helper.
+
+Factories must return fresh independent components and support concurrent invocation. Resources acquired before a
+component is returned remain the factory's responsibility. A factory used by suite workers must not call
+`Fatal` or `FailNow`; report an acquisition error without terminating the worker and return nil. The suite reports
+that nil as a failed acquisition. Returned operation and cleanup errors remain visible; failing iterations stop new
+admission while already-owned work finishes. Error injection owns the base component separately so an injected Stop
+error cannot intercept finalization.
+
+A finite Stop context supplies a cooperative bound; it cannot interrupt an implementation that ignores cancellation.
+An abort error or an expired bound does not prove all work joined, and a second Stop must not be invented as a generic
+rejoin mechanism. Deliberate nil, abort and completed-repeat contract probes keep their own expectations. Components
+still need focused owner tests for exact worker joins, partial acquisition and resource-specific drain ordering;
+aggregate goroutine or memory counts are supplementary observations.
+
 ## Budgets for New Tests
 
 Budgets make resource use reviewable. They are defaults for new evidence; existing packages are migrated by the

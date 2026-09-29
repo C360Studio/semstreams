@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source_file=component/lifecycle_test_suite.go
+backup=/private/tmp/gh1418-accepted-start-order-backup.go
+cp "$source_file" "$backup"
+original=$(md5 -q "$source_file")
+restore() {
+  cp "$backup" "$source_file"
+  actual=$(md5 -q "$source_file")
+  if [[ "$actual" != "$original" ]]; then
+    echo "RESTORATION FAILED: $actual != $original" >&2
+    exit 1
+  fi
+}
+trap restore EXIT
+python3 - "$source_file" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); source=p.read_text()
+old='func (o *lifecycleTestOwner) stop(workCtx context.Context, abort bool) error {\n\tstopCtx, cancelStop :='
+new='func (o *lifecycleTestOwner) stop(workCtx context.Context, abort bool) error {\n\tif o.cancelStart != nil { o.cancelStart() } // mutant: cancel accepted Start immediately before concrete Stop\n\tstopCtx, cancelStop :='
+if source.count(old)!=1: raise SystemExit('expected one accepted-Start Stop boundary')
+p.write_text(source.replace(old,new,1))
+PY
+if go test -count=1 ./component -run '^TestSharedLifecycleOwnedCycleTransitions$/^normal$' > /private/tmp/gh1418-mutant-accepted-start-order.log 2>&1; then
+  echo 'VALID MUTANT SURVIVED' >&2
+  exit 1
+fi
+if ! rg -q 'accepted Start authority ended before controlled Stop|cycle error' /private/tmp/gh1418-mutant-accepted-start-order.log; then
+  cat /private/tmp/gh1418-mutant-accepted-start-order.log >&2
+  echo 'mutant failed for an unrelated reason' >&2
+  exit 1
+fi
+echo 'MUTANT KILLED: accepted Start canceled immediately before concrete Stop'
+restore
+trap - EXIT
+go test -race -count=1 ./component -run '^TestSharedLifecycleOwnedCycleTransitions$/^normal$' > /private/tmp/gh1418-accepted-start-order-restored.log 2>&1
+printf 'RESTORED RACE PASS checksum=%s\n' "$original"

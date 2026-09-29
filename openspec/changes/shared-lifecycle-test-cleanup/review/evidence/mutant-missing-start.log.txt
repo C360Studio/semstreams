@@ -1,0 +1,15 @@
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+--- FAIL: TestSharedLifecycleParallelReportedFailureKeepsLivePeerOwned (2.01s)
+    lifecycle_test_support_test.go:349: fixture missing accepted Start or reported peer failure; all workers joined: context deadline exceeded; reports=[worker 7 iteration 0 Stop: fixture missing reported peer failure before live Stop worker 0 iteration 0 Initialize: fixture missing accepted Start phase worker 9 iteration 0 Initialize: fixture missing accepted Start phase worker 6 iteration 0 Initialize: fixture missing accepted Start phase worker 2 iteration 0 Initialize: fixture missing accepted Start phase worker 8 iteration 0 Initialize: fixture missing accepted Start phase worker 3 iteration 0 Initialize: fixture missing accepted Start phase worker 1 iteration 0 Initialize: fixture missing accepted Start phase worker 5 iteration 0 Initialize: fixture missing accepted Start phase worker 4 iteration 0 Initialize: fixture missing accepted Start phase]
+FAIL
+FAIL	github.com/c360studio/semstreams/component	2.368s
+FAIL
