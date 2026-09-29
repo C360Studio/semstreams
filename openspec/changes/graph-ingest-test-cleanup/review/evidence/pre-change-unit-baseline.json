@@ -1,0 +1,1483 @@
+{
+  "command": "go test -race -json -count=1 ./processor/graph-ingest",
+  "head": "0085323e574670ee7e0f0086cbf17b8cbbef0c15",
+  "exit_code": 0,
+  "wall_seconds": 5.017,
+  "top_level_passes": 202,
+  "skipped": [
+    "TestComponent_Health_Running",
+    "TestComponent_Start_Success",
+    "TestComponent_Start_AlreadyStarted",
+    "TestComponent_Stop_Success",
+    "TestComponent_Stop_Timeout",
+    "TestComponent_RespectsContext_Cancellation"
+  ],
+  "failures": [],
+  "log": "/private/tmp/gh1423-unit-baseline.jsonl",
+  "raw_log_sha256": "4b93961250b0149477bb679b8e114cffb43d60d35d67a5dabc86a75151120ab1",
+  "evidence_scope": "Pre-change unit race baseline. No integration tests, Docker, or repaired cleanup proof.",
+  "completed_top_level_records": [
+    {
+      "Time": "2026-09-29T09:48:46.47108-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestErrNoOpAddDuplicate_SurvivesUpdateWithRetryWrapChain",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.473199-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddTriple_DuplicateSuppressed_NoRevisionAdvance",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.478799-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddTriple_ExcludedFieldsDoNotDefeatSuppression",
+      "Elapsed": 0.01
+    },
+    {
+      "Time": "2026-09-29T09:48:46.480647-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddTriple_DistinctTupleStillAppends",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.495441-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddTriple_ConcurrentIdenticalAppendsStoreOneTuple",
+      "Elapsed": 0.01
+    },
+    {
+      "Time": "2026-09-29T09:48:46.497533-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddTriples_FullyDuplicateBatchReportsZeroWrittenAndNoFailures",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.499486-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddTriples_PartialDuplicateCommitsOnlyTheNewTuples",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.501258-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddTriples_WithinRequestDuplicatesCollapsePreservingOrder",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.503319-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddTriples_SuppressionDoesNotMisclassifyMixedBatch",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.504961-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestSuppressedDuplicateCounter_IsLaneAttributed",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.506961-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalAppend_ReportsAppliedThenUnchanged",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.508951-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalAppend_CollapsesWithinRequestDuplicates",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.510674-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalAppend_MultiSubjectReportsIndependentRevisions",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.512363-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddTriple_PreExistingStoredDuplicatesAreKeptAndStillSuppress",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.513389-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCreateGraphIngestRefusesAbsentDeploymentAuthority",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.514588-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCreateGraphIngestAcceptsAConcreteDeploymentAuthority",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.515972-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalMutationRoutesComeOnlyFromTypedProvider",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.517334-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalMutationRoutesRejectLegacyCompanionPort",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.518991-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalCreateHasNoHierarchyOrRelationshipSideEffects",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.520399-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalCreateAllowsTriplelessEntity",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.521752-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalCreateRejectsLegacyNestedTriplesAndUnknownFields",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.526639-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalHandlersRejectUnknownFieldsBeforeAuthorityIO",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.528421-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalReconcileUnchangedDoesNotAdvanceRevision",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.530269-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalReconcileCompetingCASAllowsOneWinner",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.544134-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalAppendRacesGraphableMergeWithoutLosingFacts",
+      "Elapsed": 0.01
+    },
+    {
+      "Time": "2026-09-29T09:48:46.546249-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalReconcileEmptyDesiredRemovesOnlySelectedPredicates",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.552164-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalReconcileAnnotationOnlyChangeAppliesThenExactRepeatIsUnchanged",
+      "Elapsed": 0.01
+    },
+    {
+      "Time": "2026-09-29T09:48:46.553728-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalAppendReportsPartialAndDoesNotBirthAbsentSubject",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.555088-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalAppendReturnsBatchCancellation",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.556709-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalAppendPreservesCommitBeforeTypedSubjectFailure",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.571849-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalConcurrentIdenticalAppendStoresOneTuple",
+      "Elapsed": 0.02
+    },
+    {
+      "Time": "2026-09-29T09:48:46.573413-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalDeleteIsRevisionFenced",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.574941-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalMutationOutcomeMetricAndRevisionMismatchLog",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.576171-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalAppendOutcomeMetricCountsEachSubjectResult",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.577341-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalAppendOutcomeMetricRejectsFailureWithoutDetail",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.577787-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestConfig_Validate_ValidConfig",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.578103-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestConfig_Validate_MissingPorts",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.578136-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestConfig_ApplyDefaults",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.578383-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestDefaultConfig_ReturnsValidConfig",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.579465-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestConfig_IngestLanes",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.580618-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Meta_ReturnsCorrectMetadata",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.581945-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_InputPorts_ReturnsJetStreamAndNATSPorts",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.583299-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_OutputPorts_ReturnsKVBucket",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.584414-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_ConfigSchema_ReturnsValidSchema",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.585487-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Health_NotStarted",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.585539-05:00",
+      "Action": "skip",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Health_Running",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.586646-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_DataFlow_ReturnsMetrics",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.588221-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Initialize_Success",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.588477-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Initialize_InvalidConfig",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.588519-05:00",
+      "Action": "skip",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Start_Success",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.589592-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Start_BeforeInitialize",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.589635-05:00",
+      "Action": "skip",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Start_AlreadyStarted",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.589696-05:00",
+      "Action": "skip",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Stop_Success",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.590747-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Stop_BeforeStart",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.590795-05:00",
+      "Action": "skip",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_Stop_Timeout",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.591905-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCreateGraphIngest_ValidConfig",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.59215-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCreateGraphIngest_InvalidConfig",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.592573-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCreateGraphIngest_MissingDependencies",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.592609-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestRegister_AddsToRegistry",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.593753-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_CreateEntity_ValidEntity",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.594815-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_CreateEntity_EmptyID",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.595915-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_CreateEntity_TriggersHierarchy",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.597108-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_DeleteEntity_ValidID",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.598397-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_CanonicalAppend_ValidTriple",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.5995-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_CanonicalAppend_MissingSubject",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.599568-05:00",
+      "Action": "skip",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_RespectsContext_Cancellation",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.600818-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_RespectsContext_Timeout",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.606256-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestMutationEntityIdentityRejectionPrecedesKVIO",
+      "Elapsed": 0.01
+    },
+    {
+      "Time": "2026-09-29T09:48:46.60731-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestEntityDeleteHandlerValidatesBeforeExistenceRead",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.610734-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestEntityMutationHandlersValidateCompleteCandidateBeforeKVIO",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.611928-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCreateEntity_UnicodeID",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.62942-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCreateEntity_LargeTripleSet",
+      "Elapsed": 0.02
+    },
+    {
+      "Time": "2026-09-29T09:48:46.630773-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCreateEntity_InvalidIDFormats",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.63185-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestExtractEntityFromMessage_NilMessage",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.632912-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestExtractEntityFromMessage_NilPayload",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.633992-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestExtractEntityFromMessage_NonGraphablePayload",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.635132-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestExtractEntityFromMessage_EmptyEntityID",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.635314-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestEntitySerialization_Roundtrip",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.635501-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestEntitySerialization_MalformedJSON",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.635699-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestEntitySerialization_SpecialCharacters",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.636848-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestEntitySerialization_LargeObjectValues",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.638151-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryEntityReturnsEntityAndSameEntryRevision",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.639229-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryEntityRejectsMalformedIDBeforeKVLookup",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.640409-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryEntityRejectsAuthorityKeyEntityMismatch",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.641659-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIngestEntity_FillsOnlyEmptyFactProjectionSubject",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.642717-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIngestEntity_DoesNotRepairNonEmptyFactProjectionSubject",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.643786-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIngestEntity_DoesNotFillFromInvalidEnvelopeIdentity",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.643831-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestDistinctSortedSubjects",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.645042-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestStorageRefExtraction_ConsumerLiftsRefOntoEntity",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.646103-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestStorageRefExtraction_NonStorablePayloadLeavesRefNil",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.64717-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIngestEntity_RejectsCrossSubjectFacts",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.648343-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIngestEntity_SingleSubjectNoForeignEntityCreated",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.649432-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestFactoryRejectsNilPayloadRegistry",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.649562-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCreateSeamRejectsWhenRegistryMissing",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.650564-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestInProcessCreateRejectsUnregisteredType",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.652383-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestFactoryRejectsHierarchyWithoutContainerType",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.652538-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfileRegistry_AllValuesValid",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.652797-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfileFloorFor",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.65297-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfileRegistry_KeysTrackDomainVersionConstants",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.65447-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_Append_DoesNotStamp",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.655684-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_RegistryFloor_RegisteredTypeNoMetric",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.656957-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_RegistryFloor_RegisteredNoFloorFiresMetric",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.65835-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_Create_DefaultsToControlFloor",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.659742-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_Create_EnvelopeProfileWins",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.660885-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_Create_InvalidEnvelopeRejected",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.662053-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_Graphable_IndexingProfilerWins",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.663231-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_Graphable_NoProfilerFallsToFloor",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.664816-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_ReArrival_DoesNotAccumulateOrReProfile",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.666384-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_StructuralGraphNeverGated_TraceEntityStaysQueryable",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.667486-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestReconcileIndexingProfile_DedupesToFirst",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.66893-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfile_FloorMetric_FiresExactlyOnFloor",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.669125-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIndexingProfileMetricLabel",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.669167-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestStampExplicitIndexingProfile_IgnoresInvalid",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.669248-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIngestHistograms_RecordSamples",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.6693-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLaneGuard_GetSet",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.669335-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLaneGuard_BoundedEviction",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.669376-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLaneGuard_UpdateAtCapDoesNotEvict",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.669405-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestGuardKey",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.669647-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIngestGuardStale_MemoryTierAndFirstSeen",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.669871-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIngestGuardStale_PerStreamIndependence",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.674325-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestProcessIngest_InvalidGraphableTerminatesBeforeGuardIO",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.677248-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestProcessIngest_DirtyStoredStateNaksAndInventoriesPerEntity",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.678375-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestProcessIngest_GenericFatalApplyErrorTerminatesWithoutPoison",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.679413-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestProcessIngest_FillsEmptyFactSubjectBeforeStaleGuard",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.679783-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLifecycleOwnerRunningStopPreservesEffectSettlementOrder",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.680071-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLifecycleOwnerFailedCleanupRetainsExactHandlesForLaterStop",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.680334-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLifecycleOwnerRunningDeadlineIsTerminalWithoutReplay",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.680568-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLifecycleOwnerStopBeforeStartIsTerminal",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.685373-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestMergeEntity_InvalidCandidateNeverCommits",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.685404-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestGetEntitiesUpdatedMetric_NilRegistry",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.686578-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestGetEntitiesUpdatedMetric_ValidRegistry",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.687845-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_MetricsUpdate_EntityOperations",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.688897-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_MetricsAtomic_MessageProcessing",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.691731-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_MetricsRegistry_CreateComponent",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.691878-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestDefaultConfigDeclaresRequiredMutationProvider",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.691908-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestResolveMutationSubjectRequiresDeclaredProvider",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.693277-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestMeteredMutation_MetersRejectionByErrorCode",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.694359-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestMeteredMutation_SuccessDoesNotMeter",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.695414-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestMeteredMutation_EmptyCodeIsInternal",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.696457-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestMeteredMutation_HandlerErrorMeteredAsInternal",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.697526-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestMeteredMutation_PredicateReasonsCountOncePerCandidate",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.698652-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalAppend_AbsentEntityIsExplicitNotFound",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.700147-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalAppend_SuppressedIsUnchanged",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.701469-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalAppend_ReportsItsOwnCASRevision",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.705783-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddLane_StructuredObjectReplayIsSuppressed",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.707213-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestPoisonRepairRecoveryWithoutRestart",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.708414-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestPoisonOutOfBandRepairClearsOnNextRead",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.711662-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestPoisonRevisionGuardConcurrentRepair",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.712992-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestPoisonRepoisonIsReinventoriedAndRelogged",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.715298-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestPoisonInventoryIsObservabilityOnly",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.718235-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAggregateReadNamesEveryPoisonedEntity",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.720827-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestMutationReadSeamsReturnTypedFatal",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.72229-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestProcessIngestResidentPoisonNakThenAppliesAfterRepair",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.728868-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestBootSweepLogCap",
+      "Elapsed": 0.01
+    },
+    {
+      "Time": "2026-09-29T09:48:46.730187-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestDebugStatusEnumeratesFullInventory",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.731342-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestVerifyAfterRecordDropsStaleRecordAfterCompletedRepair",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.732511-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestDetectionInvalidatesCachedEntry",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.733794-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestSuffixResolutionServesIDWhileReadRefuses",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.73427-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestBootSweepInventoriesResidentPoisonAndBoots",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.737012-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestRegression_ByteTrimCursor_ScrambledFetchOrder",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.738231-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestRegression_FirstEntityOversizedIsRefused",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.739262-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryPrefix_InvalidPrefixHasNoBucketIO",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.740907-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryPrefix_SortDeterminism",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.743189-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryPrefix_CursorPagination",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.74504-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryPrefix_LimitClampZero",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.746685-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryPrefix_LimitClampAboveMax",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.746816-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestMarshalFittingPrefixPageIncludesCursorInExactCandidate",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.746895-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestMarshalFittingPrefixPageRejectsFirstIndivisibleEntity",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.748007-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryPrefix_InvalidCursor",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.749447-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryPrefix_SinglePageNoNextCursor",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.750832-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleQueryPrefix_FirstPageRequest",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.75544-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_HandleQuerySuffix_Success",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.756592-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_HandleQuerySuffix_NoMatch",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.757928-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_HandleQuerySuffix_EmptyBucket",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.760057-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_HandleQuerySuffix_InvalidRequest",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.761136-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_HandleQuerySuffix_PartialSuffixNoMatch",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.767294-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_HandleQueryPrefix_Success",
+      "Elapsed": 0.01
+    },
+    {
+      "Time": "2026-09-29T09:48:46.768665-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_HandleQueryPrefix_ReturnsFullEntities",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.769698-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_HandleQueryPrefix_InvalidRequest",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.770813-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestComponent_HandleQueryPrefix_NoMatches",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.771035-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLatchBootstrap_ScopeCapturedOnce",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.771257-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLatchBootstrap_ZeroScopeIsAuthoritativelyNothingToDo",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.771475-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLatchBootstrap_ObservationFailureNeverLatches",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.77169-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLatchBootstrap_DrainedIsALatchNotALiveRead",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.771902-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLatchBootstrap_RequiresTheEntityStateSweep",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.77214-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestBoundConsumers_DedupedAndDeterministic",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.773063-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestOldestOutstandingAt_PresenceEncoding",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.773284-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLastSyncedRFC3339",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.773498-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLatchBootstrap_PartialBindCaptureIsDiscarded",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.77371-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLatchBootstrap_CompleteBindCaptureIsKept",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.773922-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestLatchBootstrap_NoBindReadRanTakesTheFirstObservation",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.775021-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestValidateTriplePredicates_FailClosed_RejectsClassified",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.776047-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestValidateTriplePredicates_ValidPredicate_Untouched",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.777205-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalAppend_InvalidPredicate_FailClosedNothingPersisted",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.778827-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalAppend_InvalidPredicate_WholeBatchRejected",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.78005-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalCreate_InvalidPredicate_NothingPersisted",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.78142-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalReconcile_InvalidPredicate_EntityUnchanged",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.782468-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestIngestEntity_InvalidPredicate_NothingPersisted",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.784063-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestHandleCanonicalAppend_ValidPredicate_PersistsMergeIntact",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.785792-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalReconcilePreservesEntityEnvelope",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.785835-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestCanonicalAppendAccountingRequiresExactlyOneOutcomePerSubject",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.785893-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestValidateEntityIDDelegatesCanonicalBoundary",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.786535-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestEntityStateGuardDeliberateStopDrainsToCloseWithoutMisclassification",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.786541-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestBatchBackendFailureReturnsNoPartialEntities",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.786545-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestQueryDiscoveredPoisonServesConcurrentReadyResponse",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.78721-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestAddTriples_ValidationRejectsBeforeCAS",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.787238-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestEntityStateGuardBootstrapAndTransportFailureAreTransient",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:46.787544-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Test": "TestBootSweepLastRevisionWins",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-09-29T09:48:47.797101-05:00",
+      "Action": "pass",
+      "Package": "github.com/c360studio/semstreams/processor/graph-ingest",
+      "Elapsed": 1.716
+    }
+  ]
+}
