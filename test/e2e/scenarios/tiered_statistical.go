@@ -71,10 +71,11 @@ func (s *TieredScenario) executeTestGraphRAGLocal(ctx context.Context, result *R
 	searchQuery := "temperature sensor monitoring"
 
 	// Find an entity that's in a community (non-container, non-group entity)
+	// Communities exist in every variant this stage runs in, so no usable member
+	// is a framework fact, not a skip (#1426).
 	startEntity, err := s.findEntityInCommunity(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Could not find entity in community: %v", err))
-		return nil
+		return fmt.Errorf("could not find entity in community: %w", err)
 	}
 
 	result.Details["graphrag_local_discovered_entity"] = startEntity
@@ -84,9 +85,9 @@ func (s *TieredScenario) executeTestGraphRAGLocal(ctx context.Context, result *R
 		result.Details["graphrag_local_test"] = map[string]any{
 			"start_entity": startEntity, "query": searchQuery, "error": err.Error(),
 		}
-		// GraphRAG local may fail if entity not in a community - warn but don't fail
-		result.Warnings = append(result.Warnings, fmt.Sprintf("GraphRAG local search failed: %v", err))
-		return nil
+		// %w keeps a client deadline ("Client.Timeout exceeded") distinct from an
+		// empty result, which fails below with its own sentence (#1426).
+		return fmt.Errorf("GraphRAG local search failed: %w", err)
 	}
 
 	result.Metrics["graphrag_local_latency_ms"] = latency.Milliseconds()
@@ -226,9 +227,8 @@ func (s *TieredScenario) validateGraphRAGLocalResult(resp *graphRAGLocalResponse
 
 	// Validate at least one entity is returned when community was found
 	if entityCount == 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf(
-			"GraphRAG local search returned no entities for query %q in community %s",
-			query, ls.CommunityID))
+		return fmt.Errorf("GraphRAG local search returned no entities for query %q in community %s",
+			query, ls.CommunityID)
 	}
 
 	return nil
@@ -246,9 +246,9 @@ func (s *TieredScenario) executeTestGraphRAGGlobal(ctx context.Context, result *
 			"error":   err.Error(),
 			"success": false,
 		}
-		// GraphRAG global may fail if no communities exist - warn but don't fail
-		result.Warnings = append(result.Warnings, fmt.Sprintf("GraphRAG global search failed: %v", err))
-		return nil
+		// %w keeps a client deadline ("Client.Timeout exceeded") distinct from an
+		// empty result, which fails in validateGraphRAGGlobalResult (#1426).
+		return fmt.Errorf("GraphRAG global search failed: %w", err)
 	}
 
 	result.Metrics["graphrag_global_latency_ms"] = latency.Milliseconds()
@@ -349,7 +349,14 @@ func (s *TieredScenario) validateGraphRAGGlobalResult(resp *graphRAGGlobalRespon
 		"communities": communityDetails,
 	}
 
-	// Phase 2 improvement: Validate multi-community results for broad queries
+	// No community summaries is the outcome this stage exists to detect (#1426).
+	if communityCount == 0 {
+		return fmt.Errorf("GraphRAG global search returned no community summaries for query %q", query)
+	}
+
+	// Phase 2 improvement: Validate multi-community results for broad queries.
+	// Stays a warning: fewer than two communities for a broad query is a
+	// retrieval-quality threshold, not the path this stage asserts (#1426).
 	if communityCount < 2 {
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("GraphRAG global search returned only %d communities for broad query %q, expected >= 2", communityCount, query))
@@ -362,13 +369,15 @@ func (s *TieredScenario) validateGraphRAGGlobalResult(resp *graphRAGGlobalRespon
 		}
 	}
 
-	// Validate answer synthesis — should always be populated when communities exist
-	if gs.Answer == "" && communityCount > 0 {
-		result.Warnings = append(result.Warnings,
-			"GraphRAG global search: answer field empty despite having community summaries")
+	// Validate answer synthesis. synthesizeQueryAnswer always returns at least the
+	// template floor, so an empty answer beside summaries is a framework defect,
+	// never a model outcome (#1426).
+	if gs.Answer == "" {
+		return fmt.Errorf("GraphRAG global search: answer field empty despite having %d community summaries", communityCount)
 	}
 
-	// Validate enriched community summaries have member counts
+	// Validate enriched community summaries have member counts. Stays a warning:
+	// never observed on the CI runner, so no measurement grounds an assertion (#1426).
 	for _, cs := range gs.CommunitySummaries {
 		if cs.MemberCount == 0 {
 			result.Warnings = append(result.Warnings,
@@ -382,15 +391,15 @@ func (s *TieredScenario) validateGraphRAGGlobalResult(resp *graphRAGGlobalRespon
 // executeValidateCommunityStructure validates that community detection produced valid structure
 func (s *TieredScenario) executeValidateCommunityStructure(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping community structure validation")
-		return nil
+		return fmt.Errorf("NATS client not available for community structure validation")
 	}
 
-	// Wait for communities to be available (community detection may still be running)
+	// Wait for communities to be available (community detection may still be
+	// running). No communities within the wait is clustering producing nothing:
+	// the outcome this stage exists to detect (#1426).
 	communities, err := s.waitForCommunities(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get communities: %v", err))
-		return nil
+		return fmt.Errorf("failed to get communities: %w", err)
 	}
 
 	// Enhancement status lives in COMMUNITY_SUMMARIES after the B3 ownership split
@@ -474,7 +483,11 @@ func (s *TieredScenario) executeValidateCommunityStructure(ctx context.Context, 
 		return fmt.Errorf("no non-singleton communities found (%d total) - graph connectivity may be broken", totalCount)
 	}
 
-	// Run community ground truth validation (semantic coherence checks)
+	// Run community ground truth validation (semantic coherence checks).
+	// RECORDER arm, declared at the stage-table row: LPA's partition varies
+	// 1/3 <-> 0/3 across identical code because every run mints a fresh authority
+	// suffix and ID-ordered tie-breaks move with it. ADR-099/#606 derive
+	// communities from the ID prefix; then this arm asserts (#1426).
 	groundTruthResult := s.validateCommunityGroundTruth(communities, result)
 	if groundTruthResult != nil && !groundTruthResult.Passed() {
 		// Record violations as warnings (don't fail the test, just report)

@@ -307,6 +307,10 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// clogging the answer model — exactly what B0 needs to synthesize over real
 		// summaries. On a heavy qwen3-8b run summaries keep generating on that
 		// separate instance throughout B0's own run as well.
+		// RECORDER of enhancement throughput and summary quality: the enhanced
+		// count and the quality issues are the small model's output, recorded in
+		// Metrics/Warnings without gating. Only an unreachable transport or a
+		// failed read (no communities, a failed wait or re-fetch) fails (#1426).
 		{"validate-llm-enhancement", s.executeValidateLLMEnhancement, []string{"semantic"}},
 		// Epic B increment B0 — the GraphRAG thematic-answer eval — runs HERE, before
 		// ANY stage that drives LLM answer synthesis (the NL-intent, graphrag, and
@@ -359,6 +363,10 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// stage's value is running on the PR that changes the shape.
 		{"validate-gateway-response-shape", s.executeValidateGatewayResponseShape, []string{"statistical", "semantic"}},
 		{"test-embedding-fallback", s.executeTestEmbeddingFallback, []string{"statistical", "semantic"}},
+		// Asserts communities exist and are not all singletons. Its ground-truth
+		// arm is a RECORDER: LPA's partition varies 1/3 <-> 0/3 across identical
+		// code (fresh authority suffix, ID-ordered tie-breaks); ADR-099/#606
+		// make it deterministic, after which it asserts (#1426).
 		{"validate-community-structure", s.executeValidateCommunityStructure, []string{"statistical", "semantic"}},
 		// ADR-090 breaking gate: statistical is the checked-in graph-clustering
 		// deployment and a fresh stack must never recreate retired persistence.
@@ -376,8 +384,15 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		{"validate-inverse-edges-materialized", s.validateInverseEdgesMaterialized, []string{"structural", "statistical", "semantic"}},
 
 		// === Tier 2: Semantic capabilities (semantic only) ===
-		{"test-graphrag-local", s.executeTestGraphRAGLocal, []string{"semantic"}},
-		{"test-graphrag-global", s.executeTestGraphRAGGlobal, []string{"semantic"}},
+		// GraphRAG local/global assert the community path (entity -> community ->
+		// summary -> answer) under the statistical template synthesizer, in ms.
+		// They leave semantic (and the :8b/:frontier overlays): under a model the
+		// probe's outcome is the synthesizer's latency, which no PR owns (#1426,
+		// ruling D1). globalSearch under a model stays covered by B0 and
+		// validate-globalsearch-known-answer; localSearch under a model is covered
+		// by nothing pre-tag until LocalSearchRequest gains include_summaries (#1431).
+		{"test-graphrag-local", s.executeTestGraphRAGLocal, []string{"statistical"}},
+		{"test-graphrag-global", s.executeTestGraphRAGGlobal, []string{"statistical"}},
 		// validate-globalsearch-known-answer is the load-bearing guard against
 		// the "globalSearch returns count=0 for content that exists" bug class
 		// (see semspec Meshtastic report). Probes deterministic single-word

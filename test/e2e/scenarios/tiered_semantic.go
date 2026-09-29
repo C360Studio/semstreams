@@ -190,11 +190,15 @@ func (s *TieredScenario) clusteringRunDiagnostic(ctx context.Context) string {
 // The pre-split wait polled that dead field, never observed pending→0, and always
 // burned its full ceiling before reporting enhanced=0; this one terminates as soon
 // as the summary store is caught up.
+//
+// A wait that merely runs out of time is the small model's throughput and is
+// recorded, not returned; the error is the wait's own failure (a summary-store
+// read, or the stage context ending), which fails the stage (#1426).
 func (s *TieredScenario) waitForLLMEnhancement(
 	ctx context.Context,
 	communities []*clustering.Community,
 	result *Result,
-) llmWaitResult {
+) (llmWaitResult, error) {
 	fmt.Printf("[LLM WAIT] Waiting for LLM enhancement to complete (ML variant, %d communities)...\n", len(communities))
 
 	enhanceStart := time.Now()
@@ -215,9 +219,6 @@ func (s *TieredScenario) waitForLLMEnhancement(
 	fmt.Printf("[LLM WAIT] Complete: enhanced=%d, failed=%d, pending=%d, duration=%dms\n",
 		enhanced, failed, pending, waitResult.durationMs)
 
-	if waitErr != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("LLM enhancement wait error: %v", waitErr))
-	}
 	if enhanced == 0 && failed == 0 && pending > 0 {
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("No LLM enhancements completed within 2 minute timeout (%d still pending)", pending))
@@ -227,7 +228,10 @@ func (s *TieredScenario) waitForLLMEnhancement(
 	result.Metrics["llm_failed_count"] = float64(waitResult.failedCount)
 	result.Metrics["llm_pending_count"] = float64(waitResult.pendingCount)
 
-	return waitResult
+	if waitErr != nil {
+		return waitResult, fmt.Errorf("LLM enhancement wait failed: %w", waitErr)
+	}
+	return waitResult, nil
 }
 
 // joinedSummaryRecord returns the worker-written summary record for a community,
@@ -468,9 +472,11 @@ func (s *TieredScenario) recordCommunityMetrics(stats communityStats, result *Re
 // This step waits for LLM enhancement to complete (up to 2 min), analyzes community
 // summary status, and validates that enhancement is working properly.
 func (s *TieredScenario) executeValidateLLMEnhancement(ctx context.Context, result *Result) error {
+	// RECORDER of enhancement throughput and summary quality (declared at the
+	// stage-table row): those arms warn. The transport and read arms below fail,
+	// because without communities there is nothing to record (#1426).
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping LLM enhancement validation")
-		return nil
+		return fmt.Errorf("NATS client not available for LLM enhancement validation")
 	}
 
 	fmt.Println("[LLM ENHANCEMENT] Starting LLM enhancement validation...")
@@ -478,26 +484,26 @@ func (s *TieredScenario) executeValidateLLMEnhancement(ctx context.Context, resu
 	// Wait for communities to be available
 	communities, err := s.waitForCommunities(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get communities: %v", err))
-		return nil
+		return fmt.Errorf("failed to get communities: %w", err)
 	}
 
 	if len(communities) == 0 {
-		result.Warnings = append(result.Warnings, "No communities found for LLM enhancement validation")
-		return nil
+		return fmt.Errorf("no communities found for LLM enhancement validation")
 	}
 
 	fmt.Printf("[LLM ENHANCEMENT] Found %d communities, waiting for LLM enhancement...\n", len(communities))
 
 	// Wait for LLM enhancement to complete (joins the COMMUNITY_SUMMARIES store by
 	// membership hash — the post-split source of truth for enhancement status).
-	llmWait := s.waitForLLMEnhancement(ctx, communities, result)
+	llmWait, err := s.waitForLLMEnhancement(ctx, communities, result)
+	if err != nil {
+		return err
+	}
 
 	// Re-fetch the partition after waiting (the detector may have re-run).
 	communities, err = s.natsClient.GetAllCommunities(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to re-fetch communities after LLM wait: %v", err))
-		return nil
+		return fmt.Errorf("failed to re-fetch communities after LLM wait: %w", err)
 	}
 
 	// Read the worker-owned summary store once and JOIN it to the communities: after
@@ -719,8 +725,7 @@ func (s *TieredScenario) validateAnomalyGroundTruth(ctx context.Context, result 
 // with auto_applied status anomalies in the ANOMALY_INDEX.
 func (s *TieredScenario) executeValidateVirtualEdges(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping virtual edge validation")
-		return nil
+		return fmt.Errorf("NATS client not available for virtual edge validation")
 	}
 
 	fmt.Println("[VIRTUAL EDGES] Validating virtual edge creation from semantic gaps...")
@@ -738,9 +743,10 @@ func (s *TieredScenario) executeValidateVirtualEdges(ctx context.Context, result
 	}
 
 	// Get auto-applied anomaly count from ANOMALY_INDEX
+	// A failed read is the same class as the count failure above (#1426).
 	autoApplied, err := s.natsClient.GetAutoAppliedAnomalyCount(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get auto-applied count: %v", err))
+		return fmt.Errorf("failed to get auto-applied anomaly count: %w", err)
 	}
 
 	// Record metrics
@@ -760,18 +766,20 @@ func (s *TieredScenario) executeValidateVirtualEdges(ctx context.Context, result
 
 	// Validation: check if virtual edges were created when auto-apply is enabled
 	if edgeCounts.Total == 0 && autoApplied == 0 {
-		// This could be expected if no semantic gaps met the auto-apply threshold
+		// The configured outcome while the anomaly engine is disabled in every
+		// tier config (enable_anomaly_detection:false since #237), or when no
+		// semantic gap met the auto-apply threshold; the row comment records why.
 		fmt.Println("[VIRTUAL EDGES] No virtual edges created - this may be expected if no gaps met auto-apply threshold (similarity >= 0.85, distance >= 4)")
 	} else if edgeCounts.Total > 0 {
 		fmt.Printf("[VIRTUAL EDGES] Success: %d virtual edges created from semantic gaps\n", edgeCounts.Total)
 	}
 
-	// Warn if there's a mismatch between auto-applied anomalies and virtual edges
-	// Note: The counts may not match exactly because edges are created in PREDICATE_INDEX
-	// as a side effect of the triple being added, while auto_applied status is on anomalies
+	// Anomalies marked auto_applied with no materialized edge is the plumbing
+	// outcome this stage exists to detect (#1426). The counts need not match
+	// exactly (edges land in PREDICATE_INDEX as a side effect of the triple), but
+	// some applied anomaly with zero edges means the edge was never written.
 	if autoApplied > 0 && edgeCounts.Total == 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Anomalies marked auto_applied (%d) but no virtual edges found in PREDICATE_INDEX", autoApplied))
+		return fmt.Errorf("anomalies marked auto_applied (%d) but no virtual edges found in PREDICATE_INDEX", autoApplied)
 	}
 
 	return nil
