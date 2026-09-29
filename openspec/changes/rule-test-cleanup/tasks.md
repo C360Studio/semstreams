@@ -8,8 +8,8 @@
 ## 2. Design gate
 
 - [x] 2.1 Materialize design, specification-disposition and execution drafts as one exact review checkpoint.
-- [ ] 2.2 HOLD: Obtain independent design review and coordinator acceptance within the owner's authorized test-only scope.
-  Implementation remains held until both are recorded. This does not require a new owner permission round.
+- [x] 2.2 Obtain independent design review and coordinator acceptance within the owner's authorized test-only scope.
+  Recorded at `e185dd8b` with final review and coordinator acceptance under `review/`.
 
 ## 3. Test-first evidence and concrete ownership
 
