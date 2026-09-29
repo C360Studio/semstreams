@@ -510,10 +510,9 @@ func (s *TieredScenario) executeValidateLLMEnhancement(ctx context.Context, resu
 	// the B3 split (ADR-087) enhancement status/text live here, not on COMMUNITY_INDEX.
 	summaries, err := s.natsClient.GetCommunitySummaries(ctx)
 	if err != nil {
-		// A summary-store read failure degrades the report to the statistical floor
-		// rather than aborting the stage — the partition itself is still valid.
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to read community summaries: %v", err))
-		summaries = map[string]*clustering.CommunitySummaryRecord{}
+		// A failed read fails the stage like the re-fetch above: falling back to an
+		// empty store would record the statistical floor as a measurement (#1426 H2).
+		return fmt.Errorf("failed to read community summaries: %w", err)
 	}
 
 	// Analyze communities for summary status (joined from the store)

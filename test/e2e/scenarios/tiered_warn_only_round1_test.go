@@ -287,3 +287,26 @@ func TestRuleStages_FailedMetricsReadFails(t *testing.T) {
 // comes from globalSearchClientTimeout and a variant overlay can change it. The
 // stub holds the request until the client gives up; the 5 s ceiling is far above
 // the 50 ms override and far below the 10 s literal the helper replaced.
+func TestGraphRAGGlobal_ClientDeadlineIsOverridable(t *testing.T) {
+	t.Setenv(globalSearchTimeoutEnv, "50ms")
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs first (LIFO): frees the handler so Close returns
+	s := &TieredScenario{config: &TieredConfig{GraphQLURL: srv.URL}}
+
+	done := make(chan error, 1)
+	go func() { done <- s.executeTestGraphRAGGlobal(context.Background(), newResult()) }()
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Client.Timeout exceeded")
+	case <-time.After(5 * time.Second):
+		t.Fatalf("client deadline ignored %s", globalSearchTimeoutEnv)
+	}
+}

@@ -338,11 +338,15 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// The probes send includeSummaries:false (no synthesis), and 0 probes
 		// returning entities fails the stage (#1426). The path probes are answered
 		// by the keyword tier in every variant, so test-nl-path-intent runs in all.
-		// test-nl-temporal-intent is statistical-only: its "last hour" probe misses
-		// the keyword tier and is routed through query_classification, which under
-		// the semantic tier resolves to the answer model (measured 17.5 s cold,
-		// 5.6 s warm against the 10 s client deadline). A model-owned outcome is not
-		// graded per-PR; the temporal routing fact is proven under statistical in ms.
+		// test-nl-temporal-intent is statistical-only. Its "today" probe matches the
+		// keyword tier (graph/query/classifier.go:30) and is routed temporal in every
+		// variant. Its "last hour" probe matches no keyword pattern (lastNHoursPattern,
+		// classifier.go:31, needs a number): under statistical it takes the chain's
+		// non-keyword route and returns entities in ms; under semantic it goes to the
+		// LLM classifier on the answer model (measured 17.5 s cold, 5.6 s warm against
+		// the 10 s client deadline, count=0, cause unattributed; design § 9). A
+		// model-owned outcome is not graded per-PR; what statistical proves is that
+		// both probes return entities, and that only "today" is keyword-routed.
 		{"test-nl-path-intent", s.executeTestNLPathIntent, nil},
 		{"test-nl-temporal-intent", s.executeTestNLTemporalIntent, []string{"statistical"}},
 		// Alias resolution via ALIAS_INDEX (structural - no ML)

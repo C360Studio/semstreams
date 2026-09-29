@@ -283,7 +283,11 @@ func (s *TieredScenario) sendGraphRAGGlobalRequest(ctx context.Context, query, g
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	// It asserts on synthesized fields (community_summaries, answer), so its
+	// deadline is the shared overridable one (spec delta requirement 2, #1426);
+	// 10 s stays the default because the statistical template synthesizer
+	// answers in ms (measured 7-8 ms).
+	httpClient := &http.Client{Timeout: globalSearchClientTimeout(10 * time.Second)}
 	start := time.Now()
 	resp, err := httpClient.Do(req)
 	latency := time.Since(start)
@@ -411,12 +415,11 @@ func (s *TieredScenario) executeValidateCommunityStructure(ctx context.Context, 
 	// validate-llm-enhancement stage and GraphRAG use — so this stage's enhancement
 	// counts stay consistent with that stage in the semantic variant (both read the
 	// same store) and correctly report 0 in the statistical variant (its summary
-	// store is empty). A read failure degrades to the statistical floor rather than
-	// aborting; the partition structure below is still valid.
+	// store is empty). A failed read fails the stage: an empty-store fallback would
+	// report the statistical floor as a measurement it never made (#1426 H2).
 	summaries, err := s.natsClient.GetCommunitySummaries(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to read community summaries: %v", err))
-		summaries = map[string]*clustering.CommunitySummaryRecord{}
+		return fmt.Errorf("failed to read community summaries: %w", err)
 	}
 
 	totalCount := len(communities)
