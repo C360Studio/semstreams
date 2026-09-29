@@ -21,8 +21,11 @@ func (s *TieredScenario) executeVerifySearchQuality(ctx context.Context, result 
 	// Use similarity search for both statistical and semantic tiers (embedding-based with real scores)
 	// Statistical tier uses BM25 embeddings, semantic tier uses neural embeddings
 	// Structural tier has no embeddings, so uses global search (community-based)
+	// The variant is read through effectiveVariant: under auto-detect s.config.Variant
+	// stays "" and the raw read would send statistical down the recorder arm.
+	variant := s.effectiveVariant(result)
 	var executor *search.Executor
-	if s.config.Variant == "statistical" || s.config.Variant == "semantic" {
+	if variant == "statistical" || variant == "semantic" {
 		executor = search.NewSimilarityExecutor(s.config.GraphQLURL, 10*time.Second)
 	} else {
 		executor = search.NewExecutor(s.config.GraphQLURL, 10*time.Second)
@@ -38,7 +41,7 @@ func (s *TieredScenario) executeVerifySearchQuality(ctx context.Context, result 
 	// Record results in legacy format for backward compatibility
 	s.recordSearchQualityResultsFromStats(result, stats)
 
-	return s.searchQualityVerdict(stats)
+	return s.searchQualityVerdict(variant, stats)
 }
 
 // searchQualityVerdict is the stage's gate (#1426). Path arm, every variant the
@@ -50,7 +53,7 @@ func (s *TieredScenario) executeVerifySearchQuality(ctx context.Context, result 
 // recordSearchQualityResultsFromStats already wrote). The average-score warning
 // is a RECORDER in both: 0.5 is not calibrated to either scorer (BM25 measured
 // 0.28 on every run).
-func (s *TieredScenario) searchQualityVerdict(stats *search.Stats) error {
+func (s *TieredScenario) searchQualityVerdict(variant string, stats *search.Stats) error {
 	var broken []string
 	for _, r := range stats.Results {
 		switch {
@@ -63,7 +66,7 @@ func (s *TieredScenario) searchQualityVerdict(stats *search.Stats) error {
 	if len(broken) > 0 {
 		return fmt.Errorf("search failed for %d/%d queries: %s", len(broken), stats.TotalQueries, strings.Join(broken, "; "))
 	}
-	if s.config.Variant == "statistical" && len(stats.KnownAnswerFailures) > 0 {
+	if variant == "statistical" && len(stats.KnownAnswerFailures) > 0 {
 		return fmt.Errorf("known-answer search failed under BM25 (%d/%d passed): %s",
 			stats.KnownAnswerTestsPassed, stats.KnownAnswerTestsTotal, strings.Join(stats.KnownAnswerFailures, "; "))
 	}

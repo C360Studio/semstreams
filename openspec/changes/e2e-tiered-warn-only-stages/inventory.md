@@ -539,7 +539,10 @@ Not in the class. `send-mixed-data` (`validate_infra.go:91`) captures a baseline
 stage asserts (`validate-embedding-queue-health` fails on `resolved == 0`; `validate-rules`). `validate-processing`'s
 processing-wait arm (`:136`) defers to `wait-for-entity-stabilization`, which hard-fails. `validate-thematic-answer-eval`
 and `validate-partition-colocation` are the declared B0/B2 recorders. `captureAndCompareBaseline` (`tiered.go:514`) is
-not a stage. (`wait-for-rule-stabilization`'s failed-read arm is fixed anyway, as review M1.) The other 23 stage
+not a stage. (`wait-for-rule-stabilization`'s failed-read arm is fixed anyway, as review M1.)
+`validate-community-structure`'s "has no keywords" warn (`tiered_statistical.go:443` at the base) is a per-community
+note, not the stage's detected outcome (community structure; H2 covers the summaries read), and no recorded
+statistical run produced it (round 2 nit). The other 23 stage
 functions (54, less these twelve, the twelve round-0 stages still in the table, and the seven named in this section)
 return an error on their detected outcome; per-function counts of error returns and `Warnings` appends, command below.
 

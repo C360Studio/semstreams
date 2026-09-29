@@ -188,6 +188,17 @@ func TestVerifySearchQuality(t *testing.T) {
 		require.Contains(t, err.Error(), "known-answer search failed under BM25 (6/7 passed)")
 	})
 
+	// Round 2 nit: with no --variant the value is auto-detected into
+	// result.Metrics["variant"] and s.config.Variant stays ""; the gate must
+	// read the effective variant or statistical silently becomes a recorder.
+	t.Run("missed known answer fails under auto-detected statistical", func(t *testing.T) {
+		result := newResult()
+		result.Metrics["variant"] = "statistical"
+		err := searchStub(t, "", missSafety).executeVerifySearchQuality(ctx, result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "known-answer search failed under BM25 (6/7 passed)")
+	})
+
 	t.Run("missed known answer is recorded under semantic", func(t *testing.T) {
 		result := newResult()
 		require.NoError(t, searchStub(t, "semantic", missSafety).executeVerifySearchQuality(ctx, result))
@@ -309,4 +320,41 @@ func TestGraphRAGGlobal_ClientDeadlineIsOverridable(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("client deadline ignored %s", globalSearchTimeoutEnv)
 	}
+}
+
+// M-c (round 2): a failed BASELINE read fails validate-rules instead of warning
+// and substituting a zero baseline, which would report absolute counters as
+// deltas. Only the first scrape fails; every later one serves counters that
+// meet the thresholds, so the baseline arm is the only one that can error.
+func TestValidateRules_FailedBaselineReadFails(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	for name, v := range map[string]float64{
+		"semstreams_rule_evaluations_total":      200,
+		"semstreams_rule_triggers_total":         3,
+		"semstreams_rule_events_published_total": 5,
+	} {
+		c := prometheus.NewCounter(prometheus.CounterOpts{Name: name, Help: name})
+		c.Add(v)
+		require.NoError(t, reg.Register(c))
+	}
+	var scrapes atomic.Int64
+	prom := promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if scrapes.Add(1) == 1 {
+			http.Error(w, "down", http.StatusInternalServerError)
+			return
+		}
+		prom.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	s := &TieredScenario{
+		metrics: client.NewMetricsClient(srv.URL),
+		config: &TieredConfig{
+			MinRuleFirings: 2, MinActionsDispatched: 1,
+			ValidationTimeout: 20 * time.Millisecond, PollInterval: time.Millisecond,
+		},
+	}
+	err := s.executeValidateRules(context.Background(), newResult())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "baseline rule metrics")
 }

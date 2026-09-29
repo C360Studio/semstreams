@@ -1303,7 +1303,10 @@ func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, res
 	}
 
 	// Get outgoing relationships from container
-	outgoingEntries, _ := s.natsClient.GetOutgoingEntries(ctx, containerID)
+	outgoingEntries, err := s.natsClient.GetOutgoingEntries(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to get outgoing entries for %s: %w", containerID, err)
+	}
 
 	// Record metrics
 	result.Metrics["bidir_incoming_total"] = len(incomingEntries)

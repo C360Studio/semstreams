@@ -475,8 +475,8 @@ func (s *TieredScenario) executeValidateRules(ctx context.Context, result *Resul
 	// Capture baseline metrics
 	baselineMetrics, err := s.metrics.ExtractRuleMetrics(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to capture baseline rule metrics: %v", err))
-		baselineMetrics = &client.RuleMetrics{}
+		// A zero baseline would report absolute counters as deltas (round 2 M-c).
+		return fmt.Errorf("failed to capture baseline rule metrics: %w", err)
 	}
 
 	// Check for reactive workflow metrics presence

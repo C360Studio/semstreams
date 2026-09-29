@@ -345,8 +345,8 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// non-keyword route and returns entities in ms; under semantic it goes to the
 		// LLM classifier on the answer model (measured 17.5 s cold, 5.6 s warm against
 		// the 10 s client deadline, count=0, cause unattributed; design § 9). A
-		// model-owned outcome is not graded per-PR; what statistical proves is that
-		// both probes return entities, and that only "today" is keyword-routed.
+		// model-owned outcome is not graded per-PR. The stage fails only when neither
+		// probe returns entities (passedCount == 0); 2/2 is a measurement, not the gate.
 		{"test-nl-path-intent", s.executeTestNLPathIntent, nil},
 		{"test-nl-temporal-intent", s.executeTestNLTemporalIntent, []string{"statistical"}},
 		// Alias resolution via ALIAS_INDEX (structural - no ML)
