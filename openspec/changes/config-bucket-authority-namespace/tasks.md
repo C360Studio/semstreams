@@ -242,3 +242,32 @@ re-run by the coordinating session at the new final code revision.
       files / 0 DATA RACE; `task schema:generate` exit 0 with an empty `git diff schemas/ specs/`; `openspec validate
       config-bucket-authority-namespace --strict` valid; `openspec validate --all --strict` 58/58; `task
       spec:properties` 452/452.
+
+- [x] 4.11 Codex round 2 on PR #1404 (APPROVE at `54a58a4f` with one MEDIUM, accepted as a code fix; PR comments
+      2026-09-29). The archive commit `54a58a4f` and the e2e-evidence tick `a6ada4c6` were dropped (branch reset to
+      `c6eb7de6` with `git reset --keep`, a clean tree), so this change is editable again and is re-archived later.
+      - Finding: after a completed Stop the completion fence stays closed, so a later `ConfigManager.Stop` whose context
+        had already ended had both select branches ready, and Go could pick the context branch and return "reconcile
+        loop still running" although completion was observed (Codex's probe: 480 false errors in 1,000 repeated Stops).
+        That broke the completed-repeated-Stop no-op promise, and through the `rule-config` adapter skipped
+        `BaseService.Stop` on that call.
+      - Fix, commit `b112ce17`: a nonblocking check of the fence before the bounded wait
+        (`processor/rule/kv_config_integration.go:180-187`), as `BaseService.Stop` does; the nil-context refusal stays
+        first. It is the only non-test Go change since `64a34476` other than comments in
+        `internal/boot/rule_config_service.go`.
+      - Tests, each repeating its Stop 200 times (the repeat count is the failure limit, stated in each test's
+        comment): `TestConfigManagerRepeatedStopAfterCompletionIgnoresACanceledContext` and
+        `TestConfigManagerRepeatedStopAfterCompletionIgnoresAnExpiredDeadline` (`processor/rule/kv_config_stop_fence_test.go`),
+        and `TestRuleConfigServiceRepeatedStopAfterCompletionIgnoresACanceledContext` through the adapter
+        (`internal/boot/rule_config_service_test.go`). Before the fix the first two failed at trials 5 and 3; with it,
+        `go test -race -count=200 -run RepeatedStopAfterCompletion ./processor/rule/ ./internal/boot/` is ok. The
+        spec delta's Stop scenario names the case and the three tests (commit `717d56ad`).
+      - M19 the nonblocking check deleted (cp backup plus md5, restored checksum `e244e061ce296dc02ce9b1108861ee4f`):
+        all three tests fail, e.g. "trial 2 of 200: completed repeated Stop with a canceled context = rule
+        configuration manager stop: reconcile loop still running: context canceled, want nil".
+      - Gates, run at `717d56ad` (code of `b112ce17`, the final code-bearing commit): `go build ./...`, `task lint`,
+        `go vet ./...`, `go vet -tags=integration ./...`, `go run ./cmd/entity-id-audit .` (1334 candidates) each exit
+        0; `task test:race` exit 0, 160 ok / 0 FAIL / 20 no test files / 0 DATA RACE; `task test:integration` exit 0,
+        160 ok / 0 FAIL / 20 no test files / 0 DATA RACE; `task schema:generate` exit 0 with an empty `git diff
+        schemas/ specs/`; `openspec validate config-bucket-authority-namespace --strict` valid; `openspec validate
+        --all --strict` 58/58; `task spec:properties` 455/455.
