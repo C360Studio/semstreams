@@ -43,7 +43,9 @@ func getTestNATSClient(t *testing.T) *natsclient.Client {
 
 	// Register cleanup
 	t.Cleanup(func() {
-		testClient.Terminate()
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate external rule test client: %v", err)
+		}
 	})
 
 	return testClient.Client
@@ -67,8 +69,9 @@ func createSemanticMessage(data map[string]any) ([]byte, error) {
 
 // TestIntegration_KVEntityStateWatch tests KV entity state watching and rule triggering
 func TestIntegration_KVEntityStateWatch(t *testing.T) {
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	natsClient := getTestNATSClient(t)
-	ctx := context.Background()
 
 	// Create ENTITY_STATES KV bucket if it doesn't exist
 	js, err := natsClient.JetStream()
@@ -127,6 +130,11 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 	// Create processor with metrics
 	metricsRegistry := metric.NewMetricsRegistry()
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(ctx, t)
+	}
 	require.NoError(t, err)
 	// Production installs the deployment authority through CreateRuleProcessor
 	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
@@ -138,13 +146,12 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 	// Initialize and start
 	err = processor.Initialize()
 	require.NoError(t, err)
+	testCtx, cancelStartScope := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelStartScope()
+	defer owner.finish(testCtx, t)
 
-	testCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	err = processor.Start(testCtx)
+	err = processor.Start(owner.startContext(testCtx))
 	require.NoError(t, err)
-	defer processor.Stop(context.Background())
 
 	// Give processor time to set up watchers
 	time.Sleep(200 * time.Millisecond)
@@ -153,7 +160,7 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 	receivedEvents := make([]map[string]any, 0)
 	var receiveMu sync.Mutex
 
-	_, err = natsClient.Subscribe(testCtx, "events.rule.triggered", func(_ context.Context, msg *nats.Msg) {
+	sub, err := natsClient.Subscribe(testCtx, "events.rule.triggered", func(_ context.Context, msg *nats.Msg) {
 		var event map[string]any
 		if err := json.Unmarshal(msg.Data, &event); err == nil {
 			receiveMu.Lock()
@@ -162,6 +169,11 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 		}
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := sub.Unsubscribe(); err != nil {
+			t.Errorf("unsubscribe rule event observer: %v", err)
+		}
+	})
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -208,6 +220,9 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 
 // TestIntegration_DynamicRuleCRUD tests runtime rule configuration updates
 func TestIntegration_DynamicRuleCRUD(t *testing.T) {
+	setupCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
+	ctx := setupCtx
 	natsClient := getTestNATSClient(t)
 
 	// Create processor with initial configuration
@@ -228,6 +243,11 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 	config.EnableGraphIntegration = false
 
 	processor, err := rule.NewProcessor(natsClient, &config)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(setupCtx, t)
+	}
 	require.NoError(t, err)
 	// Production installs the deployment authority through CreateRuleProcessor
 	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
@@ -238,13 +258,12 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 
 	err = processor.Initialize()
 	require.NoError(t, err)
+	ctx, cancelExecution := context.WithTimeout(setupCtx, 10*time.Second)
+	defer cancelExecution()
+	defer owner.finish(ctx, t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	err = processor.Start(ctx)
+	err = processor.Start(owner.startContext(ctx))
 	require.NoError(t, err)
-	defer processor.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -387,6 +406,9 @@ func TestIntegration_JSONDSLRuleLoading(t *testing.T) {
 
 // TestIntegration_PrometheusMetrics tests metrics recording during rule processing
 func TestIntegration_PrometheusMetrics(t *testing.T) {
+	setupCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
+	ctx := setupCtx
 	natsClient := getTestNATSClient(t)
 
 	// Create processor with metrics registry
@@ -428,6 +450,11 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 	config.EnableGraphIntegration = false
 
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(setupCtx, t)
+	}
 	require.NoError(t, err)
 	// Production installs the deployment authority through CreateRuleProcessor
 	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
@@ -438,13 +465,12 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 
 	err = processor.Initialize()
 	require.NoError(t, err)
+	ctx, cancelExecution := context.WithTimeout(setupCtx, 10*time.Second)
+	defer cancelExecution()
+	defer owner.finish(ctx, t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	err = processor.Start(ctx)
+	err = processor.Start(owner.startContext(ctx))
 	require.NoError(t, err)
-	defer processor.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -476,8 +502,9 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 
 // TestIntegration_DynamicWatchPatterns tests runtime updates to entity watch patterns
 func TestIntegration_DynamicWatchPatterns(t *testing.T) {
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	natsClient := getTestNATSClient(t)
-	ctx := context.Background()
 
 	// Create ENTITY_STATES KV bucket
 	js, err := natsClient.JetStream()
@@ -523,6 +550,11 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 	config.InlineRules = []rule.Definition{ruleDef}
 
 	processor, err := rule.NewProcessor(natsClient, &config)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(ctx, t)
+	}
 	require.NoError(t, err)
 	// Production installs the deployment authority through CreateRuleProcessor
 	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
@@ -532,13 +564,12 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 
 	err = processor.Initialize()
 	require.NoError(t, err)
+	testCtx, cancelStartScope := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelStartScope()
+	defer owner.finish(testCtx, t)
 
-	testCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	err = processor.Start(testCtx)
+	err = processor.Start(owner.startContext(testCtx))
 	require.NoError(t, err)
-	defer processor.Stop(context.Background())
 
 	// Wait for watchers to start
 	time.Sleep(300 * time.Millisecond)
@@ -547,7 +578,7 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 	receivedEvents := make([]map[string]any, 0)
 	var receiveMu sync.Mutex
 
-	_, err = natsClient.Subscribe(testCtx, "events.rule.triggered", func(_ context.Context, msg *nats.Msg) {
+	sub, err := natsClient.Subscribe(testCtx, "events.rule.triggered", func(_ context.Context, msg *nats.Msg) {
 		var event map[string]any
 		if err := json.Unmarshal(msg.Data, &event); err == nil {
 			receiveMu.Lock()
@@ -556,6 +587,11 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 		}
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := sub.Unsubscribe(); err != nil {
+			t.Errorf("unsubscribe rule event observer: %v", err)
+		}
+	})
 
 	// Create entity that matches initial pattern
 	entity1 := gtypes.EntityState{
@@ -622,6 +658,9 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 
 // TestIntegration_GraphIntegration tests event publishing to graph processor
 func TestIntegration_GraphIntegration(t *testing.T) {
+	setupCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
+	ctx := setupCtx
 	natsClient := getTestNATSClient(t)
 
 	config, configErr := rule.NewConfig("rule-graph-publish-integration-test")
@@ -662,6 +701,11 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 	config.EnableGraphIntegration = true // Enable graph integration
 
 	processor, err := rule.NewProcessor(natsClient, &config)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(setupCtx, t)
+	}
 	require.NoError(t, err)
 	// Production installs the deployment authority through CreateRuleProcessor
 	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
@@ -672,13 +716,12 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 
 	err = processor.Initialize()
 	require.NoError(t, err)
+	ctx, cancelExecution := context.WithTimeout(setupCtx, 10*time.Second)
+	defer cancelExecution()
+	defer owner.finish(ctx, t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	err = processor.Start(ctx)
+	err = processor.Start(owner.startContext(ctx))
 	require.NoError(t, err)
-	defer processor.Stop(context.Background())
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -686,7 +729,7 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 	receivedMutations := make([]map[string]any, 0)
 	var receiveMu sync.Mutex
 
-	_, err = natsClient.Subscribe(ctx, "graph.events.>", func(_ context.Context, msg *nats.Msg) {
+	sub, err := natsClient.Subscribe(ctx, "graph.events.>", func(_ context.Context, msg *nats.Msg) {
 		var mutation map[string]any
 		if err := json.Unmarshal(msg.Data, &mutation); err == nil {
 			receiveMu.Lock()
@@ -695,6 +738,11 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 		}
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := sub.Unsubscribe(); err != nil {
+			t.Errorf("unsubscribe graph event observer: %v", err)
+		}
+	})
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -726,8 +774,9 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 // the transition condition detects a valid from→to change, and the on_enter action
 // writes to a domain KV bucket.
 func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	natsClient := getTestNATSClient(t)
-	ctx := context.Background()
 
 	js, err := natsClient.JetStream()
 	require.NoError(t, err)
@@ -813,6 +862,11 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 
 	metricsRegistry := metric.NewMetricsRegistry()
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(ctx, t)
+	}
 	require.NoError(t, err)
 	// Production installs the deployment authority through CreateRuleProcessor
 	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
@@ -822,13 +876,12 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 
 	err = processor.Initialize()
 	require.NoError(t, err)
+	testCtx, cancelStartScope := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelStartScope()
+	defer owner.finish(testCtx, t)
 
-	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	err = processor.Start(testCtx)
+	err = processor.Start(owner.startContext(testCtx))
 	require.NoError(t, err)
-	defer processor.Stop(context.Background())
 
 	time.Sleep(300 * time.Millisecond) // Wait for watchers
 

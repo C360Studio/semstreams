@@ -96,6 +96,7 @@ func (r *recordingTripleMutator) snapshot() []message.Triple {
 
 type runScopeHarness struct {
 	ctx      context.Context
+	owner    *graphIngestTestOwner
 	executor *ActionExecutor
 	mutator  *recordingTripleMutator
 	metrics  *Metrics
@@ -105,9 +106,8 @@ type runScopeHarness struct {
 	logs     *capturingHandler
 }
 
-func newRunScopeHarness(t *testing.T) *runScopeHarness {
+func newRunScopeHarness(ctx context.Context, t *testing.T) *runScopeHarness {
 	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
 
 	testClient := natsclient.NewTestClient(t,
 		natsclient.WithKV(),
@@ -123,13 +123,11 @@ func newRunScopeHarness(t *testing.T) *runScopeHarness {
 	})
 	require.NoError(t, err)
 	ingest := created.(*graphingest.Component)
+	owner := newGraphIngestTestOwner(ingest)
+	defer owner.provisionalFinish(ctx, t)
 	require.NoError(t, ingest.Initialize())
-	require.NoError(t, ingest.Start(ctx))
+	require.NoError(t, ingest.Start(owner.startContext(ctx)))
 	require.NoError(t, testClient.GetNativeConnection().Flush())
-	t.Cleanup(func() {
-		_ = ingest.Stop(context.Background())
-		cancel()
-	})
 
 	bucket, err := graph.EnsureCatalogBucket(ctx, testClient.Client, graph.BucketEntityStates)
 	require.NoError(t, err)
@@ -148,8 +146,9 @@ func newRunScopeHarness(t *testing.T) *runScopeHarness {
 	metrics := foreignFiringSkipTestMetrics()
 	executor.setMetrics(metrics)
 
+	owner.transfer()
 	return &runScopeHarness{
-		ctx: ctx, executor: executor, mutator: mutator, metrics: metrics,
+		ctx: ctx, owner: owner, executor: executor, mutator: mutator, metrics: metrics,
 		manager: manager, bucket: testClient.Client.NewKVStore(bucket), pub: pub, logs: logs,
 	}
 }
@@ -207,7 +206,10 @@ func objectFor(triples []message.Triple, predicate string) (any, bool) {
 // carries agent.run.origin-entity-id naming the import, and nothing at all is
 // written to the import.
 func TestRunScopeNewOnImportedLoopLinksLocallyWithoutForeignWrite(t *testing.T) {
-	h := newRunScopeHarness(t)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
+	h := newRunScopeHarness(operationCtx, t)
+	defer h.owner.finish(operationCtx, t)
 	revisionBefore := h.seedImportedLoop(t)
 
 	err := h.executor.Execute(h.ctx, h.runScopeNewAction(), &ExecutionContext{EntityID: runScopeImportedLoop})
@@ -282,7 +284,10 @@ func (h *runScopeHarness) runScopeNewForEachAction() Action {
 //     substring checks on TaskID do NOT discriminate — `rule-<id>-hydraulics-<ns>`
 //     still carries the `rule-<id>-` prefix.
 func TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity(t *testing.T) {
-	h := newRunScopeHarness(t)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
+	h := newRunScopeHarness(operationCtx, t)
+	defer h.owner.finish(operationCtx, t)
 	revisionBefore := h.seedImportedLoop(t)
 
 	// One firing entity, three items. The list rides the firing entity as the
@@ -357,7 +362,10 @@ func TestRunScopeNewForEachOnOneImportCountsPerDispatchNotPerEntity(t *testing.T
 // rule.task.spawned; every counter assertion in this file still passes, because
 // the counter's unit never changed.
 func TestForeignFiringSkipLogNamesEveryDeclinedWrite(t *testing.T) {
-	h := newRunScopeHarness(t)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
+	h := newRunScopeHarness(operationCtx, t)
+	defer h.owner.finish(operationCtx, t)
 	h.seedImportedLoop(t)
 
 	require.NoError(t, h.executor.Execute(h.ctx, h.runScopeNewAction(),
@@ -397,7 +405,10 @@ func TestForeignFiringSkipLogNamesEveryDeclinedWrite(t *testing.T) {
 // call immediately before publishAgentOnce's success return. This test fails on
 // the missing line; every other test in the package still passes.
 func TestForeignFiringSkipLogSurvivesAPublishFailure(t *testing.T) {
-	h := newRunScopeHarness(t)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
+	h := newRunScopeHarness(operationCtx, t)
+	defer h.owner.finish(operationCtx, t)
 	h.seedImportedLoop(t)
 	h.pub.err = errors.New("jetstream unavailable")
 
@@ -419,7 +430,10 @@ func TestForeignFiringSkipLogSurvivesAPublishFailure(t *testing.T) {
 // firing loop the anchor pair is still stamped, and the origin predicate is set
 // for a local origin too — one home for the linkage, in both cases.
 func TestRunScopeNewOnLocalLoopStampsAnchorAndOrigin(t *testing.T) {
-	h := newRunScopeHarness(t)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
+	h := newRunScopeHarness(operationCtx, t)
+	defer h.owner.finish(operationCtx, t)
 
 	localLoop := agentic.LoopExecutionEntityID(runScopeOrg, runScopePlatform, runScopeLocalUUID)
 	encoded, err := graph.MarshalEntityState(&graph.EntityState{

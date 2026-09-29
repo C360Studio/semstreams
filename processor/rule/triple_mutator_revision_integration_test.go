@@ -37,15 +37,15 @@ const revisionClaimEntityID = "c360.platform.robotics.mav1.drone.revclaim1"
 
 type revisionClaimHarness struct {
 	ctx       context.Context
+	owner     *graphIngestTestOwner
 	mutations *graphmutation.Client
 	mutator   TripleMutator
 	tracker   *Processor
 	bucket    *natsclient.KVStore
 }
 
-func newRevisionClaimHarness(t *testing.T) *revisionClaimHarness {
+func newRevisionClaimHarness(ctx context.Context, t *testing.T, setupFault ...func(*graphIngestTestOwner)) *revisionClaimHarness {
 	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
 	testClient := natsclient.NewTestClient(
 		t,
 		natsclient.WithKV(),
@@ -67,22 +67,25 @@ func newRevisionClaimHarness(t *testing.T) *revisionClaimHarness {
 	)
 	require.NoError(t, err)
 	ingest := created.(*graphingest.Component)
+	owner := newGraphIngestTestOwner(ingest)
+	defer owner.provisionalFinish(ctx, t)
 	require.NoError(t, ingest.Initialize())
-	require.NoError(t, ingest.Start(ctx))
+	require.NoError(t, ingest.Start(owner.startContext(ctx)))
 	require.NoError(t, testClient.GetNativeConnection().Flush())
-	t.Cleanup(func() {
-		_ = ingest.Stop(context.Background())
-		cancel()
-	})
 
 	bucket, err := graph.EnsureCatalogBucket(ctx, testClient.Client, graph.BucketEntityStates)
 	require.NoError(t, err)
 	mutations, err := graphmutation.NewClient(testClient.Client, MutationTimeout)
 	require.NoError(t, err)
+	if len(setupFault) != 0 {
+		setupFault[0](owner)
+	}
 
 	tracker := &Processor{ownRevisions: make(map[ruleRevKey]map[uint64]time.Time)}
+	owner.transfer()
 	return &revisionClaimHarness{
 		ctx:       ctx,
+		owner:     owner,
 		mutations: mutations,
 		mutator:   newTripleMutator(testClient.Client, tracker),
 		tracker:   tracker,
@@ -155,7 +158,10 @@ func (h *revisionClaimHarness) externalWrite(t *testing.T, object string) uint64
 }
 
 func TestTripleMutator_SuppressedAddDoesNotClaimAnotherWritersRevision(t *testing.T) {
-	h := newRevisionClaimHarness(t)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
+	h := newRevisionClaimHarness(operationCtx, t)
+	defer h.owner.finish(operationCtx, t)
 	h.seedEntity(t)
 
 	const ruleID = "rule-a"
@@ -186,7 +192,10 @@ func TestTripleMutator_SuppressedAddDoesNotClaimAnotherWritersRevision(t *testin
 }
 
 func TestTripleMutator_NoOpRemoveDoesNotClaimAnotherWritersRevision(t *testing.T) {
-	h := newRevisionClaimHarness(t)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
+	h := newRevisionClaimHarness(operationCtx, t)
+	defer h.owner.finish(operationCtx, t)
 	h.seedEntity(t)
 
 	const ruleID = "rule-b"

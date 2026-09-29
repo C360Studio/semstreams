@@ -1,0 +1,18 @@
+{
+  "command": [
+    "go",
+    "test",
+    "-v",
+    "-count=1",
+    "./test/testinfra",
+    "-run",
+    "^TestCleanupRootGuard$"
+  ],
+  "cwd": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams",
+  "pid": 93348,
+  "started_epoch": 1790708326.7681642,
+  "state": "completed",
+  "log": "/private/tmp/gh1428-guard-approved.log",
+  "exit_code": 0,
+  "elapsed_seconds": 7.805
+}

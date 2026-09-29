@@ -1,0 +1,210 @@
+{
+  "archive": "implementation-evidence.zip",
+  "sha256": "00114fa6a8e26e84996501df7ed4f3940406321ba775cd0410b6b5674b8ccb2e",
+  "members": [
+    {
+      "original_path": "/private/tmp/gh1428-baseline-before.json",
+      "member": "gh1428-baseline-before.json",
+      "bytes": 365743,
+      "sha256": "909d254426e4b190d3fe10c86f936dcea742d8a6998b7b90a93bbe02ccab2615"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-baseline-final-candidate.json",
+      "member": "gh1428-baseline-final-candidate.json",
+      "bytes": 360113,
+      "sha256": "1ffdf6ad20159fa8d25371c2b3820afba938323e66ecb488400c44002be34b82"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-candidate-generation-harness.go.txt",
+      "member": "gh1428-candidate-generation-harness.go.txt",
+      "bytes": 1619,
+      "sha256": "fdff68857e9a198b63f6c66dfe79624767ff3517bb21b845355b9d39d61343b0"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-candidate-generation.log",
+      "member": "gh1428-candidate-generation.log",
+      "bytes": 60,
+      "sha256": "3eba56cc8c02c81735b827a505099400b4cb0008c34033dc76ab75adfb7a1210"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-canonical-cancelstart-dependencies.json",
+      "member": "gh1428-canonical-cancelstart-dependencies.json",
+      "bytes": 5815,
+      "sha256": "f5b0b57ce3af5e39c996070b350de9e11d37b8a458766a94361b15621b24e5ed"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-census-status.json",
+      "member": "gh1428-census-status.json",
+      "bytes": 300,
+      "sha256": "e3768b47fae42ee50fd85736239eb11402cde088541a1d0f4b15f72e1ee5b483"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-census.json",
+      "member": "gh1428-census.json",
+      "bytes": 1347588,
+      "sha256": "d03d78b38f2f6e5ee0a56c72d7398c47a33d7fff218aacf0129455876703f2e8"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-census.log",
+      "member": "gh1428-census.log",
+      "bytes": 1559517,
+      "sha256": "427def87e2d081992dc2ef7bc2e59061e47a337c7b9197fa34041e6d7e066665"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-entity-id-audit-status.json",
+      "member": "gh1428-entity-id-audit-status.json",
+      "bytes": 328,
+      "sha256": "74e0a2693b7ca95e3256f91c180647bdf1ee4839e055b22c4513211bb6446dcf"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-entity-id-audit.log",
+      "member": "gh1428-entity-id-audit.log",
+      "bytes": 66,
+      "sha256": "39f3364c15612045d89d41332bef8b50c0bc46b66ba955db978814d463b65d4c"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-external-phase-focused.log",
+      "member": "gh1428-external-phase-focused.log",
+      "bytes": 376,
+      "sha256": "a7f36910bb82d362e3a2ea85ed5f6a4c9517506c2c6a5b554203830362780d9f"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-final-attempt_only_on_success.bak",
+      "member": "gh1428-final-attempt_only_on_success.bak",
+      "bytes": 3355,
+      "sha256": "ffa9a2a8a1a0800f256982f260b973f08edc942b6fc1f9509c19d73a8c580bd8"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-final-attempt_only_on_success.log",
+      "member": "gh1428-final-attempt_only_on_success.log",
+      "bytes": 1141,
+      "sha256": "52831ed0117092883fa121c8e8def4be10da0da9bdec19d38e13de0769503e2c"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-final-attempt_only_on_success.patch",
+      "member": "gh1428-final-attempt_only_on_success.patch",
+      "bytes": 656,
+      "sha256": "4735765d2ba2f6a03d1cecdbe734c6580155362c37a3bf93ed0f7c812a849802"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-final-helper-mutation.json",
+      "member": "gh1428-final-helper-mutation.json",
+      "bytes": 1932,
+      "sha256": "efde1f29e06fbe6e79ae87914740614fa52ff82165b59f9bed3e5b609b3f417d"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-final-pre_stop_start_cancel.bak",
+      "member": "gh1428-final-pre_stop_start_cancel.bak",
+      "bytes": 3355,
+      "sha256": "ffa9a2a8a1a0800f256982f260b973f08edc942b6fc1f9509c19d73a8c580bd8"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-final-pre_stop_start_cancel.log",
+      "member": "gh1428-final-pre_stop_start_cancel.log",
+      "bytes": 792,
+      "sha256": "e9e38a6438671d1499c290758acbd4b922ba2de059ae4c1fb0768933c122e5a8"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-final-pre_stop_start_cancel.patch",
+      "member": "gh1428-final-pre_stop_start_cancel.patch",
+      "bytes": 348,
+      "sha256": "b3f5dfbc015b9a534a6b853b5a613b4f03d4db98c47b234677c93feb222673c4"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-final-provisional_omission.patch",
+      "member": "gh1428-final-provisional_omission.patch",
+      "bytes": 492,
+      "sha256": "02cfb482d26df631409f2978a1ca66de69657c5d922817ab6d06d8beeee09e91"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-final-scheduler-mutations.json",
+      "member": "gh1428-final-scheduler-mutations.json",
+      "bytes": 2139,
+      "sha256": "113ecb53c9eeb777b3d1dbf6eeec201465e6fb13197f33225b185bc9171ac3c0"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-implementation-source-final.json",
+      "member": "gh1428-implementation-source-final.json",
+      "bytes": 2082,
+      "sha256": "53be1e8c8ef8a31ebd1d7f14ba127f33dab1375a99e0234c81885a904c1a0ed0"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-mutant-attempt_only_on_success.log",
+      "member": "gh1428-mutant-attempt_only_on_success.log",
+      "bytes": 867,
+      "sha256": "dce96211aca06a7cc795c53cf6e8f71a0ad2c2058c8c23a23ad4c4657cba2b33"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-mutant-pre_stop_start_cancel.log",
+      "member": "gh1428-mutant-pre_stop_start_cancel.log",
+      "bytes": 527,
+      "sha256": "793c17e9d749d420c37d5b06633ae4084f86057de23f2fb2df00bbed2894fcb4"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-mutant-provisional_omission.bak",
+      "member": "gh1428-mutant-provisional_omission.bak",
+      "bytes": 8876,
+      "sha256": "426f8c3616f12b9b09a1f5acee955b3900807914fd3b01305035a2e510dc0e3c"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-mutant-provisional_omission.log",
+      "member": "gh1428-mutant-provisional_omission.log",
+      "bytes": 2070,
+      "sha256": "a92d324400f7c0f50861b9adc89a20205284535f077e3ae1713768a2d828af7d"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-mutations.json",
+      "member": "gh1428-mutations.json",
+      "bytes": 4803,
+      "sha256": "d57a3e243c4fc9f8118f4d7cff0afa1763eaa2eff86a2e01b06ce30a042940f1"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-new-resolution-candidates.json",
+      "member": "gh1428-new-resolution-candidates.json",
+      "bytes": 8687,
+      "sha256": "9ca79d6b38653a8b183d90018bc8eb7c84643aaf8f4000a6da94ccb5ef7fce96"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-new-unresolved-sites.json",
+      "member": "gh1428-new-unresolved-sites.json",
+      "bytes": 2869,
+      "sha256": "23078b4c3e49ec64a4bd2a5c32464d805ee4d8dc042bd2d7a11e1d8d4888f655"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-rule-final-focused-unit.log",
+      "member": "gh1428-rule-final-focused-unit.log",
+      "bytes": 60,
+      "sha256": "8ade136f3d7c51bd1a628d9290ae7db9723b5283b6b5cb3ac0bea00ded0c3c32"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-rule-integration-compile2.log",
+      "member": "gh1428-rule-integration-compile2.log",
+      "bytes": 391,
+      "sha256": "ed30db62a99747de1773c9ad6f1170204890eb045391f2e3afed37e89f3b4b71"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-rule-selected-integration.log",
+      "member": "gh1428-rule-selected-integration.log",
+      "bytes": 101669,
+      "sha256": "97538473b47c7c24b6231a66c4a205dcffea21f890e5d4998b1f5f8d4ece202a"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-rule-source-manifest.json",
+      "member": "gh1428-rule-source-manifest.json",
+      "bytes": 14053,
+      "sha256": "65acc11ab27c7ebba32d7cbb9c5ed683e5c0996a2a79b87ae1c792ddcc11008b"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-scheduler-mutation-baseline.log",
+      "member": "gh1428-scheduler-mutation-baseline.log",
+      "bytes": 60,
+      "sha256": "1effa87d5315aae0a58ac139aa7d86fd50a1e2dfc93318dc04d692e527dbd30e"
+    },
+    {
+      "original_path": "/private/tmp/gh1428-scheduler-mutation-restored.log",
+      "member": "gh1428-scheduler-mutation-restored.log",
+      "bytes": 60,
+      "sha256": "0a5fa5c8085e462fbf42860a72c31be245e87916e9a40ad5384b08ff0e90b28b"
+    }
+  ]
+}

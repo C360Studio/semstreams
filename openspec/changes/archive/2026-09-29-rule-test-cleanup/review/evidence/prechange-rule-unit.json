@@ -1,0 +1,12 @@
+{
+  "source_head": "047be916111816f353d2998a06b40e24bcecb0e6",
+  "source_base": "caa98f5acae60efbc669ad1e1795ab6e903abd42",
+  "source_changes": "none; uncommitted inventory review/task documentation only",
+  "command": "PATH=/private/tmp/gh1064-task-tools:$PATH go test -race ./processor/rule -run '^(TestCronScheduler_|TestCronFire_|TestRuleStopDeadlineArmCancelsAndJoinsCoordinator$)' -count=1 -timeout=60s",
+  "exit_code": 0,
+  "package_seconds": 2.4,
+  "observed_utc": "2026-09-29T18:12:46.577082+00:00",
+  "log": "prechange-rule-unit.txt",
+  "log_sha256": "86f3f02ba0c2e805b444dfc7bbdf0154d920bbd3479022c026eed3ff262f0444",
+  "scope": "Existing default-build scheduler and owner-lane deadline regression selection; no Docker, integration execution or remediation proof."
+}

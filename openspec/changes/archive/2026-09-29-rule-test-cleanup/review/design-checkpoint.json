@@ -1,0 +1,31 @@
+{
+  "accepted_inventory_checkpoint": "047be916111816f353d2998a06b40e24bcecb0e6",
+  "source_base": "caa98f5acae60efbc669ad1e1795ab6e903abd42",
+  "status": "draft for independent design review",
+  "materialization_notes": [
+    "Design scratch filename reference normalized to spec-disposition.md.",
+    "Coordinator updated task truth for materialization and replaced future hosted/merge assertions with branch-checkable handoff obligations."
+  ],
+  "artifacts": [
+    {
+      "path": "design.md",
+      "sha256": "1e2036ec3c7129c63f607b886c1f2e6a41169dfaa8a2d2866a7605be842b3e2c"
+    },
+    {
+      "path": "spec-disposition.md",
+      "sha256": "5cdcda7a84285df5b0fd02f4e6c02cd81b774940d3baf9453dacae6525799527"
+    },
+    {
+      "path": "tasks.md",
+      "sha256": "200daec9ed2b00fc9f5598fcc11f6f0b3b50d94621f32e981bc1f4941f5e6c3a"
+    },
+    {
+      "path": "proposal.md",
+      "sha256": "321a78b01a31754216420ca30a16cbc33d8b3e572cdd68362ee3b96d3efdfd40"
+    },
+    {
+      "path": "review/inventory-review-final.md",
+      "sha256": "3246b5de8904b6ab5aa2755d0b1720b794d973bab01a0f76b7348566b2cd4a4f"
+    }
+  ]
+}

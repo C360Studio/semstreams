@@ -1,0 +1,7 @@
+task: [openspec:queue] scripts/openspec-queue.sh
+
+openspec queue — why each in-flight change is still open
+-------------------------------------------------------
+
+  (queue is empty)
+

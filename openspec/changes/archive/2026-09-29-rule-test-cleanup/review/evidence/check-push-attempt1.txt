@@ -1,0 +1,44 @@
+task: [lint:cleanup-roots] scripts/check-cleanup-roots.sh
+ok  	github.com/c360studio/semstreams/test/testinfra	7.534s
+task: [lint:default] go vet ./...
+task: [lint:default] go fmt ./...
+task: [lint:default] go tool revive -config revive.toml -formatter friendly ./...
+task: [lint:test-ports] echo "running fixed-port lint guard (scripts/lint-test-ports.sh)"
+running fixed-port lint guard (scripts/lint-test-ports.sh)
+task: [lint:test-ports] bash scripts/lint-test-ports.sh
+task: [lint:nats-kv-sdk-pin] bash scripts/lint-nats-kv-sdk-pin.sh
+OK: selected nats.go module matches KV and graph-index pins v1.52.0 without replacement
+task: [lint:nats-kv-sdk-pin:test] bash scripts/lint-nats-kv-sdk-pin_fixture_test.sh
+OK: selected direct pin
+OK: version drift
+OK: same-version fork replacement
+OK: local replacement
+OK: wrong module path
+OK: empty output
+OK: malformed output
+OK: module lookup failure
+OK: graph-index pin drift
+OK: absent graph-index pin
+OK: malformed graph-index pin
+OK: multiple graph-index pins
+OK: absent pin
+OK: multiple pins
+task: [lint:request-guard] go test ./test/natsclient/
+ok  	github.com/c360studio/semstreams/test/natsclient	0.536s
+task: [build:default] go build -o bin/semstreams ./cmd/semstreams
+task: [build:default] echo "Built bin/semstreams"
+Built bin/semstreams
+task: [check:push] go vet -tags=integration ./...
+processor/rule/rule_integration_test.go:156:2: the cancelStartScope function is not used on all paths (possible context leak)
+processor/rule/rule_integration_test.go:225:1: this return statement may be reached without using the cancelStartScope var defined on line 156
+processor/rule/rule_integration_test.go:273:2: the cancelExecution function is not used on all paths (possible context leak)
+processor/rule/rule_integration_test.go:350:1: this return statement may be reached without using the cancelExecution var defined on line 273
+processor/rule/rule_integration_test.go:484:2: the cancelExecution function is not used on all paths (possible context leak)
+processor/rule/rule_integration_test.go:515:1: this return statement may be reached without using the cancelExecution var defined on line 484
+processor/rule/rule_integration_test.go:588:2: the cancelStartScope function is not used on all paths (possible context leak)
+processor/rule/rule_integration_test.go:677:1: this return statement may be reached without using the cancelStartScope var defined on line 588
+processor/rule/rule_integration_test.go:745:2: the cancelExecution function is not used on all paths (possible context leak)
+processor/rule/rule_integration_test.go:794:1: this return statement may be reached without using the cancelExecution var defined on line 745
+processor/rule/rule_integration_test.go:910:2: the cancelStartScope function is not used on all paths (possible context leak)
+processor/rule/rule_integration_test.go:994:1: this return statement may be reached without using the cancelStartScope var defined on line 910
+task: Failed to run task "check:push": exit status 1

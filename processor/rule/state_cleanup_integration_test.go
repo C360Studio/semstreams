@@ -24,9 +24,9 @@ import (
 // proves the boundary-aware match: a prefix-sibling's state survives.
 func TestEntityWatcher_DeletedEntityCleansRuleState(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
-	t.Cleanup(func() { _ = testClient.Terminate() })
 	nc := testClient.Client
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
 
 	js, err := nc.JetStream()
 	require.NoError(t, err)
@@ -40,11 +40,15 @@ func TestEntityWatcher_DeletedEntityCleansRuleState(t *testing.T) {
 	config.PackID = "state-cleanup-integration-test"
 	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"gh358.test.*.*.*.*"}}
 	proc, err := NewProcessor(nc, &config)
+	var owner *processorTestOwner
+	if proc != nil {
+		owner = newProcessorTestOwner(proc)
+		defer owner.finish(ctx, t)
+	}
 	require.NoError(t, err)
 	proc.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	require.NoError(t, proc.Initialize())
-	require.NoError(t, proc.Start(ctx))
-	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+	require.NoError(t, proc.Start(owner.startContext(ctx)))
 	require.NotNil(t, proc.stateTracker, "state tracker must initialize")
 
 	const ruleID = "retry-rule"
