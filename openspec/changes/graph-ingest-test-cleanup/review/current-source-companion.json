@@ -1,0 +1,2699 @@
+{
+  "status": "Current-source inventory companion; exact baseline approval is attributed to review/manifest-review.md, not this refresh",
+  "base": "c9870a71e425445c5147a017c50c2f55b56e6f20",
+  "accepted_checkpoint": "0085323e",
+  "accepted_inventory_sha256": "c7b4178dc00f4fdab4fad2f39a21db7969aa56132e3df9873ba232eb39e55e12",
+  "frozen_manifest_sha256": "3a9b31e446490985399d5e8af0ac36111fe9b03a475239ffe88b6342af953c7e",
+  "frozen_files": {
+    "processor/graph-ingest/authority_gate_integration_test.go": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d",
+    "processor/graph-ingest/batch_integration_test.go": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7",
+    "processor/graph-ingest/batch_missing_integration_test.go": "538781a0e7a7e4fd09bc235e1c7b51ed3017594d7d0fa1143e399b5235f3911c",
+    "processor/graph-ingest/cache_coherence_integration_test.go": "b2a7b5c78a9e873251669bafbdefb935d9a68a6b749b10f178eeae3af3648e8f",
+    "processor/graph-ingest/cache_stale_repopulation_integration_test.go": "d352e8d51f2fdc3f4f75cd2730a293f52499c4bcf657ecb78cbbcc9d5a17f4d2",
+    "processor/graph-ingest/cas_integration_test.go": "9ccd1d608244ce9bb9e35947a54f7dee07e88788a63eb005f2e9fcf745296761",
+    "processor/graph-ingest/component_test.go": "912a7688fe78580dad3a953f8a017114df710247affb15eccd9e98629a0fa257",
+    "processor/graph-ingest/entity_mutation_integration_test.go": "912f2151a906448e8f24ea7d620f5180536bc39ed51d2cccda3da9337aea3144",
+    "processor/graph-ingest/hierarchy_replay_integration_test.go": "aeeedff58fa5392d261040cae3b7111be3b547dcf11272f93cdac77c7569e8e6",
+    "processor/graph-ingest/hierarchy_sync_integration_test.go": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2",
+    "processor/graph-ingest/keyed_ingest_integration_test.go": "e629e1084fbcb8e1ae68ed49ace478aec0901b4fa67da21df57d44776263908a",
+    "processor/graph-ingest/lifecycle_integration_test.go": "9eabd64f9a22c29898a0cae60618aac3a1c5a6c0b7664b8fa7e6d01b4fd1c308",
+    "processor/graph-ingest/merge_entity_integration_test.go": "0dec3c83fc1b346553e46e792b895af8d5c6c4635a56027d8c2bac87045f4ad0",
+    "processor/graph-ingest/poison_scoping_integration_test.go": "1fcf10f0d6b43c20ee23cb9d33ce0c2510fbee627cefe5b156e52e7c2368613a",
+    "processor/graph-ingest/query_integration_test.go": "3a6659950d889318a4331f05afbe6fedc67a588200d8de78d84ef85c62351de7",
+    "processor/graph-ingest/query_prefix_integration_test.go": "568a4c3a7034a09e344ef12d2e19fda5b424c3487f8ef0335ea5e56d0b8167c0",
+    "processor/graph-ingest/query_wire_contract_integration_test.go": "0b886e59ba1db063a7e4b645636dcc2d7c89a11779a79bf1f432513fd89bb993",
+    "processor/graph-ingest/readiness_gauges_integration_test.go": "f50d0849431eed144acc974f318eec34067d4a6d2d797e1216ee592e5540399f",
+    "processor/graph-ingest/readiness_integration_test.go": "5f5ba1e0f36a6a32a9a2a4738d605b8089acfc0e9f9c3e1ee1ea84a40afaeb37",
+    "processor/graph-ingest/registered_type_gate_integration_test.go": "209ca6c69e3f8e0032f27afb093ef829d7c85360bb7f0ab9e60bda782ab81ef3",
+    "processor/graph-ingest/resident_stamp_integration_test.go": "7da0f6df89ae4aef5233fd7857bcd8aef7148e8e857bb145e6a6c44272f5bcf3",
+    "processor/graph-ingest/structural_gate_wire_integration_test.go": "5e1cd928324cca3d2943f105a8a19348bee59e107c9138cc8eb2a4b35aaf8060",
+    "processor/graph-ingest/test_owner_child_test.go": "fb917010849b53b6be0de92097bf11a1c6d4745767ffb76cfdd4e59aee2b36c4",
+    "processor/graph-ingest/test_owner_support_test.go": "8ce98ae0bfc1b851128dfe9e5048c171506b5cd5ea8278ac71f26031edb58d38",
+    "processor/graph-ingest/test_owner_test.go": "d35af1f6ff3fec20b6fb04176f66b5a6cf79a271c2b18c1c3795da5d16f3b3f9"
+  },
+  "unchanged_dependencies_since_accepted_checkpoint": {
+    "processor/graph-ingest/component.go": "787e7e862bd63d3f783b9c868012dfe49154ffe2238bdb235800b75e11416bb1",
+    "processor/graph-ingest/lifecycle_owner_test.go": "d1ae852375a9ff9a46de7dba7f80b745f2bf23f94dc2055e87051e998c86836c",
+    "natsclient/test_client.go": "5989421bccc4c22d079afaf2a8f3baad3c227aad0894134270cbae343438ca7a",
+    "pkg/cache/hybrid.go": "aa71a3098e6ddf4a3ae73cad8063d17be1a004244dbdf5c116a026a1434696b6",
+    "pkg/cache/ttl.go": "7d9341685c134d54536dbb863a863fe2d05c07a76f31834b750901eaca54e0a4",
+    "pkg/dispatch/keyed_pool.go": "2a0642f3288d8b340ef661f9382142511dc8fb8ffa257c949d5deb45a4a8cd2e",
+    "processor/graph-ingest/hierarchy_integration_test.go": "87df9a558f74864e3379de6bfc448417d04ac9e20d0fe835615dad2a10a0a486"
+  },
+  "original_entry_count": 32,
+  "original_entry_mapping": [
+    {
+      "original_identity": "processor/graph-ingest/authority_gate_integration_test.go|startAuthorityGateComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "1824feae2ccd1015afc5cc12554966c0279265eb5176b4469eadfec819edae60",
+      "original_location": "processor/graph-ingest/authority_gate_integration_test.go:177",
+      "function": "startAuthorityGateComponent",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/authority_gate_integration_test.go",
+        "line": 137,
+        "text": "func startAuthorityGateComponent(ctx context.Context, t *testing.T, enableHierarchy bool) *authorityGateHarness {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/authority_gate_integration_test.go",
+        "line": 173,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/authority_gate_integration_test.go",
+        "line": 174,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/authority_gate_integration_test.go",
+        "line": 175,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/authority_gate_integration_test.go",
+        "line": 177,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d",
+      "current_transfer": {
+        "path": "processor/graph-ingest/authority_gate_integration_test.go",
+        "line": 180,
+        "text": "owner.transfer()"
+      }
+    },
+    {
+      "original_identity": "processor/graph-ingest/batch_integration_test.go|startBatchTestComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+      "original_location": "processor/graph-ingest/batch_integration_test.go:46",
+      "function": "startBatchTestComponent",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/batch_integration_test.go",
+        "line": 23,
+        "text": "func startBatchTestComponent(ctx context.Context, t *testing.T) (*Component, *graphIngestTestOwner) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/batch_integration_test.go",
+        "line": 42,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/batch_integration_test.go",
+        "line": 43,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/batch_integration_test.go",
+        "line": 44,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/batch_integration_test.go",
+        "line": 45,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7",
+      "current_transfer": {
+        "path": "processor/graph-ingest/batch_integration_test.go",
+        "line": 48,
+        "text": "owner.transfer()"
+      }
+    },
+    {
+      "original_identity": "processor/graph-ingest/cas_integration_test.go|TestIntegration_ConcurrentCanonicalAppend|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "1824feae2ccd1015afc5cc12554966c0279265eb5176b4469eadfec819edae60",
+      "original_location": "processor/graph-ingest/cas_integration_test.go:33",
+      "function": "TestIntegration_ConcurrentCanonicalAppend",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/cas_integration_test.go",
+        "line": 22,
+        "text": "func TestIntegration_ConcurrentCanonicalAppend(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/cas_integration_test.go",
+        "line": 32,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/cas_integration_test.go",
+        "line": 33,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/cas_integration_test.go",
+        "line": 34,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/cas_integration_test.go",
+        "line": 35,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "9ccd1d608244ce9bb9e35947a54f7dee07e88788a63eb005f2e9fcf745296761"
+    },
+    {
+      "original_identity": "processor/graph-ingest/component_test.go|TestComponent_Health_Running|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "d8628907d833462e7e3cf2b13dcd4c4cc13f74c06198c818cf519a082eddb659",
+      "original_location": "processor/graph-ingest/component_test.go:547",
+      "function": "TestComponent_Health_Running",
+      "ordinal": 1,
+      "build": "default",
+      "unconditionally_skipped": true,
+      "current_declaration": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 541,
+        "text": "func TestComponent_Health_Running(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 546,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 547,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 549,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 550,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "912a7688fe78580dad3a953f8a017114df710247affb15eccd9e98629a0fa257"
+    },
+    {
+      "original_identity": "processor/graph-ingest/component_test.go|TestComponent_Start_AlreadyStarted|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "d8628907d833462e7e3cf2b13dcd4c4cc13f74c06198c818cf519a082eddb659",
+      "original_location": "processor/graph-ingest/component_test.go:627",
+      "function": "TestComponent_Start_AlreadyStarted",
+      "ordinal": 1,
+      "build": "default",
+      "unconditionally_skipped": true,
+      "current_declaration": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 625,
+        "text": "func TestComponent_Start_AlreadyStarted(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 630,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 631,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 633,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 634,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "912a7688fe78580dad3a953f8a017114df710247affb15eccd9e98629a0fa257"
+    },
+    {
+      "original_identity": "processor/graph-ingest/component_test.go|TestComponent_Start_Success|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "d8628907d833462e7e3cf2b13dcd4c4cc13f74c06198c818cf519a082eddb659",
+      "original_location": "processor/graph-ingest/component_test.go:605",
+      "function": "TestComponent_Start_Success",
+      "ordinal": 1,
+      "build": "default",
+      "unconditionally_skipped": true,
+      "current_declaration": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 601,
+        "text": "func TestComponent_Start_Success(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 606,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 607,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 609,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 610,
+        "text": "err := comp.Start(owner.startContext(ctx))"
+      },
+      "source_sha256": "912a7688fe78580dad3a953f8a017114df710247affb15eccd9e98629a0fa257"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_replay_integration_test.go|TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f26651f018b02430b8e2cd33aa144568598aef87a9cd56d46f3bce71063ce0bf",
+      "original_location": "processor/graph-ingest/hierarchy_replay_integration_test.go:143",
+      "function": "TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_replay_integration_test.go",
+        "line": 123,
+        "text": "func TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_replay_integration_test.go",
+        "line": 144,
+        "text": "replayOwner := newGraphIngestTestOwner(replay)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_replay_integration_test.go",
+        "line": 145,
+        "text": "defer replayOwner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_replay_integration_test.go",
+        "line": 146,
+        "text": "require.NoError(t, replay.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_replay_integration_test.go",
+        "line": 147,
+        "text": "require.NoError(t, replay.Start(replayOwner.startContext(ctx)))"
+      },
+      "source_sha256": "aeeedff58fa5392d261040cae3b7111be3b547dcf11272f93cdac77c7569e8e6"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_ContainerCreation|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+      "original_location": "processor/graph-ingest/hierarchy_sync_integration_test.go:212",
+      "function": "TestComponent_SynchronousHierarchy_ContainerCreation",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 188,
+        "text": "func TestComponent_SynchronousHierarchy_ContainerCreation(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 217,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 219,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 221,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 223,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_ContextCancellation|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+      "original_location": "processor/graph-ingest/hierarchy_sync_integration_test.go:596",
+      "function": "TestComponent_SynchronousHierarchy_ContextCancellation",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 608,
+        "text": "func TestComponent_SynchronousHierarchy_ContextCancellation(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 613,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 614,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 616,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 617,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_DisabledConfig|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "32c81ffd0b98c98f42d6efa1f62372828bc1d5f892a8e92d53dc66c491ef95f5",
+      "original_location": "processor/graph-ingest/hierarchy_sync_integration_test.go:445",
+      "function": "TestComponent_SynchronousHierarchy_DisabledConfig",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 452,
+        "text": "func TestComponent_SynchronousHierarchy_DisabledConfig(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 458,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 459,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 461,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 462,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_IncludedBeforeWrite|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+      "original_location": "processor/graph-ingest/hierarchy_sync_integration_test.go:57",
+      "function": "TestComponent_SynchronousHierarchy_IncludedBeforeWrite",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 26,
+        "text": "func TestComponent_SynchronousHierarchy_IncludedBeforeWrite(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 55,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 56,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 58,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 59,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_InvalidEntityID|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+      "original_location": "processor/graph-ingest/hierarchy_sync_integration_test.go:535",
+      "function": "TestComponent_SynchronousHierarchy_InvalidEntityID",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 518,
+        "text": "func TestComponent_SynchronousHierarchy_InvalidEntityID(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 550,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 551,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 553,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 554,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_MultipleEntitiesSameType|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+      "original_location": "processor/graph-ingest/hierarchy_sync_integration_test.go:270",
+      "function": "TestComponent_SynchronousHierarchy_MultipleEntitiesSameType",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 275,
+        "text": "func TestComponent_SynchronousHierarchy_MultipleEntitiesSameType(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 279,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 280,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 282,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 283,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_NoWatcherLifecycle|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+      "original_location": "processor/graph-ingest/hierarchy_sync_integration_test.go:430",
+      "function": "TestComponent_SynchronousHierarchy_NoWatcherLifecycle",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 372,
+        "text": "func TestComponent_SynchronousHierarchy_NoWatcherLifecycle(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 441,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 442,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 444,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 445,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_SiblingEdges|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+      "original_location": "processor/graph-ingest/hierarchy_sync_integration_test.go:644",
+      "function": "TestComponent_SynchronousHierarchy_SiblingEdges",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 658,
+        "text": "func TestComponent_SynchronousHierarchy_SiblingEdges(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 663,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 664,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 666,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 667,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_SiblingEdges|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|2",
+      "original_fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+      "original_location": "processor/graph-ingest/hierarchy_sync_integration_test.go:742",
+      "function": "TestComponent_SynchronousHierarchy_SiblingEdges",
+      "ordinal": 2,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 658,
+        "text": "func TestComponent_SynchronousHierarchy_SiblingEdges(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 763,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 764,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 766,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 767,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2"
+    },
+    {
+      "original_identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_SingleWrite|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+      "original_location": "processor/graph-ingest/hierarchy_sync_integration_test.go:137",
+      "function": "TestComponent_SynchronousHierarchy_SingleWrite",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 117,
+        "text": "func TestComponent_SynchronousHierarchy_SingleWrite(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 137,
+        "text": "owner := newGraphIngestTestOwner(comp)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 138,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 140,
+        "text": "require.NoError(t, comp.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+        "line": 141,
+        "text": "require.NoError(t, comp.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2"
+    },
+    {
+      "original_identity": "processor/graph-ingest/keyed_ingest_integration_test.go|TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+      "original_location": "processor/graph-ingest/keyed_ingest_integration_test.go:59",
+      "function": "TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 35,
+        "text": "func TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 59,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 60,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 61,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 65,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)),"
+      },
+      "source_sha256": "e629e1084fbcb8e1ae68ed49ace478aec0901b4fa67da21df57d44776263908a"
+    },
+    {
+      "original_identity": "processor/graph-ingest/keyed_ingest_integration_test.go|startKeyedWireComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+      "original_location": "processor/graph-ingest/keyed_ingest_integration_test.go:202",
+      "function": "startKeyedWireComponent",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 195,
+        "text": "func startKeyedWireComponent(ctx context.Context, t *testing.T) (*Component, *natsclient.TestClient, *graphIngestTestOwner) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 209,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 210,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 211,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 213,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "e629e1084fbcb8e1ae68ed49ace478aec0901b4fa67da21df57d44776263908a",
+      "current_transfer": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 214,
+        "text": "owner.transfer()"
+      }
+    },
+    {
+      "original_identity": "processor/graph-ingest/merge_entity_integration_test.go|TestIntegration_MergeEntity_HierarchyDoesNotDuplicate|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+      "original_location": "processor/graph-ingest/merge_entity_integration_test.go:261",
+      "function": "TestIntegration_MergeEntity_HierarchyDoesNotDuplicate",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/merge_entity_integration_test.go",
+        "line": 259,
+        "text": "func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/merge_entity_integration_test.go",
+        "line": 275,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/merge_entity_integration_test.go",
+        "line": 276,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/merge_entity_integration_test.go",
+        "line": 277,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/merge_entity_integration_test.go",
+        "line": 278,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0dec3c83fc1b346553e46e792b895af8d5c6c4635a56027d8c2bac87045f4ad0"
+    },
+    {
+      "original_identity": "processor/graph-ingest/poison_scoping_integration_test.go|TestIntegration_BootSweepInventoriesResidentPoisonRealNATS|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+      "original_location": "processor/graph-ingest/poison_scoping_integration_test.go:131",
+      "function": "TestIntegration_BootSweepInventoriesResidentPoisonRealNATS",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+        "line": 103,
+        "text": "func TestIntegration_BootSweepInventoriesResidentPoisonRealNATS(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+        "line": 132,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+        "line": 133,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+        "line": 134,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+        "line": 135,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "1fcf10f0d6b43c20ee23cb9d33ce0c2510fbee627cefe5b156e52e7c2368613a"
+    },
+    {
+      "original_identity": "processor/graph-ingest/poison_scoping_integration_test.go|TestIntegration_NoGuardConsumerOnEntityStatesAfterStart|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+      "original_location": "processor/graph-ingest/poison_scoping_integration_test.go:60",
+      "function": "TestIntegration_NoGuardConsumerOnEntityStatesAfterStart",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+        "line": 39,
+        "text": "func TestIntegration_NoGuardConsumerOnEntityStatesAfterStart(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+        "line": 56,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+        "line": 57,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+        "line": 58,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+        "line": 62,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "1fcf10f0d6b43c20ee23cb9d33ce0c2510fbee627cefe5b156e52e7c2368613a"
+    },
+    {
+      "original_identity": "processor/graph-ingest/query_integration_test.go|TestIntegration_QueryHandlers|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "618a6627e3a6a0dc3926231167669d0ac2b42d5838a353530ef1ba6d6ce219fa",
+      "original_location": "processor/graph-ingest/query_integration_test.go:51",
+      "function": "TestIntegration_QueryHandlers",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/query_integration_test.go",
+        "line": 23,
+        "text": "func TestIntegration_QueryHandlers(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/query_integration_test.go",
+        "line": 49,
+        "text": "owner := newGraphIngestTestOwner(component)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/query_integration_test.go",
+        "line": 50,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/query_integration_test.go",
+        "line": 51,
+        "text": "require.NoError(t, component.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/query_integration_test.go",
+        "line": 52,
+        "text": "require.NoError(t, component.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "3a6659950d889318a4331f05afbe6fedc67a588200d8de78d84ef85c62351de7"
+    },
+    {
+      "original_identity": "processor/graph-ingest/query_prefix_integration_test.go|startPrefixTestComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+      "original_location": "processor/graph-ingest/query_prefix_integration_test.go:46",
+      "function": "startPrefixTestComponent",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/query_prefix_integration_test.go",
+        "line": 25,
+        "text": "func startPrefixTestComponent(ctx context.Context, t *testing.T, opts ...testComponentOption) (*Component, *natsclient.Client, *graphIngestTestOwner) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/query_prefix_integration_test.go",
+        "line": 43,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/query_prefix_integration_test.go",
+        "line": 44,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/query_prefix_integration_test.go",
+        "line": 45,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/query_prefix_integration_test.go",
+        "line": 46,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "568a4c3a7034a09e344ef12d2e19fda5b424c3487f8ef0335ea5e56d0b8167c0",
+      "current_transfer": {
+        "path": "processor/graph-ingest/query_prefix_integration_test.go",
+        "line": 50,
+        "text": "owner.transfer()"
+      }
+    },
+    {
+      "original_identity": "processor/graph-ingest/query_wire_contract_integration_test.go|TestIntegration_QueryEntityNATS_WireContract|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "76a0ade59997b97a7c8e1927cf7abbfe7ffeaddced4cba468cdc8c637226cdca",
+      "original_location": "processor/graph-ingest/query_wire_contract_integration_test.go:54",
+      "function": "TestIntegration_QueryEntityNATS_WireContract",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/query_wire_contract_integration_test.go",
+        "line": 33,
+        "text": "func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/query_wire_contract_integration_test.go",
+        "line": 53,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/query_wire_contract_integration_test.go",
+        "line": 54,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/query_wire_contract_integration_test.go",
+        "line": 55,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/query_wire_contract_integration_test.go",
+        "line": 56,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "0b886e59ba1db063a7e4b645636dcc2d7c89a11779a79bf1f432513fd89bb993"
+    },
+    {
+      "original_identity": "processor/graph-ingest/readiness_gauges_integration_test.go|TestIntegration_ReadinessGaugesAreEmitted|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "76a0ade59997b97a7c8e1927cf7abbfe7ffeaddced4cba468cdc8c637226cdca",
+      "original_location": "processor/graph-ingest/readiness_gauges_integration_test.go:55",
+      "function": "TestIntegration_ReadinessGaugesAreEmitted",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/readiness_gauges_integration_test.go",
+        "line": 37,
+        "text": "func TestIntegration_ReadinessGaugesAreEmitted(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/readiness_gauges_integration_test.go",
+        "line": 50,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/readiness_gauges_integration_test.go",
+        "line": 51,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/readiness_gauges_integration_test.go",
+        "line": 53,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/readiness_gauges_integration_test.go",
+        "line": 55,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "f50d0849431eed144acc974f318eec34067d4a6d2d797e1216ee592e5540399f"
+    },
+    {
+      "original_identity": "processor/graph-ingest/readiness_integration_test.go|TestIntegration_ReadinessEnvelope_BacklogIsNotReady|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "76a0ade59997b97a7c8e1927cf7abbfe7ffeaddced4cba468cdc8c637226cdca",
+      "original_location": "processor/graph-ingest/readiness_integration_test.go:181",
+      "function": "TestIntegration_ReadinessEnvelope_BacklogIsNotReady",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 158,
+        "text": "func TestIntegration_ReadinessEnvelope_BacklogIsNotReady(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 180,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 181,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 183,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 185,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "5f5ba1e0f36a6a32a9a2a4738d605b8089acfc0e9f9c3e1ee1ea84a40afaeb37"
+    },
+    {
+      "original_identity": "processor/graph-ingest/readiness_integration_test.go|TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "76a0ade59997b97a7c8e1927cf7abbfe7ffeaddced4cba468cdc8c637226cdca",
+      "original_location": "processor/graph-ingest/readiness_integration_test.go:258",
+      "function": "TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 244,
+        "text": "func TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 258,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 259,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 261,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 263,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "5f5ba1e0f36a6a32a9a2a4738d605b8089acfc0e9f9c3e1ee1ea84a40afaeb37"
+    },
+    {
+      "original_identity": "processor/graph-ingest/readiness_integration_test.go|TestIntegration_ReadyImpliesTheWritesAreDurable|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "76a0ade59997b97a7c8e1927cf7abbfe7ffeaddced4cba468cdc8c637226cdca",
+      "original_location": "processor/graph-ingest/readiness_integration_test.go:340",
+      "function": "TestIntegration_ReadyImpliesTheWritesAreDurable",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 314,
+        "text": "func TestIntegration_ReadyImpliesTheWritesAreDurable(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 340,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 341,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 343,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 345,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "5f5ba1e0f36a6a32a9a2a4738d605b8089acfc0e9f9c3e1ee1ea84a40afaeb37"
+    },
+    {
+      "original_identity": "processor/graph-ingest/readiness_integration_test.go|startIngestForReadiness|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+      "original_location": "processor/graph-ingest/readiness_integration_test.go:87",
+      "function": "startIngestForReadiness",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 62,
+        "text": "func startIngestForReadiness(ctx context.Context, t *testing.T) (*natsclient.TestClient, *Component, *graphIngestTestOwner) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 77,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 78,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 82,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 88,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "5f5ba1e0f36a6a32a9a2a4738d605b8089acfc0e9f9c3e1ee1ea84a40afaeb37",
+      "current_transfer": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 89,
+        "text": "owner.transfer()"
+      }
+    },
+    {
+      "original_identity": "processor/graph-ingest/registered_type_gate_integration_test.go|startGateTestComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+      "original_location": "processor/graph-ingest/registered_type_gate_integration_test.go:51",
+      "function": "startGateTestComponent",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+        "line": 32,
+        "text": "func startGateTestComponent(ctx context.Context, t *testing.T, reg *payloadregistry.Registry, enableHierarchy bool, opts ...testComponentOption) (*Component, *natsclient.Client, *graphIngestTestOwner) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+        "line": 48,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+        "line": 49,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+        "line": 50,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+        "line": 51,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "209ca6c69e3f8e0032f27afb093ef829d7c85360bb7f0ab9e60bda782ab81ef3",
+      "current_transfer": {
+        "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+        "line": 53,
+        "text": "owner.transfer()"
+      }
+    },
+    {
+      "original_identity": "processor/graph-ingest/resident_stamp_integration_test.go|TestResidentUnregisteredStampIsNotPoison|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "original_fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+      "original_location": "processor/graph-ingest/resident_stamp_integration_test.go:57",
+      "function": "TestResidentUnregisteredStampIsNotPoison",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false,
+      "current_declaration": {
+        "path": "processor/graph-ingest/resident_stamp_integration_test.go",
+        "line": 27,
+        "text": "func TestResidentUnregisteredStampIsNotPoison(t *testing.T) {"
+      },
+      "current_owner": {
+        "path": "processor/graph-ingest/resident_stamp_integration_test.go",
+        "line": 56,
+        "text": "owner := newGraphIngestTestOwner(c)"
+      },
+      "current_finalizer": {
+        "path": "processor/graph-ingest/resident_stamp_integration_test.go",
+        "line": 57,
+        "text": "defer owner.finish(ctx, t)"
+      },
+      "current_initialize": {
+        "path": "processor/graph-ingest/resident_stamp_integration_test.go",
+        "line": 58,
+        "text": "require.NoError(t, c.Initialize())"
+      },
+      "current_start": {
+        "path": "processor/graph-ingest/resident_stamp_integration_test.go",
+        "line": 59,
+        "text": "require.NoError(t, c.Start(owner.startContext(ctx)))"
+      },
+      "source_sha256": "7da0f6df89ae4aef5233fd7857bcd8aef7148e8e857bb145e6a6c44272f5bcf3"
+    }
+  ],
+  "helpers": [
+    {
+      "name": "startAuthorityGateComponent",
+      "declaration": {
+        "path": "processor/graph-ingest/authority_gate_integration_test.go",
+        "line": 137,
+        "text": "func startAuthorityGateComponent(ctx context.Context, t *testing.T, enableHierarchy bool) *authorityGateHarness {"
+      },
+      "provisional_finalizer": {
+        "path": "processor/graph-ingest/authority_gate_integration_test.go",
+        "line": 174,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "transfer": {
+        "path": "processor/graph-ingest/authority_gate_integration_test.go",
+        "line": 180,
+        "text": "owner.transfer()"
+      },
+      "accepted_reference_count": 10,
+      "relocated_calls": [
+        {
+          "original_location": "processor/graph-ingest/authority_gate_integration_test.go:221",
+          "enclosing_function": "TestAuthorityGateRejectsForeignOnFactLane",
+          "operation_context": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 223,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 225,
+            "text": "h := startAuthorityGateComponent(ctx, t, false)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 226,
+            "text": "defer h.owner.finish(ctx, t)"
+          },
+          "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d"
+        },
+        {
+          "original_location": "processor/graph-ingest/authority_gate_integration_test.go:242",
+          "enclosing_function": "TestAuthorityGateRejectsForeignOnMutationLane",
+          "operation_context": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 247,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 249,
+            "text": "h := startAuthorityGateComponent(ctx, t, false)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 250,
+            "text": "defer h.owner.finish(ctx, t)"
+          },
+          "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d"
+        },
+        {
+          "original_location": "processor/graph-ingest/authority_gate_integration_test.go:273",
+          "enclosing_function": "TestAuthorityGateAllowsForeignReferenceObject",
+          "operation_context": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 281,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 283,
+            "text": "h := startAuthorityGateComponent(ctx, t, false)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 284,
+            "text": "defer h.owner.finish(ctx, t)"
+          },
+          "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d"
+        },
+        {
+          "original_location": "processor/graph-ingest/authority_gate_integration_test.go:323",
+          "enclosing_function": "TestImportLaneAcceptsForeignRejectsLocalClaim",
+          "operation_context": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 334,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 336,
+            "text": "h := startAuthorityGateComponent(ctx, t, false)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 337,
+            "text": "defer h.owner.finish(ctx, t)"
+          },
+          "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d"
+        },
+        {
+          "original_location": "processor/graph-ingest/authority_gate_integration_test.go:347",
+          "enclosing_function": "TestHierarchySkipsForeignAuthority",
+          "operation_context": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 361,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 363,
+            "text": "h := startAuthorityGateComponent(ctx, t, true)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 364,
+            "text": "defer h.owner.finish(ctx, t)"
+          },
+          "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d"
+        },
+        {
+          "original_location": "processor/graph-ingest/authority_gate_integration_test.go:379",
+          "enclosing_function": "TestAuthorityGateRejectsAnnotationOfImportedSubject",
+          "operation_context": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 396,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 398,
+            "text": "h := startAuthorityGateComponent(ctx, t, false)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 399,
+            "text": "defer h.owner.finish(ctx, t)"
+          },
+          "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d"
+        },
+        {
+          "original_location": "processor/graph-ingest/authority_gate_integration_test.go:421",
+          "enclosing_function": "TestAuthorityGateRejectsReconcileOfImportedSubject",
+          "operation_context": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 441,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 443,
+            "text": "h := startAuthorityGateComponent(ctx, t, false)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 444,
+            "text": "defer h.owner.finish(ctx, t)"
+          },
+          "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d"
+        },
+        {
+          "original_location": "processor/graph-ingest/authority_gate_integration_test.go:480",
+          "enclosing_function": "TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence",
+          "operation_context": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 503,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 505,
+            "text": "h := startAuthorityGateComponent(ctx, t, false)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 506,
+            "text": "defer h.owner.finish(ctx, t)"
+          },
+          "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d"
+        },
+        {
+          "original_location": "processor/graph-ingest/authority_gate_integration_test.go:529",
+          "enclosing_function": "TestAuthorityGateRejectsDeleteOfImportedSubject",
+          "operation_context": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 555,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 557,
+            "text": "h := startAuthorityGateComponent(ctx, t, false)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 558,
+            "text": "defer h.owner.finish(ctx, t)"
+          },
+          "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d"
+        },
+        {
+          "original_location": "processor/graph-ingest/authority_gate_integration_test.go:579",
+          "enclosing_function": "TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam",
+          "operation_context": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 608,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 610,
+            "text": "h := startAuthorityGateComponent(ctx, t, false)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/authority_gate_integration_test.go",
+            "line": 611,
+            "text": "defer h.owner.finish(ctx, t)"
+          },
+          "source_sha256": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d"
+        }
+      ]
+    },
+    {
+      "name": "startBatchTestComponent",
+      "declaration": {
+        "path": "processor/graph-ingest/batch_integration_test.go",
+        "line": 23,
+        "text": "func startBatchTestComponent(ctx context.Context, t *testing.T) (*Component, *graphIngestTestOwner) {"
+      },
+      "provisional_finalizer": {
+        "path": "processor/graph-ingest/batch_integration_test.go",
+        "line": 43,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "transfer": {
+        "path": "processor/graph-ingest/batch_integration_test.go",
+        "line": 48,
+        "text": "owner.transfer()"
+      },
+      "accepted_reference_count": 21,
+      "relocated_calls": [
+        {
+          "original_location": "processor/graph-ingest/batch_integration_test.go:113",
+          "enclosing_function": "TestIntegration_AddTriples_MultiSubjectGroupsByEntity",
+          "operation_context": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 115,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 117,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 118,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7"
+        },
+        {
+          "original_location": "processor/graph-ingest/batch_integration_test.go:167",
+          "enclosing_function": "TestIntegration_AddTriples_ValidationRejectsWholeBatch",
+          "operation_context": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 172,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 174,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 175,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7"
+        },
+        {
+          "original_location": "processor/graph-ingest/batch_integration_test.go:193",
+          "enclosing_function": "TestIntegration_HandleTripleAddBatch_RoundTrip",
+          "operation_context": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 201,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 203,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 204,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7"
+        },
+        {
+          "original_location": "processor/graph-ingest/batch_integration_test.go:223",
+          "enclosing_function": "TestIntegration_AddTriples_PreservesInputOrderWithinSubject",
+          "operation_context": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 234,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 236,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 237,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7"
+        },
+        {
+          "original_location": "processor/graph-ingest/batch_integration_test.go:277",
+          "enclosing_function": "TestIntegration_HandleTripleAddBatch_InvalidJSON",
+          "operation_context": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 291,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 293,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 294,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7"
+        },
+        {
+          "original_location": "processor/graph-ingest/batch_integration_test.go:292",
+          "enclosing_function": "TestIntegration_HandleTripleAdd_AbsentEntityRejects",
+          "operation_context": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 309,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 311,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 312,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7"
+        },
+        {
+          "original_location": "processor/graph-ingest/batch_integration_test.go:324",
+          "enclosing_function": "TestIntegration_HandleTripleAddBatch_AbsentEntityRejects",
+          "operation_context": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 344,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 346,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 347,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7"
+        },
+        {
+          "original_location": "processor/graph-ingest/batch_integration_test.go:69",
+          "enclosing_function": "TestIntegration_AddTriples_SingleSubjectIsOneCAS",
+          "operation_context": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 68,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 70,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/batch_integration_test.go",
+            "line": 71,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7"
+        },
+        {
+          "original_location": "processor/graph-ingest/batch_missing_integration_test.go:115",
+          "enclosing_function": "TestIntegration_BatchQuery_EmptyIDIsAccountedFor",
+          "operation_context": {
+            "path": "processor/graph-ingest/batch_missing_integration_test.go",
+            "line": 120,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/batch_missing_integration_test.go",
+            "line": 122,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/batch_missing_integration_test.go",
+            "line": 123,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "538781a0e7a7e4fd09bc235e1c7b51ed3017594d7d0fa1143e399b5235f3911c"
+        },
+        {
+          "original_location": "processor/graph-ingest/batch_missing_integration_test.go:26",
+          "enclosing_function": "TestIntegration_BatchQuery_ReportsMissingIDs",
+          "operation_context": {
+            "path": "processor/graph-ingest/batch_missing_integration_test.go",
+            "line": 28,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/batch_missing_integration_test.go",
+            "line": 30,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/batch_missing_integration_test.go",
+            "line": 31,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "538781a0e7a7e4fd09bc235e1c7b51ed3017594d7d0fa1143e399b5235f3911c"
+        },
+        {
+          "original_location": "processor/graph-ingest/entity_mutation_integration_test.go:21",
+          "enclosing_function": "TestIntegration_CanonicalMutationLifecycle",
+          "operation_context": {
+            "path": "processor/graph-ingest/entity_mutation_integration_test.go",
+            "line": 21,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/entity_mutation_integration_test.go",
+            "line": 23,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/entity_mutation_integration_test.go",
+            "line": 24,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "912f2151a906448e8f24ea7d620f5180536bc39ed51d2cccda3da9337aea3144"
+        },
+        {
+          "original_location": "processor/graph-ingest/entity_mutation_integration_test.go:84",
+          "enclosing_function": "TestIntegration_CanonicalAppend_ReportsIndependentMissingSubject",
+          "operation_context": {
+            "path": "processor/graph-ingest/entity_mutation_integration_test.go",
+            "line": 87,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/entity_mutation_integration_test.go",
+            "line": 89,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/entity_mutation_integration_test.go",
+            "line": 90,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "912f2151a906448e8f24ea7d620f5180536bc39ed51d2cccda3da9337aea3144"
+        },
+        {
+          "original_location": "processor/graph-ingest/keyed_ingest_integration_test.go:126",
+          "enclosing_function": "TestIntegration_IngestGuard_DurableSurvivesRestart",
+          "operation_context": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 131,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 133,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 134,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "e629e1084fbcb8e1ae68ed49ace478aec0901b4fa67da21df57d44776263908a"
+        },
+        {
+          "original_location": "processor/graph-ingest/keyed_ingest_integration_test.go:162",
+          "enclosing_function": "TestIntegration_IngestGuard_DurablePerStreamIndependence",
+          "operation_context": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 170,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 172,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 173,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "e629e1084fbcb8e1ae68ed49ace478aec0901b4fa67da21df57d44776263908a"
+        },
+        {
+          "original_location": "processor/graph-ingest/merge_entity_integration_test.go:116",
+          "enclosing_function": "TestIntegration_MergeEntity_SamePredicateReplaces",
+          "operation_context": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 122,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 124,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 125,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "0dec3c83fc1b346553e46e792b895af8d5c6c4635a56027d8c2bac87045f4ad0"
+        },
+        {
+          "original_location": "processor/graph-ingest/merge_entity_integration_test.go:149",
+          "enclosing_function": "TestIntegration_MergeEntity_MultiValuedPredicateFullSetReplace",
+          "operation_context": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 158,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 160,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 161,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "0dec3c83fc1b346553e46e792b895af8d5c6c4635a56027d8c2bac87045f4ad0"
+        },
+        {
+          "original_location": "processor/graph-ingest/merge_entity_integration_test.go:187",
+          "enclosing_function": "TestIntegration_HandleMessage_DoesNotClobber",
+          "operation_context": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 199,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 201,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 202,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "0dec3c83fc1b346553e46e792b895af8d5c6c4635a56027d8c2bac87045f4ad0"
+        },
+        {
+          "original_location": "processor/graph-ingest/merge_entity_integration_test.go:46",
+          "enclosing_function": "TestIntegration_MergeEntity_FirstWriteCreatesAtomically",
+          "operation_context": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 46,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 48,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 49,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "0dec3c83fc1b346553e46e792b895af8d5c6c4635a56027d8c2bac87045f4ad0"
+        },
+        {
+          "original_location": "processor/graph-ingest/merge_entity_integration_test.go:73",
+          "enclosing_function": "TestIntegration_MergeEntity_SecondWriteMergesTriples",
+          "operation_context": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 76,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 78,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/merge_entity_integration_test.go",
+            "line": 79,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "0dec3c83fc1b346553e46e792b895af8d5c6c4635a56027d8c2bac87045f4ad0"
+        },
+        {
+          "original_location": "processor/graph-ingest/structural_gate_wire_integration_test.go:36",
+          "enclosing_function": "TestIntegration_StructuralGate_Append_WireContract",
+          "operation_context": {
+            "path": "processor/graph-ingest/structural_gate_wire_integration_test.go",
+            "line": 37,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/structural_gate_wire_integration_test.go",
+            "line": 39,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/structural_gate_wire_integration_test.go",
+            "line": 40,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "5e1cd928324cca3d2943f105a8a19348bee59e107c9138cc8eb2a4b35aaf8060"
+        },
+        {
+          "original_location": "processor/graph-ingest/structural_gate_wire_integration_test.go:88",
+          "enclosing_function": "TestIntegration_StructuralGate_Create_WireContract",
+          "operation_context": {
+            "path": "processor/graph-ingest/structural_gate_wire_integration_test.go",
+            "line": 92,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/structural_gate_wire_integration_test.go",
+            "line": 94,
+            "text": "c, owner := startBatchTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/structural_gate_wire_integration_test.go",
+            "line": 95,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "5e1cd928324cca3d2943f105a8a19348bee59e107c9138cc8eb2a4b35aaf8060"
+        }
+      ]
+    },
+    {
+      "name": "startKeyedWireComponent",
+      "declaration": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 195,
+        "text": "func startKeyedWireComponent(ctx context.Context, t *testing.T) (*Component, *natsclient.TestClient, *graphIngestTestOwner) {"
+      },
+      "provisional_finalizer": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 210,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "transfer": {
+        "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+        "line": 214,
+        "text": "owner.transfer()"
+      },
+      "accepted_reference_count": 2,
+      "relocated_calls": [
+        {
+          "original_location": "processor/graph-ingest/keyed_ingest_integration_test.go:215",
+          "enclosing_function": "TestIntegration_KeyedIngest_SameEntityUpdatesStayOrdered",
+          "operation_context": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 227,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 229,
+            "text": "c, testClient, owner := startKeyedWireComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 230,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "e629e1084fbcb8e1ae68ed49ace478aec0901b4fa67da21df57d44776263908a"
+        },
+        {
+          "original_location": "processor/graph-ingest/keyed_ingest_integration_test.go:85",
+          "enclosing_function": "TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool",
+          "operation_context": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 87,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 89,
+            "text": "c, testClient, owner := startKeyedWireComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+            "line": 90,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "e629e1084fbcb8e1ae68ed49ace478aec0901b4fa67da21df57d44776263908a"
+        }
+      ]
+    },
+    {
+      "name": "startPrefixTestComponent",
+      "declaration": {
+        "path": "processor/graph-ingest/query_prefix_integration_test.go",
+        "line": 25,
+        "text": "func startPrefixTestComponent(ctx context.Context, t *testing.T, opts ...testComponentOption) (*Component, *natsclient.Client, *graphIngestTestOwner) {"
+      },
+      "provisional_finalizer": {
+        "path": "processor/graph-ingest/query_prefix_integration_test.go",
+        "line": 44,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "transfer": {
+        "path": "processor/graph-ingest/query_prefix_integration_test.go",
+        "line": 50,
+        "text": "owner.transfer()"
+      },
+      "accepted_reference_count": 5,
+      "relocated_calls": [
+        {
+          "original_location": "processor/graph-ingest/cache_coherence_integration_test.go:45",
+          "enclosing_function": "TestIntegration_CacheCoherence_AppendVisibleAfterPrefixRead",
+          "operation_context": {
+            "path": "processor/graph-ingest/cache_coherence_integration_test.go",
+            "line": 44,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/cache_coherence_integration_test.go",
+            "line": 46,
+            "text": "c, nc, owner := startPrefixTestComponent(ctx, t, withAuthority(\"coh\", \"ops\"))"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/cache_coherence_integration_test.go",
+            "line": 47,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "b2a7b5c78a9e873251669bafbdefb935d9a68a6b749b10f178eeae3af3648e8f"
+        },
+        {
+          "original_location": "processor/graph-ingest/cache_stale_repopulation_integration_test.go:38",
+          "enclosing_function": "TestIntegration_CacheStaleRepopulationRace",
+          "operation_context": {
+            "path": "processor/graph-ingest/cache_stale_repopulation_integration_test.go",
+            "line": 37,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/cache_stale_repopulation_integration_test.go",
+            "line": 39,
+            "text": "c, _, owner := startPrefixTestComponent(ctx, t, withAuthority(\"stalecache\", \"ops\"))"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/cache_stale_repopulation_integration_test.go",
+            "line": 40,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "d352e8d51f2fdc3f4f75cd2730a293f52499c4bcf657ecb78cbbcc9d5a17f4d2"
+        },
+        {
+          "original_location": "processor/graph-ingest/query_prefix_integration_test.go:145",
+          "enclosing_function": "TestIntegration_PrefixQuery_ErrorClassification",
+          "operation_context": {
+            "path": "processor/graph-ingest/query_prefix_integration_test.go",
+            "line": 147,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/query_prefix_integration_test.go",
+            "line": 149,
+            "text": "_, nc, owner := startPrefixTestComponent(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/query_prefix_integration_test.go",
+            "line": 150,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "568a4c3a7034a09e344ef12d2e19fda5b424c3487f8ef0335ea5e56d0b8167c0"
+        },
+        {
+          "original_location": "processor/graph-ingest/query_prefix_integration_test.go:214",
+          "enclosing_function": "TestIntegration_PrefixQuery_ExhaustedPageOmitsCursor",
+          "operation_context": {
+            "path": "processor/graph-ingest/query_prefix_integration_test.go",
+            "line": 218,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/query_prefix_integration_test.go",
+            "line": 220,
+            "text": "c, nc, owner := startPrefixTestComponent(ctx, t, withAuthority(\"singlepage\", \"ops\"))"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/query_prefix_integration_test.go",
+            "line": 221,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "568a4c3a7034a09e344ef12d2e19fda5b424c3487f8ef0335ea5e56d0b8167c0"
+        },
+        {
+          "original_location": "processor/graph-ingest/query_prefix_integration_test.go:78",
+          "enclosing_function": "TestIntegration_PrefixQuery_PaginationCoverage",
+          "operation_context": {
+            "path": "processor/graph-ingest/query_prefix_integration_test.go",
+            "line": 78,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/query_prefix_integration_test.go",
+            "line": 80,
+            "text": "c, nc, owner := startPrefixTestComponent(ctx, t, withAuthority(\"pagtest\", \"ops\"))"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/query_prefix_integration_test.go",
+            "line": 81,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "568a4c3a7034a09e344ef12d2e19fda5b424c3487f8ef0335ea5e56d0b8167c0"
+        }
+      ]
+    },
+    {
+      "name": "startIngestForReadiness",
+      "declaration": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 62,
+        "text": "func startIngestForReadiness(ctx context.Context, t *testing.T) (*natsclient.TestClient, *Component, *graphIngestTestOwner) {"
+      },
+      "provisional_finalizer": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 78,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "transfer": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 89,
+        "text": "owner.transfer()"
+      },
+      "accepted_reference_count": 2,
+      "relocated_calls": [
+        {
+          "original_location": "processor/graph-ingest/readiness_integration_test.go:126",
+          "enclosing_function": "TestIntegration_ReadinessEnvelope_PublishedAndCatchesUp",
+          "operation_context": {
+            "path": "processor/graph-ingest/readiness_integration_test.go",
+            "line": 125,
+            "text": "ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/readiness_integration_test.go",
+            "line": 128,
+            "text": "tc, _, owner := startIngestForReadiness(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/readiness_integration_test.go",
+            "line": 129,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "5f5ba1e0f36a6a32a9a2a4738d605b8089acfc0e9f9c3e1ee1ea84a40afaeb37"
+        },
+        {
+          "original_location": "processor/graph-ingest/readiness_integration_test.go:381",
+          "enclosing_function": "TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure",
+          "operation_context": {
+            "path": "processor/graph-ingest/readiness_integration_test.go",
+            "line": 383,
+            "text": "ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/readiness_integration_test.go",
+            "line": 386,
+            "text": "tc, comp, owner := startIngestForReadiness(ctx, t)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/readiness_integration_test.go",
+            "line": 387,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "5f5ba1e0f36a6a32a9a2a4738d605b8089acfc0e9f9c3e1ee1ea84a40afaeb37"
+        }
+      ]
+    },
+    {
+      "name": "startGateTestComponent",
+      "declaration": {
+        "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+        "line": 32,
+        "text": "func startGateTestComponent(ctx context.Context, t *testing.T, reg *payloadregistry.Registry, enableHierarchy bool, opts ...testComponentOption) (*Component, *natsclient.Client, *graphIngestTestOwner) {"
+      },
+      "provisional_finalizer": {
+        "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+        "line": 49,
+        "text": "defer owner.provisionalFinish(ctx, t)"
+      },
+      "transfer": {
+        "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+        "line": 53,
+        "text": "owner.transfer()"
+      },
+      "accepted_reference_count": 4,
+      "relocated_calls": [
+        {
+          "original_location": "processor/graph-ingest/registered_type_gate_integration_test.go:100",
+          "enclosing_function": "TestCreateAcceptsRegisteredMessageType",
+          "operation_context": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 104,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 106,
+            "text": "c, nc, owner := startGateTestComponent(ctx, t, payloadbuiltins.NewTestRegistry(t), false, withAuthority(\"c360\", \"test\"))"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 107,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "209ca6c69e3f8e0032f27afb093ef829d7c85360bb7f0ab9e60bda782ab81ef3"
+        },
+        {
+          "original_location": "processor/graph-ingest/registered_type_gate_integration_test.go:117",
+          "enclosing_function": "TestFloorComesFromRegistration",
+          "operation_context": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 124,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 126,
+            "text": "c, nc, owner := startGateTestComponent(ctx, t, reg, false, withAuthority(\"c360\", \"test\"))"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 127,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "209ca6c69e3f8e0032f27afb093ef829d7c85360bb7f0ab9e60bda782ab81ef3"
+        },
+        {
+          "original_location": "processor/graph-ingest/registered_type_gate_integration_test.go:158",
+          "enclosing_function": "TestHierarchyContainerBirthCarriesRegisteredType",
+          "operation_context": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 168,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 170,
+            "text": "c, _, owner := startGateTestComponent(ctx, t, reg, true)"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 171,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "209ca6c69e3f8e0032f27afb093ef829d7c85360bb7f0ab9e60bda782ab81ef3"
+        },
+        {
+          "original_location": "processor/graph-ingest/registered_type_gate_integration_test.go:75",
+          "enclosing_function": "TestCreateRejectsUnregisteredMessageType",
+          "operation_context": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 76,
+            "text": "ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)"
+          },
+          "current_call": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 78,
+            "text": "c, nc, owner := startGateTestComponent(ctx, t, payloadbuiltins.NewTestRegistry(t), false, withAuthority(\"c360\", \"test\"))"
+          },
+          "current_finalizer": {
+            "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+            "line": 79,
+            "text": "defer owner.finish(ctx, t)"
+          },
+          "source_sha256": "209ca6c69e3f8e0032f27afb093ef829d7c85360bb7f0ab9e60bda782ab81ef3"
+        }
+      ]
+    }
+  ],
+  "adjacent_probes_and_fences": [
+    {
+      "original_location": "processor/graph-ingest/component_test.go:643",
+      "function": "TestComponent_Stop_Success",
+      "current_call": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 650,
+        "text": "err := comp.Stop(context.Background())"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": true
+    },
+    {
+      "original_location": "processor/graph-ingest/component_test.go:652",
+      "function": "TestComponent_Stop_BeforeStart",
+      "current_call": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 659,
+        "text": "err := comp.Stop(context.Background())"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/component_test.go:666",
+      "function": "TestComponent_Stop_Timeout",
+      "current_call": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 673,
+        "text": "err := comp.Stop(context.Background())"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": true
+    },
+    {
+      "original_location": "processor/graph-ingest/component_test.go:915",
+      "function": "TestComponent_RespectsContext_Cancellation",
+      "current_call": {
+        "path": "processor/graph-ingest/component_test.go",
+        "line": 922,
+        "text": "err := comp.Stop(context.Background())"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": true
+    },
+    {
+      "original_location": "processor/graph-ingest/hierarchy_replay_integration_test.go:135",
+      "function": "TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision",
+      "current_call": {
+        "path": "processor/graph-ingest/hierarchy_replay_integration_test.go",
+        "line": 138,
+        "text": "require.NoError(t, seedOwner.stop(ctx))"
+      },
+      "disposition": "checked owner phase fence",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/readiness_integration_test.go:390",
+      "function": "TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure",
+      "current_call": {
+        "path": "processor/graph-ingest/readiness_integration_test.go",
+        "line": 398,
+        "text": "require.NoError(t, owner.stop(ctx))"
+      },
+      "disposition": "checked owner phase fence",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_integration_test.go:102",
+      "function": "TestGraphIngest_OneShotLifecycleAgainstNATS",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_integration_test.go",
+        "line": 112,
+        "text": "if err := comp.Stop(t.Context()); err != nil {"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_integration_test.go:105",
+      "function": "TestGraphIngest_OneShotLifecycleAgainstNATS",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_integration_test.go",
+        "line": 115,
+        "text": "if err := comp.Stop(t.Context()); err != nil {"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_integration_test.go:191",
+      "function": "TestGraphIngest_FailedStartRollbackOwnsExactConsumerAndPreservesDurable",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_integration_test.go",
+        "line": 201,
+        "text": "go func() { stopResult <- comp.Stop(stopCtx) }()"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_owner_test.go:93",
+      "function": "TestLifecycleOwnerRunningStopPreservesEffectSettlementOrder",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_owner_test.go",
+        "line": 93,
+        "text": "go func() { stopResult <- owner.Stop(t.Context()) }()"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_owner_test.go:169",
+      "function": "TestLifecycleOwnerFailedCleanupRetainsExactHandlesForLaterStop",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_owner_test.go",
+        "line": 169,
+        "text": "if err := owner.Stop(t.Context()); err != nil {"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_owner_test.go:175",
+      "function": "TestLifecycleOwnerFailedCleanupRetainsExactHandlesForLaterStop",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_owner_test.go",
+        "line": 175,
+        "text": "if err := owner.Stop(t.Context()); err != nil {"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_owner_test.go:195",
+      "function": "TestLifecycleOwnerRunningDeadlineIsTerminalWithoutReplay",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_owner_test.go",
+        "line": 195,
+        "text": "go func() { stopResult <- owner.Stop(stopCtx) }()"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_owner_test.go:204",
+      "function": "TestLifecycleOwnerRunningDeadlineIsTerminalWithoutReplay",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_owner_test.go",
+        "line": 204,
+        "text": "if err := owner.Stop(t.Context()); err != nil {"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_owner_test.go:226",
+      "function": "TestLifecycleOwnerStopBeforeStartIsTerminal",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_owner_test.go",
+        "line": 226,
+        "text": "if err := owner.Stop(nil); err == nil {"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_owner_test.go:232",
+      "function": "TestLifecycleOwnerStopBeforeStartIsTerminal",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_owner_test.go",
+        "line": 232,
+        "text": "if err := owner.Stop(t.Context()); err != nil {"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    },
+    {
+      "original_location": "processor/graph-ingest/lifecycle_owner_test.go:238",
+      "function": "TestLifecycleOwnerStopBeforeStartIsTerminal",
+      "current_call": {
+        "path": "processor/graph-ingest/lifecycle_owner_test.go",
+        "line": 238,
+        "text": "if err := owner.Stop(t.Context()); err != nil {"
+      },
+      "disposition": "deliberate/legacy API probe preserved",
+      "skipped": false
+    }
+  ],
+  "proof_source_pins": [
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 11,
+      "text": "type graphIngestTestOwner struct {"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 23,
+      "text": "ctx, cancel := context.WithCancel(parent)"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 32,
+      "text": "o.attempted = true // A returned error or panic never grants an implicit second attempt."
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 34,
+      "text": "defer o.cancelStart() // Accepted Start authority stays live through concrete Stop."
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 36,
+      "text": "stopCtx, cancelStop := context.WithTimeout(context.WithoutCancel(operationCtx), 5*time.Second)"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 38,
+      "text": "stopErr := o.component.Stop(stopCtx)"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 39,
+      "text": "if err := stopCtx.Err(); err != nil {"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 42,
+      "text": "if err := operationCtx.Err(); err != nil {"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 54,
+      "text": "t.Errorf(\"graph-ingest terminal cleanup: %v\", err)"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 60,
+      "text": "if !o.transferred {"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "line": 66,
+      "text": "o.transferred = true"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_test.go",
+      "line": 24,
+      "text": "func TestGraphIngestTestOwnerControlledStopPreservesAuthority(t *testing.T) {"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_test.go",
+      "line": 57,
+      "text": "func TestGraphIngestTestOwnerFailedAttemptIsNotRetried(t *testing.T) {"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_test.go",
+      "line": 75,
+      "text": "func TestGraphIngestTestOwnerCanceledOperationKeepsFreshTerminalAuthority(t *testing.T) {"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_test.go",
+      "line": 102,
+      "text": "func TestGraphIngestTestOwnerWaitsForObservedClosure(t *testing.T) {"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_child_test.go",
+      "line": 26,
+      "text": "if len(args) != 2 || args[0] != \"-test.run=^TestGraphIngestOwnerChildFixture$\" || args[1] != \"-test.count=1\" {"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_child_test.go",
+      "line": 54,
+      "text": "func TestGraphIngestOwnerAssertionExitAndCleanupError(t *testing.T) {"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_child_test.go",
+      "line": 70,
+      "text": "output, err := cmd.CombinedOutput() // One owned process and one synchronous wait."
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_child_test.go",
+      "line": 98,
+      "text": "func TestGraphIngestOwnerChildFixture(t *testing.T) {"
+    },
+    {
+      "path": "processor/graph-ingest/lifecycle_integration_test.go",
+      "line": 26,
+      "text": "child, childErr := graphIngestOwnerChildRequest(os.Getenv(graphIngestOwnerChildEnv), os.Args[1:])"
+    },
+    {
+      "path": "processor/graph-ingest/readiness_integration_test.go",
+      "line": 396,
+      "text": "producerDone := comp.statusDone"
+    },
+    {
+      "path": "processor/graph-ingest/readiness_integration_test.go",
+      "line": 400,
+      "text": "case <-producerDone:"
+    },
+    {
+      "path": "processor/graph-ingest/readiness_integration_test.go",
+      "line": 404,
+      "text": "require.NoError(t, ctx.Err(), \"operation authority must remain usable after the phase fence\")"
+    },
+    {
+      "path": "processor/graph-ingest/cache_stale_repopulation_integration_test.go",
+      "line": 53,
+      "text": "release := func() { releaseOnce.Do(func() { close(releaseReader) }) }"
+    },
+    {
+      "path": "processor/graph-ingest/cache_stale_repopulation_integration_test.go",
+      "line": 77,
+      "text": "joinCtx, cancelJoin := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)"
+    },
+    {
+      "path": "processor/graph-ingest/cache_stale_repopulation_integration_test.go",
+      "line": 82,
+      "text": "t.Errorf(\"cache reader did not join before fixture Stop: %v\", joinCtx.Err())"
+    },
+    {
+      "path": "processor/graph-ingest/cache_stale_repopulation_integration_test.go",
+      "line": 90,
+      "text": "t.Fatal(\"cache reader returned before the post-Get hook; race window was not exercised\")"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_test.go",
+      "line": 122,
+      "text": "joinCtx, cancelJoin := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_test.go",
+      "line": 127,
+      "text": "t.Errorf(\"incomplete cleanup: concrete Stop did not join after native Closed release: %v\", joinCtx.Err())"
+    }
+  ],
+  "current_skip_pins": [
+    {
+      "path": "processor/graph-ingest/component_test.go",
+      "line": 542,
+      "text": "t.Skip(\"requires real NATS connection - move to integration tests\")"
+    },
+    {
+      "path": "processor/graph-ingest/component_test.go",
+      "line": 602,
+      "text": "t.Skip(\"requires real NATS connection - move to integration tests\")"
+    },
+    {
+      "path": "processor/graph-ingest/component_test.go",
+      "line": 626,
+      "text": "t.Skip(\"requires real NATS connection - move to integration tests\")"
+    },
+    {
+      "path": "processor/graph-ingest/component_test.go",
+      "line": 643,
+      "text": "t.Skip(\"requires real NATS connection - move to integration tests\")"
+    },
+    {
+      "path": "processor/graph-ingest/component_test.go",
+      "line": 665,
+      "text": "t.Skip(\"requires real NATS connection - move to integration tests\")"
+    },
+    {
+      "path": "processor/graph-ingest/component_test.go",
+      "line": 908,
+      "text": "t.Skip(\"requires real NATS connection - move to integration tests\")"
+    }
+  ],
+  "redundant_terminate_exact_scope_checks": {
+    "processor/graph-ingest/readiness_gauges_integration_test.go|TestIntegration_ReadinessGaugesAreEmitted": 0,
+    "processor/graph-ingest/readiness_integration_test.go|TestIntegration_ReadyImpliesTheWritesAreDurable": 0
+  },
+  "limits": [
+    "Relocates accepted typed references; no new gopls census or whole-repository discovery.",
+    "Source inspection is not test execution or proof approval.",
+    "Installed baseline is 297 entries / 90 resolutions; exact original 32 removed, one CancelFunc resolution added. Independent approval is recorded in review/manifest-review.md; this refresh only accounts for source.",
+    "Finite Stop context does not interrupt native Drain/cache Close or prove joined work on error."
+  ],
+  "installed_baseline": {
+    "sha256": "909d254426e4b190d3fe10c86f936dcea742d8a6998b7b90a93bbe02ccab2615",
+    "entries": 297,
+    "resolutions": 90,
+    "removed_original_identities": [
+      "processor/graph-ingest/authority_gate_integration_test.go|startAuthorityGateComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/batch_integration_test.go|startBatchTestComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/cas_integration_test.go|TestIntegration_ConcurrentCanonicalAppend|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/component_test.go|TestComponent_Health_Running|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/component_test.go|TestComponent_Start_AlreadyStarted|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/component_test.go|TestComponent_Start_Success|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/hierarchy_replay_integration_test.go|TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_ContainerCreation|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_ContextCancellation|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_DisabledConfig|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_IncludedBeforeWrite|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_InvalidEntityID|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_MultipleEntitiesSameType|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_NoWatcherLifecycle|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_SiblingEdges|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_SiblingEdges|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|2",
+      "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_SingleWrite|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/keyed_ingest_integration_test.go|TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/keyed_ingest_integration_test.go|startKeyedWireComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/merge_entity_integration_test.go|TestIntegration_MergeEntity_HierarchyDoesNotDuplicate|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/poison_scoping_integration_test.go|TestIntegration_BootSweepInventoriesResidentPoisonRealNATS|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/poison_scoping_integration_test.go|TestIntegration_NoGuardConsumerOnEntityStatesAfterStart|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/query_integration_test.go|TestIntegration_QueryHandlers|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/query_prefix_integration_test.go|startPrefixTestComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/query_wire_contract_integration_test.go|TestIntegration_QueryEntityNATS_WireContract|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/readiness_gauges_integration_test.go|TestIntegration_ReadinessGaugesAreEmitted|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/readiness_integration_test.go|TestIntegration_ReadinessEnvelope_BacklogIsNotReady|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/readiness_integration_test.go|TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/readiness_integration_test.go|TestIntegration_ReadyImpliesTheWritesAreDurable|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/readiness_integration_test.go|startIngestForReadiness|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/registered_type_gate_integration_test.go|startGateTestComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+      "processor/graph-ingest/resident_stamp_integration_test.go|TestResidentUnregisteredStampIsNotPoison|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1"
+    ],
+    "added_resolution": {
+      "identity": "processor/graph-ingest/test_owner_support_test.go|(*graphIngestTestOwner).stop|defer|o.cancelStart|unresolved callback|unknown|1",
+      "site_fingerprint": "07b402a848f099f4d1cd16737188ce3e05fdee4c127658aac047156674bca763",
+      "classification": "non-lifecycle-stop",
+      "question": "function-valued selector target unresolved on cleanup path",
+      "reason": "The private cancelStart field is assigned only the cancel returned by context.WithCancel in startContext. stop invokes that verified cancel after the synchronous concrete terminal attempt; it does not invoke another lifecycle Stop.",
+      "owner_issue": "#1423",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; #1423 exact source review",
+      "dependencies": [
+        {
+          "path": "processor/graph-ingest/test_owner_support_test.go",
+          "declaration": "graphIngestTestOwner",
+          "fingerprint": "6c1717bf72f79945962ebfa1ea0c08b74722eca908961149e392892e52330072"
+        },
+        {
+          "path": "processor/graph-ingest/test_owner_support_test.go",
+          "declaration": "newGraphIngestTestOwner",
+          "fingerprint": "f308823a9034b37b8feba3ed4a9be77f634cc18a0269285fe5546915bd069647"
+        },
+        {
+          "path": "processor/graph-ingest/test_owner_support_test.go",
+          "declaration": "graphIngestTestOwner.startContext",
+          "fingerprint": "aa30e8b5a7ff477cb045d9257ec16df45ccce9ceb48ef3dfd7d98c1817769860"
+        },
+        {
+          "path": "processor/graph-ingest/test_owner_support_test.go",
+          "declaration": "graphIngestTestOwner.stop",
+          "fingerprint": "b9b3400c9a3bb25a032ba4e58832d6fdae81327c005e95c5df3f36182e73a3a9"
+        },
+        {
+          "path": "processor/graph-ingest/test_owner_support_test.go",
+          "declaration": "graphIngestTestOwner.finish",
+          "fingerprint": "7c09d338f13fda8611e6eb4c42456ff8f2750f48323a0fcf071f3174621a40e3"
+        }
+      ]
+    },
+    "other_original_entries_and_resolutions_unchanged": true
+  },
+  "independent_baseline_review": {
+    "path": "openspec/changes/graph-ingest-test-cleanup/review/manifest-review.md",
+    "sha256": "4b131b7190385974f330ea234b5fbb12199021acd50bc5a2e9f951ab6c4750ec",
+    "scope": "Exact installed baseline and context-first finish dependency; source refresh is not approval."
+  },
+  "annotation_correction": [
+    {
+      "path": "processor/graph-ingest/component_test.go",
+      "before_sha256": "be3ccdf6f2f9abe0ffa18f4b0a7a0ffa2b03f72dbe28283aac3c050b669ad814",
+      "after_sha256": "912a7688fe78580dad3a953f8a017114df710247affb15eccd9e98629a0fa257",
+      "replacements": [
+        {
+          "before": "line=782 column=16",
+          "after": "line=789 column=16"
+        },
+        {
+          "before": "line=884 column=14",
+          "after": "line=891 column=14"
+        }
+      ]
+    },
+    {
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "before_sha256": "f9bebc8c4cc27687d6e55d8d2e32b4773dd9f21294ddfcc01e6e544f858aeee4",
+      "after_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2",
+      "replacements": [
+        {
+          "before": "line=512 column=24",
+          "after": "line=529 column=24"
+        },
+        {
+          "before": "line=520 column=24",
+          "after": "line=537 column=24"
+        }
+      ]
+    }
+  ],
+  "previous_companion": {
+    "markdown_sha256": "8a0937a8289fe66b0915aa4e5b1e40d2dd0eed6310eca4c825cd6dacf46358df",
+    "json_sha256": "55da59ca8fdc9916035a35a2e66cabeab3a23712d029c5554505b59cc26c3baf"
+  }
+}

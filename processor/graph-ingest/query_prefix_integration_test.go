@@ -22,9 +22,8 @@ import (
 // startPrefixTestComponent boots a graph-ingest component against a real
 // testcontainer NATS instance and returns it. The caller is responsible for
 // stopping it.
-func startPrefixTestComponent(t *testing.T, opts ...testComponentOption) (*Component, *natsclient.Client) {
+func startPrefixTestComponent(ctx context.Context, t *testing.T, opts ...testComponentOption) (*Component, *natsclient.Client, *graphIngestTestOwner) {
 	t.Helper()
-	ctx := context.Background()
 
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
@@ -41,13 +40,15 @@ func startPrefixTestComponent(t *testing.T, opts ...testComponentOption) (*Compo
 	require.NoError(t, err)
 
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.provisionalFinish(ctx, t)
 	require.NoError(t, c.Initialize())
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 
 	// Allow subscriptions to stabilise.
 	time.Sleep(100 * time.Millisecond)
-	return c, nc
+	owner.transfer()
+	return c, nc, owner
 }
 
 // seedPrefixEntity writes a minimal entity to the KV bucket via the mutation
@@ -74,8 +75,10 @@ func seedPrefixEntity(t *testing.T, ctx context.Context, c *Component, id string
 //   - A single no-cursor page has the "entities" key.
 //   - No "next_cursor" key appears on the final page.
 func TestIntegration_PrefixQuery_PaginationCoverage(t *testing.T) {
-	ctx := context.Background()
-	c, nc := startPrefixTestComponent(t, withAuthority("pagtest", "ops"))
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, nc, owner := startPrefixTestComponent(ctx, t, withAuthority("pagtest", "ops"))
+	defer owner.finish(ctx, t)
 
 	// Seed 5 entities with a sortable ID suffix.
 	const count = 5
@@ -141,8 +144,10 @@ func TestIntegration_PrefixQuery_PaginationCoverage(t *testing.T) {
 // response. This closes the "errors travel as body payloads" failure class for
 // the prefix handler.
 func TestIntegration_PrefixQuery_ErrorClassification(t *testing.T) {
-	ctx := context.Background()
-	_, nc := startPrefixTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	_, nc, owner := startPrefixTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	req := graph.PrefixQueryRequest{
 		Prefix: "acme",
@@ -210,8 +215,10 @@ func TestIntegration_PrefixQuery_IndivisibleEntityTooLarge(t *testing.T) {
 // TestIntegration_PrefixQuery_ExhaustedPageOmitsCursor verifies that an
 // exhausted single-page response has "entities" and no continuation token.
 func TestIntegration_PrefixQuery_ExhaustedPageOmitsCursor(t *testing.T) {
-	ctx := context.Background()
-	c, nc := startPrefixTestComponent(t, withAuthority("singlepage", "ops"))
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, nc, owner := startPrefixTestComponent(ctx, t, withAuthority("singlepage", "ops"))
+	defer owner.finish(ctx, t)
 
 	const id = "singlepage.ops.dom.sys.type.entity-001"
 	seedPrefixEntity(t, ctx, c, id)

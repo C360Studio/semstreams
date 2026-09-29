@@ -35,12 +35,11 @@ func gatheredValue(t *testing.T, name string) float64 {
 }
 
 func TestIntegration_ReadinessGaugesAreEmitted(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	streams := []natsclient.TestStreamConfig{{Name: "ENTITY", Subjects: []string{"entity.>"}}}
 	tc := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
-	defer func() { _ = tc.Terminate() }()
 
 	cfg := DefaultConfig()
 	cj, err := json.Marshal(cfg)
@@ -48,11 +47,12 @@ func TestIntegration_ReadinessGaugesAreEmitted(t *testing.T) {
 	comp, err := CreateGraphIngest(cj, testDependencies(t, tc.Client))
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	c.statusInterval = 100 * time.Millisecond
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c)
-	require.NoError(t, c.Start(ctx))
-	defer func() { _ = c.Stop(context.Background()) }()
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 
 	// Assert a VALUE this component drove, not mere presence. Presence alone is
 	// satisfied by any earlier test's collectors, because DefaultRegisterer swallows

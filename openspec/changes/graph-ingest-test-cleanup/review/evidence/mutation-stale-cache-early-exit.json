@@ -1,0 +1,16 @@
+{
+  "command": [
+    "scripts/run-integration-tests.sh",
+    "-v",
+    "-run",
+    "^TestIntegration_CacheStaleRepopulationRace$",
+    "./processor/graph-ingest"
+  ],
+  "exit_code": 1,
+  "elapsed_seconds": 3.2910121249733493,
+  "source_md5_before": "9495de8738b544f008fc424fe58d5460",
+  "mutant_md5": "7bac9d44570b4885bb05aefaffb8fe1b",
+  "oracle_reached": true,
+  "runner_completed": false,
+  "log": "/private/tmp/gh1423-mutation-stale-cache-early-exit.log"
+}

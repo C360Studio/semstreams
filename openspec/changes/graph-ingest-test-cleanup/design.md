@@ -14,8 +14,10 @@ It accounts for 32 legacy cleanup identities in 16 files, six returned-runtime h
 17 adjacent ordinary Stop locations, production teardown, existing patterns and the private adopter boundary.
 This design adopts #1417/#1419 for that population; it changes no production behavior or exported API.
 
-Current manifest is 329 debt entries / 89 resolutions, not the historical 334. None of its manual resolutions
-references graph-ingest. The accepted inventory explains the independent five-entry rule reduction.
+At the accepted inventory checkpoint, the manifest contained 329 debt entries / 89 resolutions, not the historical
+334; none of those manual resolutions referenced graph-ingest. The accepted inventory explains the independent
+five-entry rule reduction. Final implementation removes the exact 32 graph-ingest entries, preserves the other
+297 and all 89 old resolutions, and adds one independently reviewed native cancel-callback resolution (90 total).
 The default package baseline at the checkpoint passed with race detection: 5.017 seconds wall clock,
 202 top-level passes and six skipped tests. This is neither integration nor production cleanup evidence.
 
@@ -71,8 +73,9 @@ Take ownership immediately when a concrete component exists, before Initialize, 
 Each of the six returning helpers accepts the caller's operation context as its first argument.
 It installs a provisional lexical finalizer before any initialization/start assertion, derives Start authority through
 the owner, and retains ownership through all setup work, including authority's post-Start Flush.
-Only successful return transfers ownership. A boolean transfer marker controls the provisional defer; it is set
-immediately before return, after the final setup assertion. Fatal/Goexit and ordinary error exits before that point
+Only successful return transfers ownership. A boolean transfer marker in the private owner controls its shared
+provisional-finalization method; all six helpers and the assertion-exit proof use this same operation. Transfer sets
+the marker immediately before return, after the final setup assertion. Fatal/Goexit and ordinary error exits before that point
 therefore finalize locally while the caller's operation authority and NATS client are still live.
 
 Return the owner as an extra private result, or as a private field on the existing authority harness. Remove redundant
@@ -110,7 +113,7 @@ No unrelated benchmark migration or broad timing cleanup is included.
 
 ## Invariants and proof limits
 
-Draft `test-cleanup-policy` delta below is the test-fixture spec home for these obligations:
+The `test-cleanup-policy` delta is the test-fixture spec home for these obligations:
 1. Every acquired fixture component has one lexical terminal owner before fallible setup continues.
 2. Successful helper return transfers that ownership; early exits do not abandon it.
 3. Controlled Stop receives a fresh finite context and finishes before owner cancellation or substrate teardown.
@@ -145,6 +148,12 @@ Intentional Fatal/Goexit proof may use one selected self-execution of the curren
 post-transfer-escape subcases. Exercise the private ownership path against a real Component with controlled resources;
 this proves assertion-exit ownership, not successful real-NATS Start. Capture owned output, use one synchronous Wait,
 and bound/reap the selected child; no shell, nested go build, recursive full suite or generic process supervisor.
+The proof remains untagged so hosted additive integration executes it. Its exact supported child fixture request
+may dispatch before the integration TestMain acquires NATS; ordinary runs retain existing setup and teardown.
+Reject unknown modes and conflicting test selections, propagate m.Run's status, and require scenario-specific
+cleanup/order witnesses in addition to the expected failing child exit. The independently reviewed implementation
+detail and its limits are recorded in `review/assertion-child-plumbing-review.md`.
+
 Target under one second warm for the selected proof, with the existing five-second unit ceiling; measure under race.
 Do not force a Go deadlock or deliberately strand a context-ignoring native resource to prove a narrower contract.
 
@@ -179,3 +188,25 @@ The final report separates source debt removal, skipped-source repairs, real int
 wall-clock behavior. #1423 closes only through its merge; #1417 remains open for later measured package batches.
 
 No new owner policy question is proposed. Independent design review and coordinator acceptance precede implementation.
+
+## Final implementation assessment
+
+The reviewed implementation adopts the private owner across the measured six helpers and 44 callers, including
+adjacent direct setups and explicit replay/readiness fences. The current-source companion in
+`review/current-source-companion.md` refreshes all 32 identity mappings while the accepted historical inventory
+remains unchanged. `review/implementation-review.md` and `review/manifest-review.md` retain independent approvals.
+No production source, public interface, analyzer or runner changed.
+
+The evidence is compositional: existing real keyed-pool/core-drain owner assertions, new synchronous wrapper and
+selected assertion-exit examples, and existing real NATS helper/fence cases establish different parts of the
+ownership contract. Six existing skips remain; three repaired skipped bodies count only as source repairs.
+The final source identity and exact commands are retained under `review/evidence/`.
+
+The reviewer accepted deferring separate cleanup-duration measurement. Package/case times and targeted failure
+latencies are retained; no cleanup-duration distribution, comparative speedup, total native wall-time bound or
+complete failure-join claim is made. The original design checkpoint remains available at `c9870a71`.
+
+The first full-gate attempt failed early on context parameter order, which was corrected mechanically. The second
+caught four source annotations moved by this patch; only their line numbers were corrected. Both failures and the
+independent correction reviews are retained. Existing common-gate failure visibility/duplicate suite cost remains
+with #1293, including the observed evidence linked from `review/implementation-review.md`.

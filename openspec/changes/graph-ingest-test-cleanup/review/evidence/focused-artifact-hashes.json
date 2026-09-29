@@ -1,0 +1,120 @@
+[
+  {
+    "artifact": "focused-source-hashes.json",
+    "sha256": "e46ea0e767681b76fef63f676f27df19201e7ee5e2fefc130c29337a5be53ea0",
+    "bytes": 5219
+  },
+  {
+    "artifact": "focused-integration.log",
+    "sha256": "4348db0f489689047fcb8da7e773f196dfb5f09ebe315c15e007d50d826bb65f",
+    "bytes": 384
+  },
+  {
+    "artifact": "owner-red.log",
+    "sha256": "7896749156a4c17a9db8fa23eb23a20ba7b6780558f0d27e3651c5be19377f2d",
+    "bytes": 1493
+  },
+  {
+    "artifact": "owner-green.log",
+    "sha256": "457b5186d3befac7b48226a8bd2c12ce587b9361c74b00f85ce3a82233f66399",
+    "bytes": 68
+  },
+  {
+    "artifact": "owner-restored-final.jsonl",
+    "sha256": "d0a1ac6b73576bc6b0955a41d9816d1edec1760ed2c0d9cd0ba783c5f53bfc28",
+    "bytes": 11942
+  },
+  {
+    "artifact": "owner-after-inline.jsonl",
+    "sha256": "4a6a26f2e2a7b2810ba903e4eb67b965b033ad74e5441cbfc9da32fb0951a2f0",
+    "bytes": 11938
+  },
+  {
+    "artifact": "tagged-child-no-docker.log",
+    "sha256": "4b04cf21c196fa1734217ea11355ed0946c02bf05c2d9395b84ad9cceb05f338",
+    "bytes": 262
+  },
+  {
+    "artifact": "mutations.json",
+    "sha256": "23811058fb37085b32d6bedc6597ca50180b36a6c120e0c29f306d43e5574c67",
+    "bytes": 2087
+  },
+  {
+    "artifact": "mutations.py",
+    "sha256": "d6dbacee716174228e0b1d96cc9e6919a023cac83f515bb88c5fb5dac2092599",
+    "bytes": 3308
+  },
+  {
+    "artifact": "mutation-provisional_removed.log",
+    "sha256": "2d501c0150a50fcc06e3c89cfd8b04e99cf7dcc7962a7ab1dea9dca6be9482b2",
+    "bytes": 488
+  },
+  {
+    "artifact": "mutation-premature_start_cancel.log",
+    "sha256": "cebb39a5d1078369e2ace861fccf19d8929a4eb19d55ce23737e527f449f399e",
+    "bytes": 317
+  },
+  {
+    "artifact": "mutation-discard_stop_error.log",
+    "sha256": "f3fca97d5995b69cf4b13dbbb055ae04fff481158f4e4466cd3b6bb44b90808a",
+    "bytes": 417
+  },
+  {
+    "artifact": "mutation-implicit_retry.log",
+    "sha256": "710f0b51e43fd713482aac36808f69b526bcaa5beaa9ea45539398ee834aec7f",
+    "bytes": 297
+  },
+  {
+    "artifact": "mutation-readiness-fence.json",
+    "sha256": "4ecad17428ad6aa5ae1f9a804625cefc5c13a626fa0b07359ee936a4d4685b39",
+    "bytes": 438
+  },
+  {
+    "artifact": "mutation-readiness-fence.log",
+    "sha256": "b92059523c90201a305e627b20fc65ce80e398abe923b92ddcf05fa35d593144",
+    "bytes": 4635
+  },
+  {
+    "artifact": "mutation-stale-cache-early-exit.json",
+    "sha256": "0255760e9f40d81a6ed85ad2ea1c24448578fea7eabf8ead7a492c65dd7d0f95",
+    "bytes": 461
+  },
+  {
+    "artifact": "mutation-stale-cache-early-exit.log",
+    "sha256": "0660fe40372559bff882af478d1b78531d341a7fdcd6cf54c238ebc5fd241d85",
+    "bytes": 4608
+  },
+  {
+    "artifact": "readiness-fence-green.log",
+    "sha256": "a00ce098d542fe5870c0fe97c457143085e3cf7e04a249610e3c3a2767ec70cb",
+    "bytes": 4519
+  },
+  {
+    "artifact": "restored-fences-green.log",
+    "sha256": "b3867b3e76b58167ac5816dc6c2f9b2ae32f4ba92ef135147b0ecae63bf4cc10",
+    "bytes": 6712
+  },
+  {
+    "artifact": "final-source-freeze-after-inline.json",
+    "sha256": "2b353c91f5f6023e7c6350ec588a94ba3209a86befa10ab1e32f7eff49927995",
+    "bytes": 3296
+  },
+  {
+    "artifact": "test-owner-support.go.txt",
+    "sha256": "0a9e5ad3e4930d64d970b3d9b95df4a1b7370083e57fb0800a2d07952b43a945",
+    "md5": "b17f0a753efc9f8ed0f758b0915fabff",
+    "bytes": 1795
+  },
+  {
+    "artifact": "cache-stale-pre-mutation.go.txt",
+    "sha256": "024ef81f86630868c3499123402dd6971924d6f8eb357af0fb0a9dcb17c7643c",
+    "md5": "9495de8738b544f008fc424fe58d5460",
+    "bytes": 4939
+  },
+  {
+    "artifact": "readiness-pre-mutation.go.txt",
+    "sha256": "d08db3659e665d171d843823e8211f21e1fd178bd81cb96f2a40c2d7b7bd889f",
+    "md5": "ece84f072ed80de3c6c067fcd7fd7bac",
+    "bytes": 17463
+  }
+]

@@ -18,7 +18,10 @@ import (
 var testMutationType = message.Type{Domain: "test", Category: "mutation", Version: "v1"}
 
 func TestIntegration_CanonicalMutationLifecycle(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 	const id = "c360.test.mutation.system.widget.001"
 	now := time.Now()
 
@@ -81,7 +84,10 @@ func TestIntegration_CanonicalMutationLifecycle(t *testing.T) {
 }
 
 func TestIntegration_CanonicalAppend_ReportsIndependentMissingSubject(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 	const missing = "c360.test.mutation.system.widget.missing"
 	request, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{{
 		Subject: missing, Predicate: "test.event.value", Object: "not-written",

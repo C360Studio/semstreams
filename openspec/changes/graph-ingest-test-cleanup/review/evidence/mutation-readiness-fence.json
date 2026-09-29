@@ -1,0 +1,15 @@
+{
+  "command": [
+    "scripts/run-integration-tests.sh",
+    "-v",
+    "-run",
+    "^TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure$",
+    "./processor/graph-ingest"
+  ],
+  "exit_code": 1,
+  "elapsed_seconds": 4.327527832996566,
+  "source_md5_before": "ece84f072ed80de3c6c067fcd7fd7bac",
+  "mutant_md5": "61e0fca77e8c805f95f7db63308dec2a",
+  "oracle_reached": true,
+  "log": "/private/tmp/gh1423-mutation-readiness-fence.log"
+}

@@ -1,0 +1,13 @@
+{
+  "command": "PATH=/private/tmp/gh1064-task-tools:$PATH task check:push",
+  "head": "c9870a71e425445c5147a017c50c2f55b56e6f20",
+  "source_freeze_sha256": "a3ea3c6fcdd762e299dfe37a7349b49eef7d2db262fbc9636947f72dfc64ec25",
+  "baseline_sha256": "ab8f51cb3fccf5536b8602f206c62c8536256eface79c517753418082b91e502",
+  "started_epoch": 1790696497.547602,
+  "state": "completed",
+  "log": "/private/tmp/gh1423-check-push.log",
+  "pid": 28916,
+  "exit_code": 201,
+  "wall_seconds": 13.199,
+  "log_sha256": "b590ae46783daae296b5cfed65c22695e9f16cf55a3e48b617648363ee3694cb"
+}

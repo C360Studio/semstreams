@@ -33,7 +33,8 @@ import (
 // (An UNSTRIPPABLE retention still fails Start closed; that arm is pinned at
 // the seam's unit level in natsclient.)
 func TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
 	}
@@ -55,12 +56,13 @@ func TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition(t *testi
 	comp, err := CreateGraphIngest(cfgJSON, testDependencies(t, testClient.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	require.NoError(t, c.Initialize())
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
 	// Start succeeds — and the acquisition reconciled the bucket to its
 	// declared no-lifecycle policy.
-	require.NoError(t, c.Start(ctx),
+	require.NoError(t, c.Start(owner.startContext(ctx)),
 		"Start must self-heal a strippable TTL at the seam, not fail on it")
 
 	fresh, err := testClient.Client.GetKeyValueBucket(ctx, graph.BucketGraphIngestAppliedSeq)
@@ -82,7 +84,10 @@ func TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition(t *testi
 // the other tests exercise the consume→pool→ingest composition; this pins that
 // the pool wiring actually processes published messages (the happy path).
 func TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool(t *testing.T) {
-	ctx, c, testClient := startKeyedWireComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, testClient, owner := startKeyedWireComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.wire.keyed.entity.001"
 	now := time.Now()
@@ -123,7 +128,10 @@ func TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool(t *testing.T)
 // redelivery of an older sequence is still judged stale via the durable tier,
 // so it cannot overwrite the newer write through the arrival-order merge.
 func TestIntegration_IngestGuard_DurableSurvivesRestart(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 	require.NotNil(t, c.ingestGuardBucket, "Start must provision the durable guard bucket")
 
 	work := ingestWork{entityID: "c360.test.guard.entity.state.001", stream: "ENTITY", seq: 5}
@@ -159,7 +167,10 @@ func TestIntegration_IngestGuard_DurableSurvivesRestart(t *testing.T) {
 // valid low-sequence message from a second stream is not silenced by a high
 // sequence already applied from another stream.
 func TestIntegration_IngestGuard_DurablePerStreamIndependence(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 	entity := "c360.test.guard.entity.002"
 
 	// Stream A durably applied a high sequence.
@@ -181,9 +192,8 @@ func TestIntegration_IngestGuard_DurablePerStreamIndependence(t *testing.T) {
 // consumer on entity.> and the merge-test decoder registered BEFORE Start (so
 // the consumer goroutine never races c.decoder). Returns the component + the
 // test client for publishing to the wire.
-func startKeyedWireComponent(t *testing.T) (context.Context, *Component, *natsclient.TestClient) {
+func startKeyedWireComponent(ctx context.Context, t *testing.T) (*Component, *natsclient.TestClient, *graphIngestTestOwner) {
 	t.Helper()
-	ctx := context.Background()
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
 	}
@@ -196,11 +206,13 @@ func startKeyedWireComponent(t *testing.T) (context.Context, *Component, *natscl
 	comp, err := CreateGraphIngest(cfgJSON, testDependencies(t, testClient.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.provisionalFinish(ctx, t)
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c) // decoder BEFORE Start (no consumer race)
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
-	return ctx, c, testClient
+	require.NoError(t, c.Start(owner.startContext(ctx)))
+	owner.transfer()
+	return c, testClient, owner
 }
 
 // TestIntegration_KeyedIngest_SameEntityUpdatesStayOrdered drives many rapid
@@ -212,7 +224,10 @@ func startKeyedWireComponent(t *testing.T) (context.Context, *Component, *natscl
 // Without keying, concurrent out-of-order application of the arrival-order merge
 // could leave an older value as the winner.
 func TestIntegration_KeyedIngest_SameEntityUpdatesStayOrdered(t *testing.T) {
-	ctx, c, testClient := startKeyedWireComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, testClient, owner := startKeyedWireComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.wire.order.entity.001"
 	const updates = 25

@@ -1,0 +1,64 @@
+[INTEGRATION] docker info latency: 0ms (integer-second clock fallback)
+[INTEGRATION] using cached nats:2.14-alpine (registry pull skipped)
+[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)
+2026/09/29 10:24:41 github.com/testcontainers/testcontainers-go - Connected to docker: 
+  Server Version: 29.8.0
+  API Version: 1.51
+  Operating System: Docker Desktop
+  Total Memory: 23742 MB
+  Labels:
+    com.docker.desktop.address=unix:///Users/coby/Library/Containers/com.docker.docker/Data/docker-cli.sock
+  Testcontainers for Go Version: v0.40.0
+  Resolved Docker Host: unix:///var/run/docker.sock
+  Resolved Docker Socket Path: /var/run/docker.sock
+  Test SessionID: d88432cfa02c808cfaa285fb088b81e131f397cf4920334a3465011409ee0bc5
+  Test ProcessID: 3fcaf4ae-261c-4f8c-b50b-108c565fc472
+2026/09/29 10:24:41 🐳 Creating container for image nats:2.14-alpine
+2026/09/29 10:24:41 🐳 Creating container for image testcontainers/ryuk:0.13.0
+2026/09/29 10:24:41 ✅ Container created: 6393b6aca2ac
+2026/09/29 10:24:41 🐳 Starting container: 6393b6aca2ac
+2026/09/29 10:24:41 ✅ Container started: 6393b6aca2ac
+2026/09/29 10:24:41 ⏳ Waiting for container id 6393b6aca2ac image: testcontainers/ryuk:0.13.0. Waiting for: port 8080/tcp to be listening
+2026/09/29 10:24:41 Shell not found in container
+2026/09/29 10:24:41 🔔 Container is ready: 6393b6aca2ac
+2026/09/29 10:24:41 ✅ Container created: de3025987c0e
+2026/09/29 10:24:41 🐳 Starting container: de3025987c0e
+2026/09/29 10:24:41 ✅ Container started: de3025987c0e
+2026/09/29 10:24:41 ⏳ Waiting for container id de3025987c0e image: nats:2.14-alpine. Waiting for: log message "Server is ready"
+2026/09/29 10:24:41 🔔 Container is ready: de3025987c0e
+2026/09/29 10:24:41 INFO Connecting to NATS urls=nats://localhost:55017
+2026/09/29 10:24:41 INFO Successfully connected to NATS urls=nats://localhost:55017
+=== RUN   TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure
+2026/09/29 10:24:41 🐳 Creating container for image nats:2.14-alpine
+2026/09/29 10:24:41 ✅ Container created: 44c1ef139e4a
+2026/09/29 10:24:41 🐳 Starting container: 44c1ef139e4a
+2026/09/29 10:24:41 ✅ Container started: 44c1ef139e4a
+2026/09/29 10:24:41 ⏳ Waiting for container id 44c1ef139e4a image: nats:2.14-alpine. Waiting for: log message "Server is ready"
+2026/09/29 10:24:41 🔔 Container is ready: 44c1ef139e4a
+2026/09/29 10:24:41 INFO Connecting to NATS urls=nats://localhost:55018
+2026/09/29 10:24:41 INFO Successfully connected to NATS urls=nats://localhost:55018
+2026/09/29 10:24:41 INFO component initialized component=graph-ingest component=graph-ingest
+2026/09/29 10:24:41 INFO Created new KV bucket bucket=ENTITY_STATES
+2026/09/29 10:24:41 INFO Created new KV bucket bucket=ENTITY_SUFFIX_INDEX
+2026/09/29 10:24:41 INFO Created new KV bucket bucket=GRAPH_INGEST_APPLIED_SEQ
+2026/09/29 10:24:41 INFO Created new KV bucket bucket=GRAPH_STATUS
+2026/09/29 10:24:41 INFO JetStream consumer acknowledgement policy applied component=graph-ingest port=entity_stream stream=ENTITY consumer=graph-ingest-entity-wildcard policy_source=server requested_max_ack_pending=0 effective_max_ack_pending=1000
+2026/09/29 10:24:41 INFO query handlers registered component=graph-ingest subjects="[graph.ingest.query.entity graph.ingest.query.batch graph.ingest.query.prefix graph.ingest.query.suffix]"
+2026/09/29 10:24:41 INFO mutation handlers registered component=graph-ingest subjects="[graph.mutation.entity.create graph.mutation.entity.reconcile graph.mutation.triple.append graph.mutation.entity.delete]"
+2026/09/29 10:24:41 INFO component started component=graph-ingest component=graph-ingest start_time=2026-09-29T10:24:41.998-05:00
+    readiness_integration_test.go:402: explicit Stop did not join the status producer before Purge
+2026/09/29 10:24:43 INFO component stopped gracefully component=graph-ingest component=graph-ingest
+2026/09/29 10:24:43 🐳 Stopping container: 44c1ef139e4a
+2026/09/29 10:24:43 ✅ Container stopped: 44c1ef139e4a
+2026/09/29 10:24:43 🐳 Terminating container: 44c1ef139e4a
+2026/09/29 10:24:43 🚫 Container terminated: 44c1ef139e4a
+--- FAIL: TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure (1.48s)
+FAIL
+2026/09/29 10:24:43 🐳 Stopping container: de3025987c0e
+2026/09/29 10:24:43 ✅ Container stopped: de3025987c0e
+2026/09/29 10:24:43 🐳 Terminating container: de3025987c0e
+2026/09/29 10:24:43 🚫 Container terminated: de3025987c0e
+FAIL	github.com/c360studio/semstreams/processor/graph-ingest	2.319s
+FAIL
+[INTEGRATION] no latency distributions recorded
+[INTEGRATION] tests failed with status 1

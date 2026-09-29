@@ -1,0 +1,36 @@
+{
+  "identity": "processor/graph-ingest/test_owner_support_test.go|(*graphIngestTestOwner).stop|defer|o.cancelStart|unresolved callback|unknown|1",
+  "site_fingerprint": "07b402a848f099f4d1cd16737188ce3e05fdee4c127658aac047156674bca763",
+  "classification": "non-lifecycle-stop",
+  "question": "function-valued selector target unresolved on cleanup path",
+  "reason": "The private cancelStart field is assigned only the cancel returned by context.WithCancel in startContext. stop invokes that verified cancel after the synchronous concrete terminal attempt; it does not invoke another lifecycle Stop.",
+  "owner_issue": "#1423",
+  "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; #1423 exact source review",
+  "dependencies": [
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "declaration": "graphIngestTestOwner",
+      "fingerprint": "6c1717bf72f79945962ebfa1ea0c08b74722eca908961149e392892e52330072"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "declaration": "newGraphIngestTestOwner",
+      "fingerprint": "f308823a9034b37b8feba3ed4a9be77f634cc18a0269285fe5546915bd069647"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "declaration": "graphIngestTestOwner.startContext",
+      "fingerprint": "aa30e8b5a7ff477cb045d9257ec16df45ccce9ceb48ef3dfd7d98c1817769860"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "declaration": "graphIngestTestOwner.stop",
+      "fingerprint": "b9b3400c9a3bb25a032ba4e58832d6fdae81327c005e95c5df3f36182e73a3a9"
+    },
+    {
+      "path": "processor/graph-ingest/test_owner_support_test.go",
+      "declaration": "graphIngestTestOwner.finish",
+      "fingerprint": "7c09d338f13fda8611e6eb4c42456ff8f2750f48323a0fcf071f3174621a40e3"
+    }
+  ]
+}

@@ -80,6 +80,7 @@ const (
 // test can publish on either lane and read ENTITY_STATES directly.
 type authorityGateHarness struct {
 	ctx        context.Context
+	owner      *graphIngestTestOwner
 	component  *Component
 	testClient *natsclient.TestClient
 	logs       *authorityLogCapture
@@ -133,9 +134,8 @@ func (h *authorityLogCapture) withMessage(msg string) []authorityLogRecord {
 // ports — one ordinary, one declared "import": true — plus the required
 // mutation-provider port, and gives it the deployment authority through
 // deps.Platform.
-func startAuthorityGateComponent(t *testing.T, enableHierarchy bool) *authorityGateHarness {
+func startAuthorityGateComponent(ctx context.Context, t *testing.T, enableHierarchy bool) *authorityGateHarness {
 	t.Helper()
-	ctx := context.Background()
 
 	testClient := natsclient.NewTestClient(t,
 		natsclient.WithKV(),
@@ -170,13 +170,15 @@ func startAuthorityGateComponent(t *testing.T, enableHierarchy bool) *authorityG
 	require.NoError(t, err)
 
 	c := created.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.provisionalFinish(ctx, t)
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c) // decoder BEFORE Start (no consumer race)
-	require.NoError(t, c.Start(ctx))
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 	require.NoError(t, testClient.GetNativeConnection().Flush())
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
-	return &authorityGateHarness{ctx: ctx, component: c, testClient: testClient, logs: logs}
+	owner.transfer()
+	return &authorityGateHarness{ctx: ctx, owner: owner, component: c, testClient: testClient, logs: logs}
 }
 
 // publishFact publishes a Graphable on the given subject prefix and returns
@@ -218,7 +220,10 @@ func (h *authorityGateHarness) awaitEntity(t *testing.T, entityID string) *graph
 // port that is NOT an import lane never reaches ENTITY_STATES, and the
 // rejection is metered exactly once under authority_foreign.
 func TestAuthorityGateRejectsForeignOnFactLane(t *testing.T) {
-	h := startAuthorityGateComponent(t, false)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	h := startAuthorityGateComponent(ctx, t, false)
+	defer h.owner.finish(ctx, t)
 
 	counter := h.component.mutationRejections.WithLabelValues("entity.>", authorityMetricReasonForeign)
 	before := testutil.ToFloat64(counter)
@@ -239,7 +244,10 @@ func TestAuthorityGateRejectsForeignOnFactLane(t *testing.T) {
 // the real graph.mutation.> request/reply wire returns the coded authority
 // error, decoded into a fresh value, and NOT the structural code.
 func TestAuthorityGateRejectsForeignOnMutationLane(t *testing.T) {
-	h := startAuthorityGateComponent(t, false)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	h := startAuthorityGateComponent(ctx, t, false)
+	defer h.owner.finish(ctx, t)
 
 	reqBytes, err := json.Marshal(graph.CreateEntityRequest{
 		Entity: &graph.EntityState{
@@ -270,7 +278,10 @@ func TestAuthorityGateRejectsForeignOnMutationLane(t *testing.T) {
 // authority-checked. A local entity may cite an imported one; the reference
 // persists byte-for-byte and no stub entity is created for the target.
 func TestAuthorityGateAllowsForeignReferenceObject(t *testing.T) {
-	h := startAuthorityGateComponent(t, false)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	h := startAuthorityGateComponent(ctx, t, false)
+	defer h.owner.finish(ctx, t)
 
 	// Import the peer entity first, through the declared import lane.
 	h.publishFact(t, authorityImportSubject, authorityForeignID)
@@ -320,7 +331,10 @@ func TestAuthorityGateAllowsForeignReferenceObject(t *testing.T) {
 // test: a foreign subject is persisted with its bytes unchanged, and a subject
 // claiming THIS deployment's pair is refused with local_authority_claimed.
 func TestImportLaneAcceptsForeignRejectsLocalClaim(t *testing.T) {
-	h := startAuthorityGateComponent(t, false)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	h := startAuthorityGateComponent(ctx, t, false)
+	defer h.owner.finish(ctx, t)
 
 	h.publishFact(t, authorityImportSubject, authorityForeignID)
 	stored := h.awaitEntity(t, authorityForeignID)
@@ -344,7 +358,10 @@ func TestImportLaneAcceptsForeignRejectsLocalClaim(t *testing.T) {
 // foreign authority, so an imported entity gets no container, no membership
 // triple, and no inverse sibling edge, on the import lane as on any other.
 func TestHierarchySkipsForeignAuthority(t *testing.T) {
-	h := startAuthorityGateComponent(t, true)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	h := startAuthorityGateComponent(ctx, t, true)
+	defer h.owner.finish(ctx, t)
 
 	// Two imports sharing a type prefix: the second would take the sibling-edge
 	// path, which mints a forward hierarchy triple onto the entity itself
@@ -376,7 +393,10 @@ func TestHierarchySkipsForeignAuthority(t *testing.T) {
 // READ-ONLY mirror (ruled O-12(a)). A triple.append from a local lane naming
 // the imported subject is refused and the import's revision does not move.
 func TestAuthorityGateRejectsAnnotationOfImportedSubject(t *testing.T) {
-	h := startAuthorityGateComponent(t, false)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	h := startAuthorityGateComponent(ctx, t, false)
+	defer h.owner.finish(ctx, t)
 
 	h.publishFact(t, authorityImportSubject, authorityForeignID)
 	h.awaitEntity(t, authorityForeignID)
@@ -418,7 +438,10 @@ func TestAuthorityGateRejectsAnnotationOfImportedSubject(t *testing.T) {
 //
 // Deleting that gate previously left both suites green (review HIGH-2).
 func TestAuthorityGateRejectsReconcileOfImportedSubject(t *testing.T) {
-	h := startAuthorityGateComponent(t, false)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	h := startAuthorityGateComponent(ctx, t, false)
+	defer h.owner.finish(ctx, t)
 
 	h.publishFact(t, authorityImportSubject, authorityForeignID)
 	h.awaitEntity(t, authorityForeignID)
@@ -477,7 +500,10 @@ func TestAuthorityGateRejectsReconcileOfImportedSubject(t *testing.T) {
 // is the regression that actually threatens that invariant — moving the
 // authorization after the fetch and letting not-found win — which it kills.
 func TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence(t *testing.T) {
-	h := startAuthorityGateComponent(t, false)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	h := startAuthorityGateComponent(ctx, t, false)
+	defer h.owner.finish(ctx, t)
 
 	reconcileOf := func(t *testing.T, entityID string) *errs.ClassifiedError {
 		t.Helper()
@@ -526,7 +552,10 @@ func TestAuthorityGateRefusesForeignReconcileRegardlessOfExistence(t *testing.T)
 // decision about it. Deleting BOTH delete-lane gates previously left the suites
 // green (review HIGH-2).
 func TestAuthorityGateRejectsDeleteOfImportedSubject(t *testing.T) {
-	h := startAuthorityGateComponent(t, false)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	h := startAuthorityGateComponent(ctx, t, false)
+	defer h.owner.finish(ctx, t)
 
 	h.publishFact(t, authorityImportSubject, authorityForeignID)
 	h.awaitEntity(t, authorityForeignID)
@@ -576,7 +605,10 @@ func TestAuthorityGateRejectsDeleteOfImportedSubject(t *testing.T) {
 //
 // The counter is process-wide (sync.Once), so every assertion is a DELTA.
 func TestAuthorityGateMetersDirectPersistenceRejectionsOnEveryDirectSeam(t *testing.T) {
-	h := startAuthorityGateComponent(t, false)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	h := startAuthorityGateComponent(ctx, t, false)
+	defer h.owner.finish(ctx, t)
 
 	counter := h.component.mutationRejections.WithLabelValues(arrivalDirect, authorityMetricReasonForeign)
 	foreignEntity := func() *graph.EntityState {

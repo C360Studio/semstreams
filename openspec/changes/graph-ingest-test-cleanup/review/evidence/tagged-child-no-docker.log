@@ -1,0 +1,6 @@
+GRAPH_INGEST_CHILD_DRAIN_FINITE
+GRAPH_INGEST_CHILD_START_LIVE
+2026/09/29 10:16:15 INFO component stopped gracefully component=graph-ingest
+--- FAIL: TestGraphIngestOwnerChildFixture (0.00s)
+    test_owner_child_test.go:129: intentional setup assertion exit
+FAIL

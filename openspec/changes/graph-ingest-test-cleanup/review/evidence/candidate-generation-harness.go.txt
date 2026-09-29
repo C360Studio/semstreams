@@ -1,0 +1,47 @@
+package testinfra_test
+
+import (
+	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// Temporary, scratch-only canonical dependency generator for #1423 review.
+func TestGH1423GenerateCandidateDependencies(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "processor/graph-ingest/test_owner_support_test.go"
+	file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, path), nil, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := map[string]*ast.File{path: file}
+	declarations := []string{
+		"graphIngestTestOwner",
+		"newGraphIngestTestOwner",
+		"graphIngestTestOwner.startContext",
+		"graphIngestTestOwner.stop",
+		"graphIngestTestOwner.finish",
+	}
+	dependencies := make([]cleanupDependency, 0, len(declarations))
+	for _, declaration := range declarations {
+		fingerprint, fingerprintErr := cleanupSourceDependencyFingerprint(root, parsed, path, declaration)
+		if fingerprintErr != nil {
+			t.Fatal(fingerprintErr)
+		}
+		dependencies = append(dependencies, cleanupDependency{Path: path, Declaration: declaration, Fingerprint: fingerprint})
+	}
+	raw, err := json.MarshalIndent(dependencies, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("/private/tmp/gh1423-canonical-cancelstart-dependencies.json", append(raw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

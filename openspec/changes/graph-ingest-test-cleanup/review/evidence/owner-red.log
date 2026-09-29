@@ -1,0 +1,24 @@
+2026/09/29 10:04:06 INFO component stopped gracefully component=graph-ingest
+--- FAIL: TestGraphIngestTestOwnerControlledStopPreservesAuthority (0.00s)
+    test_owner_test.go:41: controlled Stop: Stop received no finite deadline
+--- FAIL: TestGraphIngestTestOwnerFailedAttemptIsNotRetried (0.00s)
+panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]
+[signal SIGSEGV: segmentation violation code=0x2 addr=0x0 pc=0x10409cb94]
+
+goroutine 22 [running]:
+testing.tRunner.func1.2({0x104d3e860, 0x104eab0b0})
+	/usr/local/go/src/testing/testing.go:1974 +0x2b8
+testing.tRunner.func1()
+	/usr/local/go/src/testing/testing.go:1977 +0x460
+panic({0x104d3e860?, 0x104eab0b0?})
+	/usr/local/go/src/runtime/panic.go:860 +0x12c
+github.com/c360studio/semstreams/processor/graph-ingest.(*graphIngestTestOwner).stop(0xc00008be78, {0xc0000245a0?, 0x12a05f200?})
+	/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/test_owner_support_test.go:26 +0x78
+github.com/c360studio/semstreams/processor/graph-ingest.TestGraphIngestTestOwnerFailedAttemptIsNotRetried(0xc0001e1688)
+	/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/test_owner_test.go:64 +0x348
+testing.tRunner(0xc0001e1688, 0x104e28288)
+	/usr/local/go/src/testing/testing.go:2036 +0x168
+created by testing.(*T).Run in goroutine 1
+	/usr/local/go/src/testing/testing.go:2101 +0x7c0
+FAIL	github.com/c360studio/semstreams/processor/graph-ingest	0.403s
+FAIL

@@ -1,0 +1,32 @@
+[
+  {
+    "path": "processor/graph-ingest/component_test.go",
+    "before_sha256": "be3ccdf6f2f9abe0ffa18f4b0a7a0ffa2b03f72dbe28283aac3c050b669ad814",
+    "after_sha256": "912a7688fe78580dad3a953f8a017114df710247affb15eccd9e98629a0fa257",
+    "replacements": [
+      {
+        "before": "line=782 column=16",
+        "after": "line=789 column=16"
+      },
+      {
+        "before": "line=884 column=14",
+        "after": "line=891 column=14"
+      }
+    ]
+  },
+  {
+    "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+    "before_sha256": "f9bebc8c4cc27687d6e55d8d2e32b4773dd9f21294ddfcc01e6e544f858aeee4",
+    "after_sha256": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2",
+    "replacements": [
+      {
+        "before": "line=512 column=24",
+        "after": "line=529 column=24"
+      },
+      {
+        "before": "line=520 column=24",
+        "after": "line=537 column=24"
+      }
+    ]
+  }
+]

@@ -121,26 +121,30 @@ func countStoredPredicate(t *testing.T, ctx context.Context, comp *Component, id
 
 // Tasks 7.1 / 7.3 / 6.3.
 func TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 	streams := []natsclient.TestStreamConfig{{Name: "ENTITY", Subjects: []string{"entity.>"}}}
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
 
 	// ---- First boot: seed the graph. -------------------------------------
 	seed := createHierarchyComponentOnClient(t, testClient.Client, true)
+	seedOwner := newGraphIngestTestOwner(seed)
+	defer seedOwner.finish(ctx, t)
 	require.NoError(t, seed.Initialize())
-	require.NoError(t, seed.Start(ctx))
+	require.NoError(t, seed.Start(seedOwner.startContext(ctx)))
 	for _, id := range replayEntityIDs {
 		require.NoError(t, seed.CreateEntity(ctx, replayEntity(id)))
 	}
-	require.NoError(t, seed.Stop(context.Background()))
+	require.NoError(t, seedOwner.stop(ctx))
 
 	// ---- Restart: a FRESH component over the SAME store. -----------------
 	// Initialize + Start is the production startup path; initStorage re-acquires
 	// ENTITY_STATES through the catalog seam exactly as a new process would.
 	replay := createHierarchyComponentOnClient(t, testClient.Client, true)
+	replayOwner := newGraphIngestTestOwner(replay)
+	defer replayOwner.finish(ctx, t)
 	require.NoError(t, replay.Initialize())
-	require.NoError(t, replay.Start(ctx))
-	defer func() { _ = replay.Stop(context.Background()) }()
+	require.NoError(t, replay.Start(replayOwner.startContext(ctx)))
 
 	// Nothing is writing now (the seed component is stopped, the replay
 	// component has not been asked to do anything), so this is a quiescent read.

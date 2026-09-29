@@ -20,8 +20,8 @@ Reconcile the exact 32 legacy entries through the existing guard and independent
 
 Production lifecycle behavior, public APIs, NATS topology and canonical runner ownership are unchanged.
 The normative delta extends test-cleanup-policy with fixture ownership; current component-lifecycle and runtime-context
-contracts remain unchanged. No new framework, watchdog, guard exemption or package-wide timing rewrite is introduced.
-Current baseline is 329 debt entries / 89 resolutions; 334 is historical. Expected remaining legacy debt is 297 if no
-independent changes intervene. Source counts do not imply guaranteed wall-clock teardown or executed skipped tests.
+contracts remain unchanged. No new framework, watchdog, debt exemption or package-wide timing rewrite is introduced.
+The accepted inventory checkpoint contained 329 debt entries / 89 resolutions; 334 is historical. The reviewed
+final candidate contains 297 debt entries / 90 resolutions, including one verified native cancel-callback record. Source counts do not imply guaranteed wall-clock teardown or executed skipped tests.
 #1417 remains open for subsequent package batches; production defects observed during proof require measured scope
 reconciliation. Accepted inventory is preserved at checkpoint `0085323e`; design review precedes implementation.

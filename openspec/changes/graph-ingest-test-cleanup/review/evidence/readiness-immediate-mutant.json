@@ -1,0 +1,20 @@
+{
+  "command": [
+    "scripts/run-integration-tests.sh",
+    "-v",
+    "-run",
+    "^TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure$",
+    "./processor/graph-ingest"
+  ],
+  "edit_before": "require.NoError(t, owner.stop(ctx))",
+  "edit_after": "// Mutation: omit the explicit terminal fence before Purge.",
+  "original_sha256": "d8b9569c3a0a59432f9d07fbbf95029296e76fa18da580e3365f68495678dd1d",
+  "mutant_sha256": "d894666f001d1c3268dd18142edb0a05dfc3bc38529567f634912f1faabe2e9a",
+  "restored_sha256": "d8b9569c3a0a59432f9d07fbbf95029296e76fa18da580e3365f68495678dd1d",
+  "exit_code": 1,
+  "elapsed_seconds": 3.2499627079814672,
+  "oracle": "explicit Stop did not join the status producer before Purge",
+  "oracle_reached": true,
+  "runner_completed": true,
+  "log": "/private/tmp/gh1423-readiness-immediate-mutant.log"
+}

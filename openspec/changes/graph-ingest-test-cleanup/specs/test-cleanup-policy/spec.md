@@ -18,6 +18,9 @@ These obligations SHALL NOT imply that a supplied deadline interrupts a contextl
 joined all work, or that terminal error authorizes a second Stop. A recorded successful join SHALL require observed
 completion evidence for the owned work in question. Skipped-source changes SHALL NOT be reported as executed tests.
 
+Existing exact baseline entries remain tracked legacy debt under the admission requirements. This requirement
+does not certify those unchanged fixtures as compliant or authorize new exemptions.
+
 #### Scenario: Setup assertion before transfer
 - **GIVEN** a returning helper has acquired a component and installed provisional ownership
 - **WHEN** initialization, Start or a subsequent setup assertion exits before successful transfer

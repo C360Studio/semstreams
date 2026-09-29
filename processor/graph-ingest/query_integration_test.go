@@ -21,7 +21,8 @@ import (
 // the former msg-style handlers (handleQueryEntity, handleQueryBatch) were
 // deleted as part of gh#164 part 1 dead-code cleanup.
 func TestIntegration_QueryHandlers(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
 	// Create NATS test client with required streams
 	streams := []natsclient.TestStreamConfig{
@@ -45,11 +46,10 @@ func TestIntegration_QueryHandlers(t *testing.T) {
 	require.NoError(t, err)
 
 	component := comp.(*Component)
+	owner := newGraphIngestTestOwner(component)
+	defer owner.finish(ctx, t)
 	require.NoError(t, component.Initialize())
-	require.NoError(t, component.Start(ctx))
-	defer func() {
-		_ = component.Stop(context.Background())
-	}()
+	require.NoError(t, component.Start(owner.startContext(ctx)))
 
 	// Wait for component to be ready
 	time.Sleep(100 * time.Millisecond)
