@@ -20,7 +20,7 @@ E2E tests follow the **Observer Pattern**: they run against real services in Doc
 task e2e:core        # Platform boots, data flows (~10s)
 task e2e:structural  # Rules + PathRAG (~30s)
 task e2e:statistical # BM25 + community detection (~60s)
-task e2e:semantic    # Neural embeddings + LLM (~90s)
+task e2e:semantic    # Neural embeddings + LLM (~15 min on CI, gh#1117 measurement 2026-09-29)
 
 # Cleanup
 task e2e:clean

@@ -5,7 +5,7 @@ version: "3"
 
 tasks:
   default:
-    desc: "Semantic tier: Neural embeddings + LLM (~90s)"
+    desc: "Semantic tier: Neural embeddings + LLM (~15 min on a 4-vCPU CI runner, measured 2026-09-29 for gh#1117; 12 min is the scenario, 9.6 min of that its three quality stages)"
     silent: false
     deps:
       - task: ":e2e:check-ports"
