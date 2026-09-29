@@ -2,6 +2,7 @@ package rule
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"runtime"
 	"strings"
@@ -239,5 +240,71 @@ func TestConfigManagerStopRefusesANilContext(t *testing.T) {
 	rcm.lifecycleMu.Unlock()
 	if terminal {
 		t.Fatal("a refused Stop marked the manager terminal")
+	}
+}
+
+// repeatedStopTrials is how many times each completed-Stop regression repeats
+// its Stop. The defect is a select race between a closed completion fence and
+// an ended context, which Go resolves at random, so one call proves nothing:
+// with the nonblocking fence check deleted, each trial fails with probability
+// about one half, and 200 trials leave a false pass at about 2^-200.
+const repeatedStopTrials = 200
+
+// stoppedConfigManager returns a manager whose reconcile loop ran and whose
+// Stop has completed: its completion fence is closed.
+func stoppedConfigManager(t *testing.T) *ConfigManager {
+	t.Helper()
+	rcm, err := NewConfigManager(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewConfigManager: %v", err)
+	}
+	target := &fakeRuleTarget{applied: make(chan map[string]any, 1)}
+	if err := rcm.Start(context.Background(), []HotReloadTarget{target}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	rcm.lifecycleMu.Lock()
+	done := rcm.done
+	rcm.lifecycleMu.Unlock()
+	if done == nil {
+		t.Fatal("Start with a target must run the reconcile loop")
+	}
+	stopConfigManagerWithinBudget(t, rcm)
+	select {
+	case <-done:
+	default:
+		t.Fatal("the first Stop returned before the reconcile loop exited")
+	}
+	return rcm
+}
+
+// A Stop after a completed Stop is a nil no-op even when its context has
+// already been canceled: completion was observed, so the ended context must
+// not be reported as a loop still running. Codex round 2 on #1188.
+//
+// spec: component-runtime-config / Config Manager delivers a registered key family to its owner
+func TestConfigManagerRepeatedStopAfterCompletionIgnoresACanceledContext(t *testing.T) {
+	rcm := stoppedConfigManager(t)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for trial := range repeatedStopTrials {
+		if err := rcm.Stop(canceled); err != nil {
+			t.Fatalf("trial %d of %d: completed repeated Stop with a canceled context = %v, want nil",
+				trial+1, repeatedStopTrials, err)
+		}
+	}
+}
+
+// The same for a context whose deadline has already passed.
+//
+// spec: component-runtime-config / Config Manager delivers a registered key family to its owner
+func TestConfigManagerRepeatedStopAfterCompletionIgnoresAnExpiredDeadline(t *testing.T) {
+	rcm := stoppedConfigManager(t)
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	for trial := range repeatedStopTrials {
+		if err := rcm.Stop(expired); err != nil {
+			t.Fatalf("trial %d of %d: completed repeated Stop with an expired deadline = %v, want nil",
+				trial+1, repeatedStopTrials, err)
+		}
 	}
 }

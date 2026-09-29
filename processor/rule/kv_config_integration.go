@@ -177,6 +177,14 @@ func (rcm *ConfigManager) Stop(ctx context.Context) error {
 	if done == nil {
 		return nil
 	}
+	// Completion already observed wins over an ended ctx: with both ready, the
+	// bounded select below could pick either, and a completed repeated Stop
+	// must be a nil no-op (Codex round 2 on #1188; as BaseService.Stop does).
+	select {
+	case <-done:
+		return nil
+	default:
+	}
 	select {
 	case <-done:
 		return nil

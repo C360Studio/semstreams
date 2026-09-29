@@ -96,3 +96,42 @@ func TestRegisterRuleConfigServiceRefusesBeforeTheComponentManager(t *testing.T)
 	_, registered := manager.GetService(ruleConfigServiceName)
 	require.False(t, registered, "a refused registration must admit nothing")
 }
+
+// adapterRepeatedStopTrials is how many canceled-context Stops the adapter
+// regression makes after a completed Stop. The defect is a select race that Go
+// resolves at random, so each trial fails with probability about one half
+// when the rule manager's nonblocking fence check is missing; 200 trials leave
+// a false pass at about 2^-200.
+const adapterRepeatedStopTrials = 200
+
+// idleTarget is a hot-reload target that accepts every update.
+type idleTarget struct{}
+
+func (idleTarget) LoadedRuleDefinitions() map[string]rulepkg.Definition { return nil }
+func (idleTarget) ValidateConfigUpdate(map[string]any) error            { return nil }
+func (idleTarget) ApplyConfigUpdate(map[string]any) error               { return nil }
+
+// A completed rule-config Stop repeated under a canceled context is a nil
+// no-op through the adapter, so the service manager never sees a false
+// "reconcile loop still running" error. Codex round 2 on #1188.
+//
+// spec: component-runtime-config / Config Manager delivers a registered key family to its owner
+func TestRuleConfigServiceRepeatedStopAfterCompletionIgnoresACanceledContext(t *testing.T) {
+	rules, err := rulepkg.NewConfigManager(quietLogger())
+	require.NoError(t, err)
+	ruleConfig := newRuleConfigService(rules, []rulepkg.HotReloadTarget{idleTarget{}}, quietLogger())
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	defer cancelStart()
+	require.NoError(t, ruleConfig.Start(startCtx))
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), ruleConfigStopBudget)
+	defer cancelStop()
+	require.NoError(t, ruleConfig.Stop(stopCtx))
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for trial := range adapterRepeatedStopTrials {
+		require.NoError(t, ruleConfig.Stop(canceled),
+			"trial %d of %d: completed repeated Stop with a canceled context", trial+1, adapterRepeatedStopTrials)
+	}
+	require.Equal(t, service.StatusStopped, ruleConfig.Status())
+}
