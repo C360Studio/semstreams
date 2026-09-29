@@ -56,5 +56,3 @@ from a measurement.
 - **GIVEN** a probe that returns HTTP 200 with zero entities
 - **WHEN** the stage fails
 - **THEN** the error states that the query returned no entities and carries no deadline text.
-```
-

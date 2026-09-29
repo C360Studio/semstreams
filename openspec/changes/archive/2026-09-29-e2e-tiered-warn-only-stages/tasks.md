@@ -21,10 +21,12 @@
       (`validate-hierarchy-inference`, `validate-incoming-index-predicates`, `validate-bidirectional-traversal`,
       `validate-inverse-edges-materialized`) and `validate-entity-structure`'s sample read-error arm.
 - [x] 2.2 `task e2e:statistical` green on the branch (CI `e2e statistical` on the code head `263b60e2`, E2E Ladder
-      run 36641734740). The #1117 path-only semantic run is sequenced after this PR by the owner ruling on #1117
-      (2026-09-29, verbatim "the warn-only slice #1426 (beta.163) lands first"): its first measurement is PR #1425's
-      rebased run, and its reds are filed there.
-- [x] 2.3 Review through the project reviewer contract (rounds 1–3 APPROVE, on PR #1427); owner acceptance on #1426
-      (2026-09-30, transcribed comment on the issue).
+      run 36641734740). The #1117 path-only semantic run is sequenced after this PR by the sequencing bullet of the
+      transcribed path-only ruling on #1117 (2026-09-29; the owner's verbatim words there are only "path-only gate
+      for 1117"; the bullet reads "the warn-only slice #1426 (beta.163) lands first", and the owner was invited to
+      correct it): its first measurement is PR #1425's rebased run, and its reds are filed there.
+- [x] 2.3 Review through the project reviewer contract (round 1 CHANGES REQUESTED, on #1426, fixed per the owner's
+      round-1 rulings; rounds 2 and 3 APPROVE, on PR #1427); owner acceptance on #1426 (transcribed comment on the
+      issue, created 2026-09-29T22:58Z).
 
 Landing tasks (archive, spec sync, ticks) live on the PR checklist per the #1230 ruling, not here.
