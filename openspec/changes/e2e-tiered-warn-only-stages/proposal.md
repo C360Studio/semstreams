@@ -20,6 +20,12 @@ https://github.com/C360Studio/semstreams/issues/1426#issuecomment-5894112756.
   `test-predicate-list`, `test-predicate-stats`) either returns an error on the outcome it exists to detect, or
   leaves the per-PR variants' stage table with the reason recorded in the table comment. The owner absorbed the
   six on 2026-09-29 ("agree on 1 - let's fix the class while we are in here").
+- The same, for the twelve more stages review round 1's sweep of every stage function found (owner, 2026-09-29,
+  "q2 absorb"): `verify-index-population`, `verify-search-quality`, `verify-outputs`,
+  `validate-bidirectional-traversal`, `validate-inverse-edges-materialized`, `validate-hierarchy-inference`,
+  `validate-incoming-index-predicates`, `verify-entity-retrieval`, `validate-entity-structure`,
+  `test-embedding-fallback`, `validate-processing`'s health arm, and `verify-entity-count`'s nil-client arm; and
+  `validate-rules` waits, bounded by `ValidationTimeout`, for the thresholds it asserts ("q1 - wait but bound").
 - Where a probe's failure is a deadline, the assertion distinguishes "timed out" from "returned nothing"; a
   deadline the CI runner cannot meet is filed with its measurement, never warned past.
 - The per-PR variants (statistical; the #1117 path-only semantic run) are green on main after the change, or

@@ -17,7 +17,8 @@ a5edd5b61939c48521e41d5389f6e15990799d2459866a4ffbcbbb3a947435b3  tiered_semanti
 5b6918e9c27cd1c1d9f735eae7f0c0f0b7daecf4a4d900eeaf951c63663b7904  validate_infra.go
 ```
 
-Fixed files (as committed):
+Fixed files at task-2.1 commit `b8ebea30` (the mutation backups of § 1-2 were taken from these; § 4 and round 1
+changed every file but `tiered_structural.go`, so five of the six no longer match HEAD):
 
 ```
 78e80f43a34c7ca54aec60a9344a25eeaea0fa4f56aa99ddd4a9b4a86970db4d  tiered.go
@@ -26,6 +27,24 @@ Fixed files (as committed):
 c5553e469bae52f1510a47695635f8dd3a1103d8c5d966223ff054d0dacff166  tiered_semantic.go
 d84ee6f4688cb7b03660b37b7318d8a5d8885e04b4cded7d02291cb67f7d214b  validate_infra.go
 1e17a833f8fde8b5585be4f6b2e73a6ceb1dab943f328cbc9ab864c714d42bb2  tiered_warn_only_stages_test.go
+```
+
+Files at HEAD (`git show dddae002:<file> | shasum -a 256`; the round-1 code head; the later commit touches only docs):
+
+```
+29eb0d43b093e4edc862a9dcad6a5d819a53dd6886b137c092537f27638cb5d3  tiered.go
+1d540f930e56330bbd1323f75e44b92bf1979528050d212a094b7f02a628c3cb  tiered_structural.go
+55a5add2a3428ec5eb1c511488fa56dade5460dc9ca079a94dc688e62a81251f  tiered_statistical.go
+a731fedd998a3c3dcc2e174d98cf1da721608488120cf3328ead69d81a881c8c  tiered_semantic.go
+394443bfdcccba2f920bd2d66444e7c5387395cc473a76a1eadac6acafdbe007  validate_infra.go
+8819884ba143610d607eade3d6c1ceaf18cef837972dc82ad4d82b5412a81b42  tiered_warn_only_stages_test.go
+6cef0be37b3d0cc2ea2a1daec5b31ea76a5ae08fa9f4eeedf3724ba2d5bece0d  validate_structural.go
+0087a5810117d07f14cb8dd5fe88038454b678af0aa1a429df78169f69743112  validate_search.go
+5995e0c781eb1b6fcdf6ddbaaa6c56bf6106e449a541e905982940973cd348e1  validate_entity.go
+6892b14f4dec187aeb672cee686bdd1529f072c93bdc0042e69bc52585a875df  search/queries.go
+a60e844b3312387c8d54125233b191da9925a79e679a863a94238463bd7e0dd7  tiered_warn_only_round1_test.go
+008405ae0f39ecc2152a9619eb071071db851e2e61746b9ca87f95a4f77f3894  tiered_warn_only_round1_nats_test.go
+2ffba9bc3a143255c8a29ab8c1795b095adca2c4d00c12898b8911c3e111dd6b  ../client/metrics.go
 ```
 
 ## 1. Unit mutation checks at the production seam (HTTP GraphQL endpoint, metrics scrape)
@@ -427,3 +446,216 @@ ok  	github.com/c360studio/semstreams/test/e2e/scenarios	0.277s
 time=2026-09-29T15:03:55.994-05:00 level=INFO msg="Scenario completed successfully" duration=25.006969209s assertions_run=0
 (metrics excerpt: actions_dispatched:7 graphrag_global_communities_found:5 nl_temporal_intent_tests_passed:2 predicate_stats_entity_count:58 rules_firings_count:3)
 ```
+
+## 5. Review round 1 (owner rulings Q1 "wait but bound", Q2 "absorb"; design § 10b)
+
+Commits: `3676f167` (inventory sweep), `587881b3` (twelve stages, B2), `12ab2167` (B1 wait, M1), `1eb84e8f` (H1-H3),
+`dddae002` (KV-seam tests), then this docs commit. Every mutant below was made from a `cp` backup with its SHA-256
+recorded and restored the same way (MATCH printed per file); no stash, checkout, or restore was used.
+
+### 5.1 Sweep pins
+
+```
+$ { echo "base: 6127d0be43e9255258adc72049418cab0c53220f"; echo; sed -n '/^## Round-1 sweep/,$p' inventory.md; } > $SP/round1-inventory.md
+$ scripts/inventory-verify.sh $SP/round1-inventory.md
+changed since base (6127d0be..HEAD):
+  (none)
+pins=76 ok=76 moved=0 ambiguous=0 drift=0 malformed=0 unparsed=0
+```
+
+Run before the round-1 code commits, so the pins describe the defect at `6127d0be`. The whole-file
+`task inventory:verify -- inventory.md` is red by construction once the fixes land (the pinned warn lines are gone;
+at `6127d0be` it already read `pins=168 ok=36 moved=96 ambiguous=15 drift=21`).
+
+### 5.2 Unit mutation checks (the round-1 tests, each pre-fix file restored in turn)
+
+The mutant is the file's content at `6127d0be`, i.e. every round-1 arm in that file back on its warn/pass path.
+`tiered_warn_only_round1_test.go` drives the HTTP seams (`/components/list`, `/metrics`, GraphQL);
+`tiered_warn_only_round1_nats_test.go` drives the KV seams through `NATSValidationClient` against an in-process
+JetStream server holding the readers' exact key layouts.
+
+```
+===== BASELINE at dddae002
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	1.195s
+
+===== MUTANT: test/e2e/scenarios/validate_structural.go <- git show 6127d0be:test/e2e/scenarios/validate_structural.go (warn path restored); fixed sha 6cef0be37b3d0cc2ea2a1daec5b31ea76a5ae08fa9f4eeedf3724ba2d5bece0d
+72432661c765bf70426b765c1031b6e329bf653ba03b9a36f107a56b28a95935  test/e2e/scenarios/validate_structural.go
+--- FAIL: TestIndexPopulation_EmptyRequiredIndexFails (0.02s)
+--- FAIL: TestRound1_NATSSeamStages_NoClientFails (0.00s)
+    --- FAIL: TestRound1_NATSSeamStages_NoClientFails/verify-index-population (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	1.184s
+FAIL
+restored from backup: 6cef0be37b3d0cc2ea2a1daec5b31ea76a5ae08fa9f4eeedf3724ba2d5bece0d MATCH
+
+===== MUTANT: test/e2e/scenarios/validate_search.go <- git show 6127d0be:test/e2e/scenarios/validate_search.go (warn path restored); fixed sha 0087a5810117d07f14cb8dd5fe88038454b678af0aa1a429df78169f69743112
+1770b17e3c137b7051cb88a9a0ea14ab5d4f73b785a3426e1c78757022e475f2  test/e2e/scenarios/validate_search.go
+--- FAIL: TestVerifySearchQuality (0.01s)
+    --- FAIL: TestVerifySearchQuality/no_hits_fails_in_both_variants (0.00s)
+    --- FAIL: TestVerifySearchQuality/transport_failure_fails (0.00s)
+    --- FAIL: TestVerifySearchQuality/missed_known_answer_fails_under_statistical_(BM25) (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	1.205s
+FAIL
+restored from backup: 0087a5810117d07f14cb8dd5fe88038454b678af0aa1a429df78169f69743112 MATCH
+
+===== MUTANT: test/e2e/scenarios/search/queries.go <- git show 6127d0be:test/e2e/scenarios/search/queries.go (warn path restored); fixed sha 6892b14f4dec187aeb672cee686bdd1529f072c93bdc0042e69bc52585a875df
+02a3092747dfb3ddab074cb7ea4d92d0f7ec4403640e6a3c45ba931ca395b273  test/e2e/scenarios/search/queries.go
+--- FAIL: TestVerifySearchQuality (0.01s)
+    --- FAIL: TestVerifySearchQuality/safety_pattern_matches_the_minted_document_ID (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	1.199s
+FAIL
+restored from backup: 6892b14f4dec187aeb672cee686bdd1529f072c93bdc0042e69bc52585a875df MATCH
+
+===== MUTANT: test/e2e/scenarios/validate_infra.go <- git show 6127d0be:test/e2e/scenarios/validate_infra.go (warn path restored); fixed sha 394443bfdcccba2f920bd2d66444e7c5387395cc473a76a1eadac6acafdbe007
+d84ee6f4688cb7b03660b37b7318d8a5d8885e04b4cded7d02291cb67f7d214b  test/e2e/scenarios/validate_infra.go
+--- FAIL: TestVerifyOutputs_MissingOutputFails (0.00s)
+--- FAIL: TestValidateProcessing_UnhealthyGraphComponentFails (0.00s)
+--- FAIL: TestEmbeddingFallback_UnhealthyGraphEmbeddingFails (0.00s)
+    --- FAIL: TestEmbeddingFallback_UnhealthyGraphEmbeddingFails/unhealthy (0.00s)
+    --- FAIL: TestEmbeddingFallback_UnhealthyGraphEmbeddingFails/absent (0.00s)
+--- FAIL: TestValidateRules_WaitsForThresholdsWithinTheBound (0.00s)
+--- FAIL: TestRuleStages_FailedMetricsReadFails (0.02s)
+    --- FAIL: TestRuleStages_FailedMetricsReadFails/validate-rules (0.02s)
+    --- FAIL: TestRuleStages_FailedMetricsReadFails/wait-for-rule-stabilization (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	1.151s
+FAIL
+restored from backup: 394443bfdcccba2f920bd2d66444e7c5387395cc473a76a1eadac6acafdbe007 MATCH
+
+===== MUTANT: test/e2e/scenarios/validate_entity.go <- git show 6127d0be:test/e2e/scenarios/validate_entity.go (warn path restored); fixed sha 5995e0c781eb1b6fcdf6ddbaaa6c56bf6106e449a541e905982940973cd348e1
+67c11c0757ec1b261ce80cd2c4a7e3bbdcceb78ddb61feb0dc6f36d2487544f0  test/e2e/scenarios/validate_entity.go
+--- FAIL: TestEntityStructure_EmptySampleFails (0.02s)
+--- FAIL: TestEntityRetrieval_MissingFixtureEntityFails (0.02s)
+--- FAIL: TestRound1_NATSSeamStages_NoClientFails (0.00s)
+    --- FAIL: TestRound1_NATSSeamStages_NoClientFails/verify-entity-count (0.00s)
+    --- FAIL: TestRound1_NATSSeamStages_NoClientFails/verify-entity-retrieval (0.00s)
+    --- FAIL: TestRound1_NATSSeamStages_NoClientFails/validate-entity-structure (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	1.194s
+FAIL
+restored from backup: 5995e0c781eb1b6fcdf6ddbaaa6c56bf6106e449a541e905982940973cd348e1 MATCH
+
+===== MUTANT: test/e2e/scenarios/tiered_semantic.go <- git show 6127d0be:test/e2e/scenarios/tiered_semantic.go (warn path restored); fixed sha a731fedd998a3c3dcc2e174d98cf1da721608488120cf3328ead69d81a881c8c
+c5553e469bae52f1510a47695635f8dd3a1103d8c5d966223ff054d0dacff166  test/e2e/scenarios/tiered_semantic.go
+--- FAIL: TestHierarchyInference_TooFewContainersFails (0.23s)
+--- FAIL: TestIncomingIndex_NoContainerFails (0.03s)
+--- FAIL: TestBidirectionalTraversal (0.07s)
+    --- FAIL: TestBidirectionalTraversal/no_container_fails (0.02s)
+    --- FAIL: TestBidirectionalTraversal/no_member_edge_fails (0.02s)
+--- FAIL: TestInverseEdges (0.09s)
+    --- FAIL: TestInverseEdges/missing_contains_edge_fails_in_statistical (0.02s)
+    --- FAIL: TestInverseEdges/count_mismatch_fails (0.02s)
+--- FAIL: TestRound1_NATSSeamStages_NoClientFails (0.00s)
+    --- FAIL: TestRound1_NATSSeamStages_NoClientFails/validate-hierarchy-inference (0.00s)
+    --- FAIL: TestRound1_NATSSeamStages_NoClientFails/validate-incoming-index-predicates (0.00s)
+    --- FAIL: TestRound1_NATSSeamStages_NoClientFails/validate-bidirectional-traversal (0.00s)
+    --- FAIL: TestRound1_NATSSeamStages_NoClientFails/validate-inverse-edges-materialized (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	0.983s
+FAIL
+restored from backup: a731fedd998a3c3dcc2e174d98cf1da721608488120cf3328ead69d81a881c8c MATCH
+
+===== MUTANT: test/e2e/scenarios/tiered_statistical.go <- git show 6127d0be:test/e2e/scenarios/tiered_statistical.go (warn path restored); fixed sha 55a5add2a3428ec5eb1c511488fa56dade5460dc9ca079a94dc688e62a81251f
+8b32dacb3a17eb107778517c58927ac3a096c25da994ada6a90f7209dac4f309  test/e2e/scenarios/tiered_statistical.go
+--- FAIL: TestGraphRAGGlobal_ClientDeadlineIsOverridable (5.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	6.151s
+FAIL
+restored from backup: 55a5add2a3428ec5eb1c511488fa56dade5460dc9ca079a94dc688e62a81251f MATCH
+
+===== MUTANT: test/e2e/client/metrics.go <- git show 6127d0be:test/e2e/client/metrics.go (warn path restored); fixed sha 2ffba9bc3a143255c8a29ab8c1795b095adca2c4d00c12898b8911c3e111dd6b
+bfde67fc56595da90432ea5fd91c39bc1c867612cdd7f40dd52a06867176def9  test/e2e/client/metrics.go
+--- FAIL: TestRuleStages_FailedMetricsReadFails (0.05s)
+    --- FAIL: TestRuleStages_FailedMetricsReadFails/validate-rules (0.04s)
+    --- FAIL: TestRuleStages_FailedMetricsReadFails/wait-for-rule-stabilization (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	1.180s
+FAIL
+restored from backup: 2ffba9bc3a143255c8a29ab8c1795b095adca2c4d00c12898b8911c3e111dd6b MATCH
+
+===== RESTORED
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	1.166s
+```
+
+Inspection-only in round 1: the failed COMMUNITY_SUMMARIES read arms (H2; `s.natsClient` is concrete and a live read
+failure is not injectable without breaking the rest of the stage), and `validate-incoming-index-predicates`'
+entries-without-predicates arm, which the reader cannot produce (`incomingEntryFromCompositeKey` drops an empty
+predicate, `client/nats.go:981-983`).
+
+### 5.3 Gates at `dddae002`
+
+```
+$ go build ./...                                  → go build exit 0
+$ task build:e2e                                  → Built cmd/e2e/e2e / task build:e2e exit 0
+$ task lint                                       → ok  github.com/c360studio/semstreams/test/natsclient 0.555s / task lint exit 0
+$ go test -race -count=1 ./test/e2e/scenarios/    → ok  github.com/c360studio/semstreams/test/e2e/scenarios 4.444s
+$ task test                                       → 0 FAIL lines / task test exit 0
+```
+
+The first `task lint` run failed `lint:cleanup-roots` (`new uncertain-owner-provenance:
+test/e2e/scenarios/tiered_warn_only_round1_nats_test.go|newKVFixture|ordinary|nc.Close|unresolved callback`): the
+fixture opened a second raw `nats.Conn`. It now takes JetStream from the validation client's own connection
+(`vc.Client().JetStream()`), whose cleanup is `vc.Close(context.Background())`; the guard passes. The baseline was not
+touched.
+
+### 5.4 Statistical tier at `dddae002`
+
+`task e2e:statistical`, task exit 0. Host check first: `docker ps --format '{{.Names}}'` printed nothing;
+`pgrep -fl e2e` exited 1. 42 `completed` stage lines, 0 `FAILED`. Every stage round 1 changed:
+
+```
+[3/42] validate-processing completed in 9.996333ms
+[8/42] validate-hierarchy-inference completed in 5.902459ms
+[9/42] verify-entity-count completed in 3.071667ms
+[10/42] verify-entity-retrieval completed in 2.65625ms
+[11/42] validate-entity-structure completed in 2.570542ms
+[12/42] verify-index-population completed in 21.270667ms
+[22/42] test-nl-temporal-intent completed in 17.119542ms
+[27/42] verify-search-quality completed in 6.1045ms
+[30/42] test-embedding-fallback completed in 1.213292ms
+[31/42] validate-community-structure completed in 24.412061792s
+[34/42] validate-incoming-index-predicates completed in 2.620541ms
+[35/42] validate-bidirectional-traversal completed in 3.20225ms
+[36/42] validate-inverse-edges-materialized completed in 3.505ms
+[38/42] test-graphrag-global completed in 8.756792ms
+[39/42] wait-for-rule-stabilization completed in 215.640916ms
+[40/42] validate-rules completed in 27.536958ms
+[42/42] verify-outputs completed in 860.917µs
+time=2026-09-29T16:17:26.450-05:00 level=INFO msg="Scenario completed successfully" duration=25.300292417s metrics="map[…]" assertions_run=0
+(metrics excerpt: actions_dispatched:7 bidir_member_count:1 entities_retrieved:5 fallback_verified:1 hierarchy_container_count:46 indexes_populated:7 inverse_symmetry_valid:1 known_answer_tests_passed:7 known_answer_tests_total:7 outputs_found:2 rules_firings_count:3 rules_threshold_wait_ms:8 
+```
+
+`metadata.warnings` in `statistical-20260929-161726.json` now holds only declared recorder output: the average-score
+arm and the three community ground-truth violations. The known-answer miss that was in every earlier run is gone
+(7/7) with the pattern fix.
+
+B1 measured wait: `rules_threshold_wait_ms:8` on this host, where the first read already showed 3 firings and 7
+actions. The CI runner, which read 1 firing at 17 ms in run 36623877500, is where the wait matters; whether its
+fixture reaches 2 within the 30 s bound is measured by the PR's `e2e statistical` job, not here.
+
+### 5.5 H3 and M4
+
+H3: the attribution probe for the semantic "last hour" `count=0` was not made. The instruction was to probe only if an
+`e2e:semantic:up` target exists; `task --list` has `e2e:semantic:debug` (full ML stack build) and no `:up`. The
+outcome is recorded as unattributed (design § 9, § 10b); nothing is filed.
+
+M4: delivered, `docs/contributing/02-e2e-tests.md` § Assertion Strategy, one sentence.
+
+### 5.6 Per-ruling conformance (M5)
+
+| Ruling (source) | Implemented at | Conforms |
+|---|---|---|
+| "pull the warn-only slice into 163" (owner, #1426) | placement only: #1426 and PR #1427 on `v1.0.0-beta.163` | yes (no code) |
+| "agree on 1 - let's fix the class" (owner, #1426): fourteen paths assert | `tiered_structural.go:1073`, `:1182`, `:1442`, `:1853`; `tiered_statistical.go:233`, `:360`; § 1-4 above | yes |
+| D1(a): graphrag local/global statistical only | `tiered.go:407-408` | yes |
+| D2(a): anomaly row leaves, code stays for #620 | `tiered.go:420` (comment; row gone); `executeValidateAnomalyDetection` still defined | yes |
+| D3(b): `validate-rules` asserts `MinRuleFirings`/`MinActionsDispatched` | `validate_infra.go:509`, `:512` | yes (red on CI at `6127d0be`; Q1 answers it) |
+| D4(a): predicate decoders read snake_case | `tiered_structural.go:1969`, `:1984-1985`; `tiered_statistical.go:60` (same class) | yes |
+| Q1(a) "wait but bound": wait on the counters, bounded by `ValidationTimeout`, measured wait recorded | `validate_infra.go:494` (call, `rules_threshold_wait_ms`), `:523` (`awaitRuleThresholds`) | yes |
+| Q2 "absorb": twelve stages from a sweep of every stage function | inventory § Round-1 sweep; `validate_structural.go:84`; `validate_search.go:53`; `validate_infra.go:201`, `:249`, `:433`; `validate_entity.go:145`, `:379`, `:399`; `tiered_semantic.go:1015`, `:1179`, `:1246`, `:1338`, `:1454` | yes |
+| "path-only gate for 1117" (owner, #1117): this change lands first; model-owned outcomes leave per-PR variants | `tiered.go:351` (`test-nl-temporal-intent` statistical only); no `.github/` or `taskfiles/` edit | yes |
+| #1222: no parallel assertion accounting; `AssertionsRun` untouched | `git diff 6127d0be -- test/ \| grep -c AssertionsRun` → 0; `cmd/e2e/main.go` unchanged | yes |
+| Simple over edge-case; no new mechanism (owner, 2026-09-22) | round 1 adds two unexported helpers: `awaitRuleThresholds` (the wait Q1 rules) and `searchQualityVerdict` (the stage's error return, split out); `ExtractRuleMetrics` changed in place, no new surface | yes, with those two named |
+| Proposal boundary: no 10 s deadline changes without a measurement | `tiered_statistical.go:290` keeps 10 s as the helper's default | yes |

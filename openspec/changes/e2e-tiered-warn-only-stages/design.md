@@ -500,6 +500,9 @@ Record (no issue):
 - `validate-rule-transitions`' behavior on today's structural tier — no structural run exists from today; the last
   structural results in the scratchpad are 2026-01-28 (rules `triggered_count:3`, from `validate-rules`).
 - `graphrag_global` `member_count == 0` (`:373-375`): never observed on this runner; left a warning for that reason.
+- (Round 1, H3) The semantic `test-nl-temporal-intent` "last hour" probe's `count=0` at 5.6 s warm on the LLM
+  classifier route: **unattributed**. What the classifier returned was not observed (§ 10b, H3); whether the outcome is
+  model-owned or a framework fault is undetermined, and nothing is filed on it.
 
 ## § 10 Skills, invariants, tasks
 
@@ -536,3 +539,53 @@ Record (no issue):
 - **§ 9:** the statistical variant is measured green end to end at `c418ec2e` (42/42, 25.0 s, local); the
   semantic variant after this change is still unmeasured and PR #1425's rebased path-only run is its first
   measurement. Three arms beyond § 2's list also assert, each with its reason in evidence.md § 1.
+
+### § 10b Review round 1 (2026-09-29; owner rulings Q1 "wait but bound", Q2 "absorb")
+
+Sweep: all 54 stage functions in the table, not four files (inventory.md § Round-1 sweep, pins verified 76/76 at
+`6127d0be`). Twelve stages beyond the fourteen carry the class. One row each; "A" = returns an error on the detected
+outcome; measured values are the four local statistical runs and the two semantic CI runs of 2026-09-29.
+
+| Stage (variants) | Decision | Why that shape | Measured before the change |
+|---|---|---|---|
+| `verify-index-population` (all) | A | An empty or unreadable required index is framework-owned in every tier. | `indexes_populated:7/7` |
+| `verify-search-quality` (stat, sem) | A (path arm, both); A-by-variant (known-answer: assert statistical, RECORDER semantic); RECORDER (average score, both) | Hits existing is the index/search path, framework-owned in both. Under statistical the ranker is BM25 (pure Go, deterministic over the fixed corpus), so a missed known answer is a framework outcome; under semantic the embedding model ranks, so it is model-owned. The 0.5 average-score bar is calibrated to neither scorer (BM25 averages 0.28 on every run). | 8/8 queries with hits; known-answer 6/7 in all six runs, caused by a stale test pattern, not ranking: `"document.safety"` never matched the minted `…document.content.safety.doc-safety-001`, which was the top hit (0.62). Pattern fixed to `content.safety` (the D4(a) class: a test-owned spelling). |
+| `verify-outputs` (all) | A | A missing output component is framework-owned. | `outputs_found:2/2` (structural too) |
+| `validate-bidirectional-traversal` (all three) | A | No `member` edge into a container, a failed read, or no container is the traversal failing. | `bidir_member_count:1` in all six runs |
+| `validate-inverse-edges-materialized` (all three) | A in statistical/semantic; structural keeps its not-yet-indexed note | Asymmetry is framework-owned. Structural runs this stage without the community wait that precedes it elsewhere, is not per-PR, and has no measurement from today, so its note stays (not a ratchet). The ignored read errors now fail. | `1 member / 1 contains` in all six runs |
+| `validate-hierarchy-inference` (all three) | A | Too few containers is hierarchy inference failing, framework-owned. | 46 ≥ 31 (statistical, semantic); 47 ≥ 32 (structural, 2026-08-20) |
+| `validate-incoming-index-predicates` (all three) | A (no-entities, no-container, no-predicates arms) | Its zero-entries arm already hard-failed; the others passed having checked nothing. Hierarchy runs in every tier this stage runs in. | `incoming_predicate_validation:1` |
+| `verify-entity-retrieval` (all) | A | A known fixture entity missing from ENTITY_STATES is ingest failing. | `entities_retrieved:5/5` |
+| `validate-entity-structure` (all) | A (read-failure and empty-sample arms) | Its structure check already hard-failed; these arms validated nothing. | 5 sampled, 0 validation errors |
+| `test-embedding-fallback` (stat, sem) | A | An unhealthy or absent `graph-embedding` matched neither branch and passed silently; it is the outcome the stage names. | `fallback_verified:1` (stat), `hybrid_mode_verified:1` (sem) |
+| `validate-processing` (all) | A (unhealthy-graph-component arm only) | No later stage reads component health. Its processing-wait arm stays: `wait-for-entity-stabilization` asserts the count. | no unhealthy warning in any run |
+| `verify-entity-count` (all) | A (nil-client arm only) | Its count and critical-entity checks already hard-fail; the nil arm (P13, unreachable) is the same shape as the arms round 0 converted. | — |
+
+Left, with the reason (inventory § Swept and left): `send-mixed-data`, `wait-for-embeddings`,
+`wait-for-rule-stabilization` (waits whose outcome the next stage asserts), the B0/B2 recorders, and three stages in the
+class but outside requirement 1 because no per-PR variant runs them: `validate-entity-triples` (structural),
+`validate-globalsearch-known-answer`'s no-URL arm (semantic, #1117 quality stage), and the structural notes in
+`validate-inverse-edges-materialized` / `validate-incoming-index-predicates`. No recorder was added beyond the two
+`verify-search-quality` arms, which are declared in the stage-table comment and in the spec delta's recorder list.
+
+Other round-1 decisions:
+
+- **B1 (Q1).** `validate-rules` polls `ExtractRuleMetrics` until firings ≥ `MinRuleFirings` and actions ≥
+  `MinActionsDispatched` or `ValidationTimeout` (30 s) elapses, then asserts on the last read
+  (`awaitRuleThresholds`); the wait is recorded as `rules_threshold_wait_ms`. `waitForRuleEvaluations`' early return
+  at ≥ 100 baseline evaluations stays: it waits on evaluations, which the stage asserts only as > 0, so it is not the
+  same defect; the new wait is what gates the asserted counters. Whether a run whose fixture yields one firing ever
+  reaches two is not known in advance; the bound makes it fail at 30 s instead of 17 ms, which is what Q1 rules.
+- **M1.** `ExtractRuleMetrics` swallowed every read error and returned zeros, so no failed-read arm could fire. It now
+  scrapes once and returns a failed scrape as an error (a series not yet exposed is still a zero). This is the E2E
+  metrics client (`test/e2e/client`), not production code; the dead `stages/rules.go` is its only other caller.
+- **H1.** `test-graphrag-global` takes `globalSearchClientTimeout(10 * time.Second)`: the default stays 10 s because the
+  template synthesizer answers in ms; an overlay can raise it.
+- **H2.** A failed COMMUNITY_SUMMARIES read fails `validate-llm-enhancement` and, same shape,
+  `validate-community-structure`; an absent bucket is still an empty store (`client/nats.go:584-586`).
+- **H3.** The row comment now says only: "today" is keyword-routed (`classifier.go:30`); "last hour" matches no
+  keyword pattern (`:31` needs a number), takes the chain's non-keyword route under statistical and the LLM classifier
+  under semantic. The semantic `count=0` at 5.6 s warm is **unattributed**: no `e2e:semantic:up` target exists (only
+  `e2e:semantic:debug`, which builds the full ML stack), so the one attribution probe was not made; nothing in the
+  app log records the classifier's JSON, only the refined query at debug level (`graphrag.go:541`).
+- **M4.** The § 3 sentence is in `docs/contributing/02-e2e-tests.md` § Assertion Strategy.
