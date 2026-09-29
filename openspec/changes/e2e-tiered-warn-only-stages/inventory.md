@@ -407,3 +407,155 @@ from a clean, nil-returning stop (#1409, gh#1283).
 - `grep -cE 'test-nl-path-intent|test-nl-temporal-intent|test-graphrag-local|test-graphrag-global|validate-anomaly-detection|validate-community-structure|validate-virtual-edges|validate-llm-enhancement' test/e2e/scenarios/graph_roundtrip_test.go` → 0
 - `git grep -n "community_ground_truth" -- . ':!test/e2e/scenarios/tiered_statistical.go'` → 3 (2 docs/proposals prior-art mentions, 1 archived openspec task noting it as a "non-gating soft probe")
 - `grep -n "type CommunityResults struct" -A10 test/e2e/scenarios/results.go` → confirms no ground-truth field on that struct
+
+## Round-1 sweep (review B2, owner Q2 "absorb"): every stage function in the table
+
+Pinned at HEAD `6127d0be43e9255258adc72049418cab0c53220f` (after the fourteen-path fix, before the round-1 fix); the
+file's `base:` line stays at the task-1.1 base, so these pins were verified against a scratch copy of this section
+under `base: 6127d0be…` (command below). Scope: all 54 stage functions the stage table names (`tiered.go:250-431`),
+wherever they are defined under `test/e2e/scenarios/`, plus the helpers they call. The class: a stage that appends its
+detected outcome to `result.Warnings`, only prints it, or reaches `return nil` without checking it. Beyond the
+fourteen, twelve stages carry the class; the five the review named come first.
+
+### R1. `verify-index-population` (variants: all)
+- `test/e2e/scenarios/tiered.go:284` — `{"verify-index-population", s.executeVerifyIndexPopulation, nil},`
+- `test/e2e/scenarios/validate_structural.go:14` — `func (s *TieredScenario) executeVerifyIndexPopulation(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/validate_structural.go:16` — `result.Warnings = append(result.Warnings, "NATS client not available, skipping index population verification")`
+- `test/e2e/scenarios/validate_structural.go:82` — `if len(emptyRequired) > 0 {`
+- `test/e2e/scenarios/validate_structural.go:83` — `result.Warnings = append(result.Warnings,`
+
+### R2. `verify-search-quality` (variants: statistical, semantic)
+
+The function has no error return at all: transport errors, zero hits and known-answer misses are all recorded only.
+- `test/e2e/scenarios/tiered.go:361` — `{"verify-search-quality", s.executeVerifySearchQuality, []string{"statistical", "semantic"}},`
+- `test/e2e/scenarios/validate_search.go:20` — `func (s *TieredScenario) executeVerifySearchQuality(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/validate_search.go:36` — `s.searchStats = stats`
+- `test/e2e/scenarios/validate_search.go:369` — `result.Warnings = append(result.Warnings,`
+- `test/e2e/scenarios/validate_search.go:376` — `result.Warnings = append(result.Warnings, fmt.Sprintf("Known-answer test failed: %s", failure))`
+
+The one known-answer miss in every measured run is a stale pattern, not a ranking miss: the query's top hit is
+`…document.content.safety.doc-safety-001` (score 0.62) and the pattern predates the `content` category segment.
+- `test/e2e/scenarios/search/queries.go:96` — `ExpectedPattern: "document.safety", // Matches both doc-safety-001 and doc-emergency-001`
+- `test/e2e/scenarios/search/queries.go:101` — `MustInclude: []string{"document.safety"},`
+
+### R3. `verify-outputs` (variants: all)
+- `test/e2e/scenarios/tiered.go:431` — `{"verify-outputs", s.executeVerifyOutputs, nil},`
+- `test/e2e/scenarios/validate_infra.go:209` — `func (s *TieredScenario) executeVerifyOutputs(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/validate_infra.go:235` — `if len(missingOutputs) > 0 {`
+- `test/e2e/scenarios/validate_infra.go:236` — `result.Warnings = append(result.Warnings, fmt.Sprintf("Missing outputs: %v", missingOutputs))`
+
+### R4. `validate-bidirectional-traversal` (variants: structural, statistical, semantic)
+
+No error return: nil client, empty entity read, no container, a failed incoming read and zero member edges all pass.
+- `test/e2e/scenarios/tiered.go:387` — `{"validate-bidirectional-traversal", s.validateBidirectionalTraversal, []string{"structural", "statistical", "semantic"}},`
+- `test/e2e/scenarios/tiered_semantic.go:1257` — `func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/tiered_semantic.go:1259` — `result.Warnings = append(result.Warnings, "NATS client unavailable for bidirectional traversal")`
+- `test/e2e/scenarios/tiered_semantic.go:1268` — `result.Warnings = append(result.Warnings, "No entities found for bidirectional traversal")`
+- `test/e2e/scenarios/tiered_semantic.go:1291` — `incomingEntries, err := s.natsClient.GetIncomingEntries(ctx, containerID)`
+- `test/e2e/scenarios/tiered_semantic.go:1312` — `result.Metrics["bidir_predicate_preserved"] = boolToInt(memberCount > 0)`
+
+### R5. `validate-inverse-edges-materialized` (variants: structural, statistical, semantic)
+- `test/e2e/scenarios/tiered.go:389` — `{"validate-inverse-edges-materialized", s.validateInverseEdgesMaterialized, []string{"structural", "statistical", "semantic"}},`
+- `test/e2e/scenarios/tiered_semantic.go:1340` — `func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/tiered_semantic.go:1342` — `result.Warnings = append(result.Warnings, "NATS client unavailable for inverse edges validation")`
+- `test/e2e/scenarios/tiered_semantic.go:1351` — `result.Warnings = append(result.Warnings, "No entities found for inverse edges validation")`
+- `test/e2e/scenarios/tiered_semantic.go:1421` — `} else if containsCount == 0 {`
+- `test/e2e/scenarios/tiered_semantic.go:1422` — `if s.config.Variant == "structural" || s.config.Variant == "statistical" {`
+- `test/e2e/scenarios/tiered_semantic.go:1425` — `fmt.Println("[INVERSE EDGES] Note: Contains edges not indexed yet (async update pending)")`
+- `test/e2e/scenarios/tiered_semantic.go:1430` — `} else if containsCount != memberCount {`
+- `test/e2e/scenarios/tiered_semantic.go:1431` — `result.Warnings = append(result.Warnings,`
+
+### R6. `validate-hierarchy-inference` (variants: structural, statistical, semantic)
+- `test/e2e/scenarios/tiered.go:279` — `{"validate-hierarchy-inference", s.validateHierarchyInference, []string{"structural", "statistical", "semantic"}},`
+- `test/e2e/scenarios/tiered_semantic.go:944` — `func (s *TieredScenario) validateHierarchyInference(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/tiered_semantic.go:946` — `result.Warnings = append(result.Warnings, "NATS client not available, skipping hierarchy inference validation")`
+- `test/e2e/scenarios/tiered_semantic.go:967` — `result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get entity IDs: %v", err))`
+- `test/e2e/scenarios/tiered_semantic.go:1008` — `if containerCount < expectedMinContainers {`
+- `test/e2e/scenarios/tiered_semantic.go:1010` — `fmt.Sprintf("Hierarchy inference may not be working: only %d containers for %d source entities (expected at least %d)",`
+
+### R7. `validate-incoming-index-predicates` (variants: structural, statistical, semantic)
+
+Its zero-entries arm already hard-fails outside structural; the arms below still pass.
+- `test/e2e/scenarios/tiered.go:383` — `{"validate-incoming-index-predicates", s.validateIncomingIndexPredicates, []string{"structural", "statistical", "semantic"}},`
+- `test/e2e/scenarios/tiered_semantic.go:1148` — `func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/tiered_semantic.go:1150` — `result.Warnings = append(result.Warnings, "NATS client unavailable for incoming index validation")`
+- `test/e2e/scenarios/tiered_semantic.go:1159` — `result.Warnings = append(result.Warnings, "No entities found for incoming index validation")`
+- `test/e2e/scenarios/tiered_semantic.go:1172` — `if containerID == "" {`
+- `test/e2e/scenarios/tiered_semantic.go:1174` — `result.Metrics["incoming_predicate_validation"] = 0`
+- `test/e2e/scenarios/tiered_semantic.go:1236` — `if len(entries) > 0 && predicateCount == 0 {`
+- `test/e2e/scenarios/tiered_semantic.go:1238` — `fmt.Sprintf("IncomingIndex has %d entries but none have predicates - index may use old []string format", len(entries)))`
+
+### R8. `verify-entity-retrieval` (variants: all)
+- `test/e2e/scenarios/tiered.go:282` — `{"verify-entity-retrieval", s.executeVerifyEntityRetrieval, nil},`
+- `test/e2e/scenarios/validate_entity.go:315` — `func (s *TieredScenario) executeVerifyEntityRetrieval(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/validate_entity.go:317` — `result.Warnings = append(result.Warnings, "NATS client not available, skipping entity retrieval verification")`
+- `test/e2e/scenarios/validate_entity.go:379` — `if len(missingEntities) > 0 {`
+- `test/e2e/scenarios/validate_entity.go:380` — `result.Warnings = append(result.Warnings,`
+
+### R9. `validate-entity-structure` (variants: all)
+
+Its core structure check already hard-fails; the read-failure and empty-sample arms validate nothing and pass.
+- `test/e2e/scenarios/tiered.go:283` — `{"validate-entity-structure", s.executeValidateEntityStructure, nil},`
+- `test/e2e/scenarios/validate_entity.go:388` — `func (s *TieredScenario) executeValidateEntityStructure(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/validate_entity.go:390` — `result.Warnings = append(result.Warnings, "NATS client not available, skipping entity structure validation")`
+- `test/e2e/scenarios/validate_entity.go:397` — `result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get entity sample: %v", err))`
+- `test/e2e/scenarios/validate_entity.go:402` — `result.Warnings = append(result.Warnings, "No entities available for structure validation")`
+
+### R10. `test-embedding-fallback` (variants: statistical, semantic)
+
+An unhealthy `graph-embedding` matches neither branch and the stage passes without a warning.
+- `test/e2e/scenarios/tiered.go:370` — `{"test-embedding-fallback", s.executeTestEmbeddingFallback, []string{"statistical", "semantic"}},`
+- `test/e2e/scenarios/validate_infra.go:393` — `func (s *TieredScenario) executeTestEmbeddingFallback(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/validate_infra.go:426` — `if !semembedAvailable && graphEmbeddingHealthy {`
+- `test/e2e/scenarios/validate_infra.go:430` — `result.Metrics["hybrid_mode_verified"] = 1`
+- `test/e2e/scenarios/validate_infra.go:437` — `result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to connect for fallback test: %v", err))`
+- `test/e2e/scenarios/validate_infra.go:438` — `return nil // Don't fail the whole test`
+
+### R11. `validate-processing`, unhealthy-graph-component arm (variants: all)
+
+Its processing-wait timeout defers to `wait-for-entity-stabilization`, which asserts; the health arm defers to nothing.
+- `test/e2e/scenarios/tiered.go:252` — `{"validate-processing", s.executeValidateProcessing, nil},`
+- `test/e2e/scenarios/validate_infra.go:104` — `func (s *TieredScenario) executeValidateProcessing(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/validate_infra.go:169` — `if !comp.Healthy {`
+- `test/e2e/scenarios/validate_infra.go:172` — `fmt.Sprintf("Graph component %s not healthy: state=%s", comp.Name, comp.State),`
+
+### R12. `verify-entity-count`, nil-client arm only (variants: all)
+
+Its count and critical-entity checks already hard-fail (`validateEntityLoadResult`); only the unreachable nil arm (P13) passes.
+- `test/e2e/scenarios/tiered.go:281` — `{"verify-entity-count", s.executeVerifyEntityCount, nil},`
+- `test/e2e/scenarios/validate_entity.go:143` — `func (s *TieredScenario) executeVerifyEntityCount(ctx context.Context, result *Result) error {`
+- `test/e2e/scenarios/validate_entity.go:145` — `result.Warnings = append(result.Warnings, "NATS client not available, skipping entity count verification")`
+
+### Round-1 review sites outside the class sweep (B1, M1)
+- `test/e2e/scenarios/validate_infra.go:482` — `finalMetrics, err := s.metrics.ExtractRuleMetrics(ctx)`
+- `test/e2e/scenarios/validate_infra.go:484` — `result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get final rule metrics: %v", err))`
+- `test/e2e/scenarios/validate_infra.go:555` — `if baseline.Evaluations >= 100 {`
+- `test/e2e/scenarios/validate_infra.go:716` — `result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get initial rule metrics: %v", err))`
+
+### Swept and left, with the reason
+
+Not in the class. `send-mixed-data` (`validate_infra.go:91`) captures a baseline and detects nothing.
+`wait-for-embeddings` (`:291`, `:309`, `:332`) and `wait-for-rule-stabilization` are waits whose outcome the next
+stage asserts (`validate-embedding-queue-health` fails on `resolved == 0`; `validate-rules`). `validate-processing`'s
+processing-wait arm (`:136`) defers to `wait-for-entity-stabilization`, which hard-fails. `validate-thematic-answer-eval`
+and `validate-partition-colocation` are the declared B0/B2 recorders. `captureAndCompareBaseline` (`tiered.go:514`) is
+not a stage. (`wait-for-rule-stabilization`'s failed-read arm is fixed anyway, as review M1.) The other 23 stage
+functions (54, less these twelve, the twelve round-0 stages still in the table, and the seven named in this section)
+return an error on their detected outcome; per-function counts of error returns and `Warnings` appends, command below.
+
+In the class but outside requirement 1, because no per-PR variant runs them. `validate-entity-triples`
+(structural only) warns on a missing sample entity and missing triples; it is a rule-debug diagnostic.
+`validate-globalsearch-known-answer` (semantic only, one of #1117's three quality stages) warns when no GraphQL URL is
+configured. The structural-only notes in R5 and R7 are the same case.
+- `test/e2e/scenarios/tiered_structural.go:241` — `sampleEntityID := mint("sensor.environmental.temperature.temp-sensor-001")`
+- `test/e2e/scenarios/tiered_structural.go:323` — `fmt.Sprintf("MISSING sensor.measurement.fahrenheit in entity %s - rules cannot evaluate temperature", sampleEntityID))`
+- `test/e2e/scenarios/tiered_semantic.go:1199` — `if s.effectiveVariant(result) == "structural" {`
+- `test/e2e/scenarios/tiered_semantic.go:1200` — `fmt.Println("[INCOMING INDEX] Note: no incoming edges yet (expected in short structural tier run)")`
+
+## Searches (round-1 sweep)
+
+- `git grep -c "Warnings = append" -- test/e2e/scenarios/ ':!*_test.go'` → 79 sites in 10 files (`core_dataflow.go` 3 belong to the core scenario, not the tiered table)
+- `grep -o 's\.[a-zA-Z]*, \(nil\|\[\]string{[^}]*}\)},' test/e2e/scenarios/tiered.go | sed 's/s\.\([a-zA-Z]*\),.*/\1/' | sort -u | wc -l` → 54 stage functions
+- per stage function: `awk` the body from its `func (s *TieredScenario) <fn>(` line to the closing `}`, then `grep -c 'return fmt.Errorf\|return err'` and `grep -c 'Warnings = append'` → 7 functions with zero error returns (`executeSendMixedData`, `executeVerifyIndexPopulation`, `executeVerifySearchQuality`, `executeWaitForEmbeddings`, `validateBidirectionalTraversal`, `validateHierarchyInference`, `validateInverseEdgesMaterialized`); 20 with at least one `Warnings` append; each read by hand
+- `grep -n 'fmt.Print[a-z]*(".*\(WARN\|Warning\|Note\|may \|not \|skip\)' test/e2e/scenarios/tiered*.go test/e2e/scenarios/validate_*.go` → 8 (three print-only outcome arms: `tiered_semantic.go:772` from round 0, `:1200` and `:1425` above; the rest are recorder banners and a retry notice)
+- verification of the pins above: this section copied under `base: 6127d0be43e9255258adc72049418cab0c53220f` to the session scratchpad, `scripts/inventory-verify.sh <copy>` → every pin OK (recorded in evidence.md § 5)
