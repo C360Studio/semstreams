@@ -1,0 +1,116 @@
+[INTEGRATION] docker info latency: 0ms (integer-second clock fallback)
+[INTEGRATION] using cached nats:2.14-alpine (registry pull skipped)
+[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)
+=== RUN   TestIntegration_KVFilterLifecycleDiagnostic
+2026/09/29 15:24:48 github.com/testcontainers/testcontainers-go - Connected to docker: 
+  Server Version: 29.8.0
+  API Version: 1.51
+  Operating System: Docker Desktop
+  Total Memory: 23742 MB
+  Labels:
+    com.docker.desktop.address=unix:///Users/coby/Library/Containers/com.docker.docker/Data/docker-cli.sock
+  Testcontainers for Go Version: v0.40.0
+  Resolved Docker Host: unix:///var/run/docker.sock
+  Resolved Docker Socket Path: /var/run/docker.sock
+  Test SessionID: 1e7cd4a74b9a1a2328b65077e1cc09567ecb7277eb888a05a1690f3feecf25f7
+  Test ProcessID: 9f93877a-2413-4141-9dd5-1a420a4e1a0e
+2026/09/29 15:24:48 🐳 Creating container for image nats:2.14.4-alpine@sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66
+2026/09/29 15:24:48 🐳 Creating container for image testcontainers/ryuk:0.13.0
+2026/09/29 15:24:48 ✅ Container created: 419df5df2b5b
+2026/09/29 15:24:48 🐳 Starting container: 419df5df2b5b
+2026/09/29 15:24:48 ✅ Container started: 419df5df2b5b
+2026/09/29 15:24:48 ⏳ Waiting for container id 419df5df2b5b image: testcontainers/ryuk:0.13.0. Waiting for: port 8080/tcp to be listening
+2026/09/29 15:24:48 Shell not found in container
+2026/09/29 15:24:48 🔔 Container is ready: 419df5df2b5b
+2026/09/29 15:24:48 ✅ Container created: 4a6dd4fdae18
+2026/09/29 15:24:48 🐳 Starting container: 4a6dd4fdae18
+2026/09/29 15:24:48 ✅ Container started: 4a6dd4fdae18
+2026/09/29 15:24:48 ⏳ Waiting for container id 4a6dd4fdae18 image: nats:2.14.4-alpine@sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66. Waiting for: log message "Server is ready"
+2026/09/29 15:24:48 🔔 Container is ready: 4a6dd4fdae18
+2026/09/29 15:24:48 INFO Connecting to NATS urls=nats://localhost:55007
+2026/09/29 15:24:48 INFO Successfully connected to NATS urls=nats://localhost:55007
+2026/09/29 15:24:48 INFO Created new KV bucket bucket=KV_FILTER_LIFECYCLE_DIAG
+    kv_filter_lifecycle_diagnostic_integration_test.go:90: DIAGNOSTIC fixture bucket=KV_FILTER_LIFECYCLE_DIAG filter=diag.> count=1024 setup=599.336917ms server=2.14.4-alpine@sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66 SDK=nats.go/v1.52.0
+    kv_filter_lifecycle_diagnostic_integration_test.go:145: DIAGNOSTIC child=control output: === RUN   TestIntegration_KVFilterLifecycleDiagnosticChild
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:control Kind:acquire Elapsed:4.284ms Detail:filter=["diag.>"] deadline_present=true remaining=4.999995875s}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:control Kind:stop_enter Elapsed:16.237ms Detail:delegating to native KeyLister.Stop}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:control Kind:stop_exit Elapsed:16.263834ms Detail:error=nats: invalid subscription}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:control Kind:framework_return Elapsed:16.283792ms Detail:keys=1024 nil=false error=<nil>}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:control Kind:control_exact_set Elapsed:17.416834ms Detail:matched all 1024 seeded keys}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:control Kind:close_enter Elapsed:17.438209ms Detail:status=CONNECTED}
+    kv_filter_lifecycle_diagnostic_integration_test.go:145: DIAGNOSTIC child=control output: --- PASS: TestIntegration_KVFilterLifecycleDiagnosticChild (0.03s)
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:control Kind:close_exit Elapsed:29.75675ms Detail:error=<nil> status=CLOSED draining_seen=true closed_seen=true}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:control Kind:done Elapsed:29.775917ms Detail:case completed; native callback state reported separately}
+    kv_filter_lifecycle_diagnostic_integration_test.go:145: DIAGNOSTIC child=control output: PASS
+    kv_filter_lifecycle_diagnostic_integration_test.go:145: DIAGNOSTIC child=cancel output: === RUN   TestIntegration_KVFilterLifecycleDiagnosticChild
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:acquire Elapsed:4.516791ms Detail:filter=["diag.>"] deadline_present=true remaining=4.999994709s}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:first_collected Elapsed:5.583ms Detail:second Keys invocation witnessed}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:native_blocked Elapsed:28.291625ms Detail:forward_id=58 watcher_id=56
+        FORWARD_STACK:
+        goroutine 58 [chan send]:
+        github.com/nats-io/nats.go/jetstream.(*kvs).ListKeysFiltered.func1()
+        	/Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/jetstream/kv.go:1451 +0x124
+        created by github.com/nats-io/nats.go/jetstream.(*kvs).ListKeysFiltered in goroutine 55
+        	/Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/jetstream/kv.go:1441 +0x220
+        WATCHER_STACK:
+        goroutine 56 [chan send]:
+        github.com/nats-io/nats.go/jetstream.(*kvs).WatchFiltered.func1(0xc0001c6230)
+        	/Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/jetstream/kv.go:1290 +0x7ec
+        github.com/nats-io/nats%2ego.(*Conn).waitForMsgs(0xc0001a1808, 0xc0002ac960)
+        	/Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/nats.go:3631 +0x504
+        created by github.com/nats-io/nats%2ego.(*Conn).subscribeLocked in goroutine 55
+        	/Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/nats.go:4955 +0x5a0}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:cancel Elapsed:28.343791ms Detail:after both native blocked-stage witnesses}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:facade_stop_enter Elapsed:28.359916ms Detail:}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:stop_enter Elapsed:28.378541ms Detail:delegating to native KeyLister.Stop}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:stop_exit Elapsed:28.395875ms Detail:error=nats: invalid subscription}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:facade_stop_exit Elapsed:28.406708ms Detail:error=nats: invalid subscription}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:framework_return Elapsed:28.433333ms Detail:keys=0 nil=true error=kv keys by filter "diag.>": context canceled}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:close_enter Elapsed:28.463875ms Detail:status=CONNECTED}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:close_exit Elapsed:40.852458ms Detail:error=<nil> status=CLOSED draining_seen=true closed_seen=true}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:native_keys_closed Elapsed:40.94575ms Detail:after release and drain}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:facade_join Elapsed:40.96525ms Detail:native Keys closed after release}
+    kv_filter_lifecycle_diagnostic_integration_test.go:145: DIAGNOSTIC child=cancel output: --- PASS: TestIntegration_KVFilterLifecycleDiagnosticChild (0.04s)
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:native_after_release Elapsed:41.15975ms Detail:forward_id=58 present=false watcher_id=56 present=false}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:cancel Kind:done Elapsed:41.175291ms Detail:case completed; native callback state reported separately}
+    kv_filter_lifecycle_diagnostic_integration_test.go:145: DIAGNOSTIC child=cancel output: PASS
+    kv_filter_lifecycle_diagnostic_integration_test.go:145: DIAGNOSTIC child=deadline output: === RUN   TestIntegration_KVFilterLifecycleDiagnosticChild
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:acquire Elapsed:6.798875ms Detail:filter=["diag.>"] deadline_present=true remaining=4.9999945s}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:first_collected Elapsed:9.034ms Detail:second Keys invocation witnessed}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:native_blocked Elapsed:31.758458ms Detail:forward_id=38 watcher_id=30
+        FORWARD_STACK:
+        goroutine 38 [chan send]:
+        github.com/nats-io/nats.go/jetstream.(*kvs).ListKeysFiltered.func1()
+        	/Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/jetstream/kv.go:1451 +0x124
+        created by github.com/nats-io/nats.go/jetstream.(*kvs).ListKeysFiltered in goroutine 29
+        	/Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/jetstream/kv.go:1441 +0x220
+        WATCHER_STACK:
+        goroutine 30 [chan send]:
+        github.com/nats-io/nats.go/jetstream.(*kvs).WatchFiltered.func1(0xc00048ed20)
+        	/Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/jetstream/kv.go:1290 +0x7ec
+        github.com/nats-io/nats%2ego.(*Conn).waitForMsgs(0xc000156a08, 0xc00021e780)
+        	/Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/nats.go:3631 +0x504
+        created by github.com/nats-io/nats%2ego.(*Conn).subscribeLocked in goroutine 29
+        	/Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/nats.go:4955 +0x5a0}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:facade_stop_enter Elapsed:5.007646041s Detail:}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:stop_enter Elapsed:5.007701875s Detail:delegating to native KeyLister.Stop}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:stop_exit Elapsed:5.007781791s Detail:error=nats: invalid subscription}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:facade_stop_exit Elapsed:5.007831375s Detail:error=nats: invalid subscription}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:framework_return Elapsed:5.007903708s Detail:keys=0 nil=true error=kv keys by filter "diag.>": context deadline exceeded}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:close_enter Elapsed:5.00797225s Detail:status=CONNECTED}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:close_exit Elapsed:5.020730791s Detail:error=<nil> status=CLOSED draining_seen=true closed_seen=true}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:native_keys_closed Elapsed:5.020972416s Detail:after release and drain}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:facade_join Elapsed:5.021024166s Detail:native Keys closed after release}
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:native_after_release Elapsed:5.021275666s Detail:forward_id=38 present=false watcher_id=30 present=false}
+    kv_filter_lifecycle_diagnostic_integration_test.go:145: DIAGNOSTIC child=deadline output: --- PASS: TestIntegration_KVFilterLifecycleDiagnosticChild (5.02s)
+    kv_filter_lifecycle_diagnostic_integration_test.go:97: DIAGNOSTIC event={Case:deadline Kind:done Elapsed:5.021315458s Detail:case completed; native callback state reported separately}
+    kv_filter_lifecycle_diagnostic_integration_test.go:145: DIAGNOSTIC child=deadline output: PASS
+2026/09/29 15:24:57 🐳 Stopping container: 4a6dd4fdae18
+2026/09/29 15:24:57 ✅ Container stopped: 4a6dd4fdae18
+2026/09/29 15:24:57 🐳 Terminating container: 4a6dd4fdae18
+2026/09/29 15:24:57 🚫 Container terminated: 4a6dd4fdae18
+--- PASS: TestIntegration_KVFilterLifecycleDiagnostic (9.02s)
+PASS
+ok  	github.com/c360studio/semstreams/natsclient	10.439s
+[INTEGRATION] no latency distributions recorded
+[INTEGRATION] tests complete

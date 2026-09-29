@@ -1,0 +1,15 @@
+[INTEGRATION] docker info latency: 1000ms (integer-second clock fallback)
+[INTEGRATION] using cached nats:2.14-alpine (registry pull skipped)
+[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)
+=== RUN   TestKVFilterDiagnosticEarlyFinalizer
+=== RUN   TestKVFilterDiagnosticEarlyFinalizer/native_receive
+KV_DIAG_EVENT {"case":"native_receive","kind":"framework_cleanup_join","elapsed":"124µs","detail":"keys=0 error=context canceled"}
+KV_DIAG_EVENT {"case":"native_receive","kind":"facade_join","elapsed":"7.00121025s","detail":"native Keys delivery goroutine joined"}
+    kv_filter_lifecycle_diagnostic_integration_test.go:795: early finalizer waited for abort reserve despite release: 7.001439833s
+--- FAIL: TestKVFilterDiagnosticEarlyFinalizer (7.00s)
+    --- FAIL: TestKVFilterDiagnosticEarlyFinalizer/native_receive (7.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/natsclient	7.442s
+FAIL
+[INTEGRATION] no latency distributions recorded
+[INTEGRATION] tests failed with status 1

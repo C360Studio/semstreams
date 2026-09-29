@@ -1,0 +1,23 @@
+--- /private/tmp/gh1421-review-stop-baseline.go	2026-09-29 15:41:43
++++ natsclient/kv_filter_lifecycle_diagnostic_integration_test.go	2026-09-29 15:45:47
+@@ -498,7 +498,7 @@
+ 			o.adoptReady()
+ 		case <-forwardDone:
+ 			o.forwardJoined = true
+-			o.r.emit("facade_join", "native Keys delivery goroutine joined")
++			o.r.emit("facade_join", "test facade forwarding goroutine joined")
+ 		case <-graceC:
+ 			graceC = nil
+ 			graceExpired = true
+@@ -779,6 +779,11 @@
+ 				r: r, caseStart: time.Now(), cancelList: cancel, listDone: listDone,
+ 				facade: facade, injected: true, closed: true,
+ 			}
++			defer func() {
++				if err := owner.finish(); err != nil {
++					t.Errorf("finalize early-exit fixture: %v", err)
++				}
++			}()
+ 			go facade.forward()
+ 			if phase == "output_send" {
+ 				select {

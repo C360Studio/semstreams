@@ -1,0 +1,11 @@
+--- /private/tmp/gh1421-kv-diagnostic-baseline.go	2026-09-29 15:24:20
++++ natsclient/kv_filter_lifecycle_diagnostic_integration_test.go	2026-09-29 15:24:20
+@@ -293,7 +293,7 @@
+ 
+ func (f *kvDiagnosticFacade) Stop() error {
+ 	f.r.emit("facade_stop_enter", "")
+-	err := f.observer.Stop()
++	err := error(nil) // MUTANT: bypass independent Stop observer
+ 	f.r.emit("facade_stop_exit", fmt.Sprintf("error=%v", err))
+ 	return err
+ }

@@ -2,7 +2,7 @@
 
 - [x] Materialize a source-pinned inventory and original incident evidence; obtain independent INVENTORY PASS.
 - [x] Design and independently review a bounded native diagnostic; record acceptance within the investigation.
-- [ ] Complete diagnostic correction/evidence review; preserve its exact source as an artifact and remove compiled fixture.
+- [x] Complete diagnostic correction/evidence review; preserve its exact source as an artifact and remove compiled fixture.
 - [x] Select bounded harness correction; obtain independent design review and record acceptance without weakening rulings.
 - [ ] Implement private harness ownership, convergence and failure-evidence helpers.
 - [ ] Add deterministic failure and terminal-expiry proofs with independently recoverable fixtures and mutation evidence.

@@ -1,0 +1,21 @@
+[INTEGRATION] docker info latency: 0ms (integer-second clock fallback)
+[INTEGRATION] using cached nats:2.14-alpine (registry pull skipped)
+[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)
+=== RUN   TestKVFilterDiagnosticEarlyFinalizer
+=== RUN   TestKVFilterDiagnosticEarlyFinalizer/native_receive
+KV_DIAG_EVENT {"case":"native_receive","kind":"framework_cleanup_join","elapsed":"125.625µs","detail":"keys=0 error=context canceled"}
+KV_DIAG_EVENT {"case":"native_receive","kind":"facade_join","elapsed":"255.666µs","detail":"native Keys delivery goroutine joined"}
+=== RUN   TestKVFilterDiagnosticEarlyFinalizer/output_send
+KV_DIAG_EVENT {"case":"output_send","kind":"framework_cleanup_join","elapsed":"34.292µs","detail":"keys=0 error=context canceled"}
+KV_DIAG_EVENT {"case":"output_send","kind":"facade_join","elapsed":"50.292µs","detail":"native Keys delivery goroutine joined"}
+--- PASS: TestKVFilterDiagnosticEarlyFinalizer (0.00s)
+    --- PASS: TestKVFilterDiagnosticEarlyFinalizer/native_receive (0.00s)
+    --- PASS: TestKVFilterDiagnosticEarlyFinalizer/output_send (0.00s)
+=== RUN   TestKVFilterDiagnosticKillJoinBound
+--- PASS: TestKVFilterDiagnosticKillJoinBound (0.01s)
+=== RUN   TestKVFilterDiagnosticExpiredGate
+--- PASS: TestKVFilterDiagnosticExpiredGate (0.00s)
+PASS
+ok  	github.com/c360studio/semstreams/natsclient	1.501s
+[INTEGRATION] no latency distributions recorded
+[INTEGRATION] tests complete
