@@ -180,7 +180,7 @@ This synthesis re-read only supplied records, required project/change documents,
 The initial checkpoint above is preserved at `8a305ed1`; its review is retained verbatim in
 `review/inventory-review-initial.md`. It requested one bounded correction: a per-case ownership ledger.
 The current supplement is `review/ownership-ledger.md`, SHA256
-`d94a80a8ce20d1501b8e51c3793d6178dafc8f9954f978a5b9b68a9505c8bb9b`.
+`1b74ac431316ec3d945780bbab0768b0b6a3072c856960609d931623effbb1b6`.
 It maps B00–B23 to all 24 exact roots and H01–H37 to all 37 physical lifecycle-helper calls.
 It records acquisition, fallible exits, authority, explicit attempts, transfer, substrate ordering and actual
 completion observations. Shared source facts are factored without choosing a target-state abstraction.

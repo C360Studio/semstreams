@@ -6,7 +6,7 @@
     {
       "path": "review/ownership-ledger.md",
       "bytes": 93076,
-      "sha256": "d94a80a8ce20d1501b8e51c3793d6178dafc8f9954f978a5b9b68a9505c8bb9b"
+      "sha256": "1b74ac431316ec3d945780bbab0768b0b6a3072c856960609d931623effbb1b6"
     },
     {
       "path": "review/ownership-ledger-pins.md",
@@ -33,5 +33,6 @@
       "bytes": 295,
       "sha256": "b82d6624c09f9368969b7f5378cf234b77450e543d8b628e69d3edd7a2bacd31"
     }
-  ]
+  ],
+  "ledger_materialization_note": "Draft d94a80a8ce20d1501b8e51c3793d6178dafc8f9954f978a5b9b68a9505c8bb9b preserved except its scratch supplement filename is replaced with canonical review/helper-query-supplement.json."
 }

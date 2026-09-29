@@ -319,7 +319,7 @@ All seven cases acquire their harness as their first body operation. No caller a
 
 ## Four supplemental helper-query annotations
 
-`gh1428-helper-query-supplement.json` annotates the already-recorded integration queries from raw helper indexes 11–14 / search records 51–54. It uses the same declaration, reference, enclosing-function, evidence-line and source-hash fields as the original companion, plus original indexes and declaration end. No structural query was rerun.
+`review/helper-query-supplement.json` annotates the already-recorded integration queries from raw helper indexes 11–14 / search records 51–54. It uses the same declaration, reference, enclosing-function, evidence-line and source-hash fields as the original companion, plus original indexes and declaration end. No structural query was rerun.
 
 | Search record | Declaration | Integration records | Default parity |
 |---|---|---|
