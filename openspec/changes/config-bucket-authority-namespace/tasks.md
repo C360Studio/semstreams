@@ -74,6 +74,15 @@ landing choreography. Pins are at base `fe9482b7` (design.md § 1). Every gate l
       and (a), both doc-only, so this run is the breaking-change evidence (`docs/contributing/02-e2e-tests.md`
       § Breaking Changes) for the code that merges.
 
+- [x] 3.5 `task e2e:core` re-run at `555677ef` (code of `b112ce17`, the final code-bearing commit, on `origin/main`
+      `7303858d`; now `978ff2a6` after the rebase, with non-test Go byte-identical through `49a540d6`), run by the
+      coordinating session on a clear host (`docker compose ls -q` 0, no `e2e.test` process, window announced to both
+      peer sessions first): exit 0, 99 s (2026-09-29 11:56:16Z to 11:57:55Z), 6 of 6 scenarios "completed
+      successfully", "Test suite complete" passed=2 failed=0, the graph round-trip probe passed, no failure line; 0
+      compose stacks and 0 `e2e.test` processes afterwards. This run postdates every code change (3.4's run at
+      `e5a10a56` and the dropped `a6ada4c6` tick's run at `03a330d0` predate `b112ce17`) and is the breaking-change
+      evidence (`docs/contributing/02-e2e-tests.md` § Breaking Changes) for the code that merges.
+
 ## 4. Codex round 1
 
 Codex review of `22e80614` on PR #1404 (2026-09-27T18:42Z): one HIGH, two MEDIUM, all accepted as code fixes. The
@@ -272,8 +281,9 @@ re-run by the coordinating session at the new final code revision.
         schemas/ specs/`; `openspec validate config-bucket-authority-namespace --strict` valid; `openspec validate
         --all --strict` 58/58; `task spec:properties` 455/455.
 
-- [ ] 4.12 Rebased onto `bb98043a` (#1414, the cleanup-root guard and its #1064 baseline; no file overlap, no
-      conflict); 4.11's `b112ce17` is now `978ff2a6`. Non-test Go is identical to `b112ce17`.
+- [x] 4.12 Rebased onto `bb98043a` (#1414, the cleanup-root guard and its #1064 baseline; no file overlap, no
+      conflict); 4.11's `b112ce17` is now `978ff2a6` and its `717d56ad` is now `358d4ddf` (round 5, NIT-1). Non-test Go
+      is identical to `b112ce17`.
       - Guard verdict before (`task lint:cleanup-roots` on the rebased tree, exit 201, `TestCleanupRootGuard` at
         `cleanup_guard_test.go:189`), the same six findings hosted CI reported at `555677ef`: one "new
         uncertain-owner-provenance" at `internal/boot/rule_config_service_test.go|(*componentsStandIn).Stop|ordinary|
@@ -304,4 +314,22 @@ re-run by the coordinating session at the new final code revision.
         "resolve required mapped ports: ... inspect container port snapshot: ... context deadline exceeded", the
         Docker-oversubscription class of open #736. Not re-run. Also exit 0: `go build ./...`, `go vet ./...`, `go run
         ./cmd/entity-id-audit .` (1334), `openspec validate` (change valid, `--all --strict` 59/59), `task
-        spec:properties` 456/456. Unticked: the integration gate is not green.
+        spec:properties` 456/456.
+      - Q13 on #1188, ruled (a) by the owner 2026-09-29 ("push and let ci run"): the #736-class red was recorded on
+        #736 (issuecomment-5890032509), not re-run; `49a540d6` was pushed with the lease from `555677ef` and the
+        required CI Test job is the gate.
+      - Hosted CI on `49a540d6`: E2E Ladder run 36567710008 success; CI run 36567709902: Build, Lint (its cleanup-root
+        guard step passing, so the guard verdict above is also CI's), Schema Validation and Tier 1 pass; Test
+        FAILURE on exactly one test this change does not touch,
+        `TestIntegration_OwnerFilterLoadHarness/workers-4` (`processor/graph-index/owner_filter_load_integration_test.go:484`:
+        the convergence `KeysByFilter` expired the 5 s framework KV deadline, `natsclient/kv.go:39`, on a runner
+        stall more than 13x the same run's worst forward listing, then the 15 s client drain timeout); every other
+        package in the job passed. Filed as #1421 (class:flake, area:graph-index, beta.165). Not re-run.
+      - Q14 on #1188 (docket 9), ruled (a) by the owner 2026-09-29 ("waive it and continue as recommended"): #1421 is
+        waived for this PR's merge only; the docs head (this tick and the archive) runs CI once more, a second
+        #1421-shape red there returns to the owner rather than being re-rolled, and any other red is fixed first.
+      - Review round 5 on the increment since `c6eb7de6` (PR comment issuecomment-5890327314): PASS WITH AMENDMENTS,
+        one doc-only NIT (this row's SHA clause); the reviewer's own mutations M19 (check deleted: all three
+        regressions fail at trials 2, 1, 1) and M20 (`default:` returns nil so Stop never waits: killed by the join,
+        seeding, concurrent-Stop, repeated-Stop and adapter-bound tests) both killed on a scratch export; the stand-in
+        ordering test still fails on either reversed order (`stopAll` over `order`, `StartAll` reversed).
