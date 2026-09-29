@@ -1,0 +1,7 @@
+--- FAIL: TestCleanupRootGuardReturnedContextlessReassignmentFailsClosed (0.20s)
+    cleanup_guard_test.go:1731: reassigned returned close concealed Stop: [{Path:owner_test.go StartOffset:321 EndOffset:322 DeclarationOnly:false Line:6 Function:TestHidden Origin:cleanup Target:net/http/httptest.Close Receiver:*net/http/httptest.Server Context:none Classification:non-lifecycle-stop Applicability:cleanup-owned Identity:owner_test.go|TestHidden|cleanup|net/http/httptest.Close|*net/http/httptest.Server|none|1 Fingerprint:bcaec927c448f5abca69fee2bada060ca293853e081910167326aaa140f964ea Reason:exact returned contextless foreign method outside repository Stop contract Selections:[default]}], <nil>
+--- FAIL: TestCleanupRootGuardUnresolvedSelectorCallbackFailsClosed (0.16s)
+    cleanup_guard_test.go:1760: function-valued selector concealed Stop: [], <nil>
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.602s
+FAIL

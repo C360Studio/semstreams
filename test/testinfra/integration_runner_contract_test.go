@@ -1113,6 +1113,12 @@ fi
 echo 'fake docker info'
 `
 	goCommand := `#!/bin/sh
+# These fixtures isolate runner lock/pull behavior. Real classifier outcomes and
+# early refusal are exercised by TestCleanupAdmissionEntryPoints.
+if [ "$*" = 'test -count=1 ./test/testinfra -run ^TestCleanupRootGuard$' ]; then
+  printf 'cleanup-guard\n' >> "$CALL_LOG"
+  exit 0
+fi
 printf 'go\n' >> "$CALL_LOG"
 printf '%s\n' "$@" > "$GO_ARGUMENTS"
 printf '%s\n' "${TESTCONTAINERS_RYUK_DISABLED:-unset}" > "$RYUK_CAPTURE"

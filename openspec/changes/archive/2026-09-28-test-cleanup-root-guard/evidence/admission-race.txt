@@ -1,0 +1,173 @@
+=== RUN   TestCleanupAdmissionEntryPoints
+=== RUN   TestCleanupAdmissionEntryPoints/clean
+=== RUN   TestCleanupAdmissionEntryPoints/clean/lint
+=== RUN   TestCleanupAdmissionEntryPoints/clean/test
+=== RUN   TestCleanupAdmissionEntryPoints/clean/race
+=== RUN   TestCleanupAdmissionEntryPoints/clean/live
+=== RUN   TestCleanupAdmissionEntryPoints/clean/check
+=== RUN   TestCleanupAdmissionEntryPoints/clean/check-push
+=== RUN   TestCleanupAdmissionEntryPoints/clean/integration
+=== RUN   TestCleanupAdmissionEntryPoints/clean/runner-default
+=== RUN   TestCleanupAdmissionEntryPoints/clean/runner-explicit
+=== RUN   TestCleanupAdmissionEntryPoints/clean/ci-test
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/lint
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/test
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/race
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/live
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/check
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/check-push
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/integration
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/runner-default
+    cleanup_admission_test.go:82: canonical new-debt rejection exit status: 1
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/runner-explicit
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/ci-test
+=== RUN   TestCleanupAdmissionEntryPoints/stale
+=== RUN   TestCleanupAdmissionEntryPoints/stale/runner-default
+    cleanup_admission_test.go:82: canonical stale rejection exit status: 1
+=== RUN   TestCleanupAdmissionEntryPoints/unknown
+=== RUN   TestCleanupAdmissionEntryPoints/unknown/runner-default
+    cleanup_admission_test.go:82: canonical unknown rejection exit status: 1
+=== RUN   TestCleanupAdmissionEntryPoints/load-failure
+=== RUN   TestCleanupAdmissionEntryPoints/load-failure/runner-default
+    cleanup_admission_test.go:82: canonical load-failure rejection exit status: 1
+--- PASS: TestCleanupAdmissionEntryPoints (46.08s)
+    --- PASS: TestCleanupAdmissionEntryPoints/clean (25.68s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/lint (2.43s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/test (2.47s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/race (2.44s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/live (2.44s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/check (2.42s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/check-push (2.46s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/integration (2.95s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/runner-default (2.67s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/runner-explicit (2.64s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/ci-test (2.76s)
+    --- PASS: TestCleanupAdmissionEntryPoints/new-debt (15.19s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/lint (1.46s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/test (1.42s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/race (1.41s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/live (1.44s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/check (1.99s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/check-push (1.76s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/integration (1.47s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/runner-default (1.37s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/runner-explicit (1.38s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/ci-test (1.48s)
+    --- PASS: TestCleanupAdmissionEntryPoints/stale (2.43s)
+        --- PASS: TestCleanupAdmissionEntryPoints/stale/runner-default (2.43s)
+    --- PASS: TestCleanupAdmissionEntryPoints/unknown (1.38s)
+        --- PASS: TestCleanupAdmissionEntryPoints/unknown/runner-default (1.38s)
+    --- PASS: TestCleanupAdmissionEntryPoints/load-failure (1.39s)
+        --- PASS: TestCleanupAdmissionEntryPoints/load-failure/runner-default (1.39s)
+=== RUN   TestCleanupAdmissionCILintWiring
+--- PASS: TestCleanupAdmissionCILintWiring (0.00s)
+=== RUN   TestCleanupAdmissionFocusedRunner
+--- PASS: TestCleanupAdmissionFocusedRunner (0.33s)
+=== RUN   TestCleanupAdmissionFixtureProcess
+    cleanup_admission_test.go:124: subprocess fixture entry point
+--- SKIP: TestCleanupAdmissionFixtureProcess (0.00s)
+=== RUN   TestCleanupAdmissionCIOrdering
+=== RUN   TestCleanupAdmissionCIOrdering/pinned_setup_then_runner
+=== RUN   TestCleanupAdmissionCIOrdering/missing_prerequisite
+=== RUN   TestCleanupAdmissionCIOrdering/expensive_earlier_step
+=== RUN   TestCleanupAdmissionCIOrdering/comment_is_not_admission
+=== RUN   TestCleanupAdmissionCIOrdering/compound_is_not_admission
+--- PASS: TestCleanupAdmissionCIOrdering (0.00s)
+    --- PASS: TestCleanupAdmissionCIOrdering/pinned_setup_then_runner (0.00s)
+    --- PASS: TestCleanupAdmissionCIOrdering/missing_prerequisite (0.00s)
+    --- PASS: TestCleanupAdmissionCIOrdering/expensive_earlier_step (0.00s)
+    --- PASS: TestCleanupAdmissionCIOrdering/comment_is_not_admission (0.00s)
+    --- PASS: TestCleanupAdmissionCIOrdering/compound_is_not_admission (0.00s)
+=== RUN   TestCleanupAdmissionCIExecutionMetadata
+=== RUN   TestCleanupAdmissionCIExecutionMetadata/default_execution
+=== RUN   TestCleanupAdmissionCIExecutionMetadata/step_ignores_failure
+=== RUN   TestCleanupAdmissionCIExecutionMetadata/step_conditional_skip
+=== RUN   TestCleanupAdmissionCIExecutionMetadata/step_custom_shell
+=== RUN   TestCleanupAdmissionCIExecutionMetadata/job_ignores_failure
+=== RUN   TestCleanupAdmissionCIExecutionMetadata/job_conditional_skip
+=== RUN   TestCleanupAdmissionCIExecutionMetadata/inherited_custom_shell
+--- PASS: TestCleanupAdmissionCIExecutionMetadata (0.00s)
+    --- PASS: TestCleanupAdmissionCIExecutionMetadata/default_execution (0.00s)
+    --- PASS: TestCleanupAdmissionCIExecutionMetadata/step_ignores_failure (0.00s)
+    --- PASS: TestCleanupAdmissionCIExecutionMetadata/step_conditional_skip (0.00s)
+    --- PASS: TestCleanupAdmissionCIExecutionMetadata/step_custom_shell (0.00s)
+    --- PASS: TestCleanupAdmissionCIExecutionMetadata/job_ignores_failure (0.00s)
+    --- PASS: TestCleanupAdmissionCIExecutionMetadata/job_conditional_skip (0.00s)
+    --- PASS: TestCleanupAdmissionCIExecutionMetadata/inherited_custom_shell (0.00s)
+=== RUN   TestCleanupAdmissionUniformWiring
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/lint.yml/default
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/lint.yml/cleanup-roots
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/test.yml/default
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/test.yml/race
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/test.yml/live
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/test.yml/integration
+=== RUN   TestCleanupAdmissionUniformWiring/Taskfile.yml/check
+=== RUN   TestCleanupAdmissionUniformWiring/Taskfile.yml/check:push
+--- PASS: TestCleanupAdmissionUniformWiring (0.02s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/lint.yml/default (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/lint.yml/cleanup-roots (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/test.yml/default (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/test.yml/race (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/test.yml/live (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/test.yml/integration (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/Taskfile.yml/check (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/Taskfile.yml/check:push (0.00s)
+=== RUN   TestCleanupAdmissionUniformWiringRejectsBypasses
+=== RUN   TestCleanupAdmissionUniformWiringRejectsBypasses/exact_invocation
+=== RUN   TestCleanupAdmissionUniformWiringRejectsBypasses/ignored_task_failure
+=== RUN   TestCleanupAdmissionUniformWiringRejectsBypasses/ignored_command_failure
+=== RUN   TestCleanupAdmissionUniformWiringRejectsBypasses/success_forcing
+=== RUN   TestCleanupAdmissionUniformWiringRejectsBypasses/conditional_handling
+=== RUN   TestCleanupAdmissionUniformWiringRejectsBypasses/parallel_prerequisite
+=== RUN   TestCleanupAdmissionUniformWiringRejectsBypasses/conditional_skip
+--- PASS: TestCleanupAdmissionUniformWiringRejectsBypasses (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiringRejectsBypasses/exact_invocation (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiringRejectsBypasses/ignored_task_failure (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiringRejectsBypasses/ignored_command_failure (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiringRejectsBypasses/success_forcing (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiringRejectsBypasses/conditional_handling (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiringRejectsBypasses/parallel_prerequisite (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiringRejectsBypasses/conditional_skip (0.00s)
+=== RUN   TestCleanupAdmissionSupervisorProcess
+    cleanup_process_unix_test.go:212: subprocess fixture entry point
+--- SKIP: TestCleanupAdmissionSupervisorProcess (0.00s)
+=== RUN   TestCleanupAdmissionHeldTreeProcess
+    cleanup_process_unix_test.go:294: subprocess fixture entry point
+--- SKIP: TestCleanupAdmissionHeldTreeProcess (0.00s)
+=== RUN   TestCleanupAdmissionCancellationOwnership
+--- PASS: TestCleanupAdmissionCancellationOwnership (0.39s)
+=== RUN   TestCleanupAdmissionSupervisorFailurePaths
+=== RUN   TestCleanupAdmissionSupervisorFailurePaths/normal_completion_with_lingering_descendant
+=== RUN   TestCleanupAdmissionSupervisorFailurePaths/command_start_failure
+=== RUN   TestCleanupAdmissionSupervisorFailurePaths/cancel_before_readiness
+--- PASS: TestCleanupAdmissionSupervisorFailurePaths (1.09s)
+    --- PASS: TestCleanupAdmissionSupervisorFailurePaths/normal_completion_with_lingering_descendant (1.05s)
+    --- PASS: TestCleanupAdmissionSupervisorFailurePaths/command_start_failure (0.03s)
+    --- PASS: TestCleanupAdmissionSupervisorFailurePaths/cancel_before_readiness (0.01s)
+=== RUN   TestCleanupAdmissionDescriptorProbeProcess
+    cleanup_process_unix_test.go:469: subprocess fixture entry point
+--- SKIP: TestCleanupAdmissionDescriptorProbeProcess (0.00s)
+=== RUN   TestCleanupAdmissionPrivateDescriptors
+--- PASS: TestCleanupAdmissionPrivateDescriptors (1.03s)
+=== RUN   TestCleanupAdmissionMissingAcknowledgement
+--- PASS: TestCleanupAdmissionMissingAcknowledgement (0.13s)
+PASS
+       50.41 real        84.67 user         9.11 sys
+           804995072  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1624877  page reclaims
+                 727  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+               28804  signals received
+               27559  voluntary context switches
+              213135  involuntary context switches
+         33820219908  instructions retired
+         13281035404  cycles elapsed
+           797001000  peak memory footprint

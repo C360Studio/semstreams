@@ -4,11 +4,13 @@ tasks:
   default:
     desc: Run all unit tests
     cmds:
+      - scripts/check-cleanup-roots.sh
       - go test ./...
 
   race:
     desc: Run tests with race detector
     cmds:
+      - scripts/check-cleanup-roots.sh
       - go test -race ./...
 
   integration:
@@ -29,6 +31,7 @@ tasks:
   live:
     desc: Run all live_llm tests (real providers — needs .env keys / local Ollama)
     cmds:
+      - scripts/check-cleanup-roots.sh
       - echo "[LIVE] Running all live_llm-tagged tests. Tests skip cleanly when their required key/service is unset."
       - go test -tags=live_llm -v ./...
       - echo "[OK] Live LLM tests complete"

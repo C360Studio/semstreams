@@ -1,0 +1,9 @@
+--- FAIL: TestCleanupAdmissionPrivateDescriptors (0.01s)
+    cleanup_process_unix_test.go:431: private descriptor containment: command=exit status 1 cleanup=<nil>
+        --- FAIL: TestCleanupAdmissionDescriptorProbeProcess (0.00s)
+            cleanup_process_unix_test.go:416: inherited private protocol descriptor 3
+            cleanup_process_unix_test.go:416: inherited private protocol descriptor 4
+        FAIL
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.229s
+FAIL

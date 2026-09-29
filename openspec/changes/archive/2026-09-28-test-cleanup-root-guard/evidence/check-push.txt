@@ -1,0 +1,396 @@
+ok  	github.com/c360studio/semstreams/test/testinfra	7.569s
+running fixed-port lint guard (scripts/lint-test-ports.sh)
+OK: selected nats.go module matches KV and graph-index pins v1.52.0 without replacement
+OK: selected direct pin
+OK: version drift
+OK: same-version fork replacement
+OK: local replacement
+OK: wrong module path
+OK: empty output
+OK: malformed output
+OK: module lookup failure
+OK: graph-index pin drift
+OK: absent graph-index pin
+OK: malformed graph-index pin
+OK: multiple graph-index pins
+OK: absent pin
+OK: multiple pins
+ok  	github.com/c360studio/semstreams/test/natsclient	0.533s
+Built bin/semstreams
+Schemas and OpenAPI spec generated
+ok  	github.com/c360studio/semstreams/test/contract	4.376s
+?   	github.com/c360studio/semstreams	[no test files]
+ok  	github.com/c360studio/semstreams/agentic	8.631s
+ok  	github.com/c360studio/semstreams/agentic/agentrun	(cached)
+ok  	github.com/c360studio/semstreams/agentic/identity	(cached)
+ok  	github.com/c360studio/semstreams/agentic/research	(cached)
+ok  	github.com/c360studio/semstreams/cmd/detonate-injections	(cached)
+ok  	github.com/c360studio/semstreams/cmd/e2e	1.665s
+?   	github.com/c360studio/semstreams/cmd/e2e-semstreams	[no test files]
+ok  	github.com/c360studio/semstreams/cmd/e2e-semstreams/fixtures	(cached)
+ok  	github.com/c360studio/semstreams/cmd/e2e-semstreams/mission	(cached)
+?   	github.com/c360studio/semstreams/cmd/entity-id-audit	[no test files]
+?   	github.com/c360studio/semstreams/cmd/measure-injection-classifier	[no test files]
+ok  	github.com/c360studio/semstreams/cmd/openapi-generator	(cached)
+?   	github.com/c360studio/semstreams/cmd/predicate-audit	[no test files]
+?   	github.com/c360studio/semstreams/cmd/predicate-test-audit	[no test files]
+ok  	github.com/c360studio/semstreams/cmd/semstreams	(cached)
+ok  	github.com/c360studio/semstreams/component	(cached)
+ok  	github.com/c360studio/semstreams/component/flowgraph	(cached)
+ok  	github.com/c360studio/semstreams/componentregistry	(cached)
+ok  	github.com/c360studio/semstreams/composition	(cached)
+ok  	github.com/c360studio/semstreams/composition/cli	(cached)
+ok  	github.com/c360studio/semstreams/config	(cached)
+ok  	github.com/c360studio/semstreams/examples/processors/document	(cached)
+ok  	github.com/c360studio/semstreams/examples/processors/iot_sensor	(cached)
+ok  	github.com/c360studio/semstreams/examples/processors/weather_station	(cached)
+?   	github.com/c360studio/semstreams/frameworkadapters/otel	[no test files]
+ok  	github.com/c360studio/semstreams/frameworkcapabilities/graphresearch	(cached)
+ok  	github.com/c360studio/semstreams/frameworkcapabilities/rulepacks	(cached)
+ok  	github.com/c360studio/semstreams/gateway	(cached)
+ok  	github.com/c360studio/semstreams/gateway/graph-gateway	1.975s
+ok  	github.com/c360studio/semstreams/gateway/http	(cached)
+ok  	github.com/c360studio/semstreams/gateway/lifecycle-gateway	(cached)
+ok  	github.com/c360studio/semstreams/governance	(cached)
+ok  	github.com/c360studio/semstreams/graph	(cached)
+ok  	github.com/c360studio/semstreams/graph/clustering	(cached)
+ok  	github.com/c360studio/semstreams/graph/embedding	(cached)
+ok  	github.com/c360studio/semstreams/graph/geo/geojson	(cached)
+ok  	github.com/c360studio/semstreams/graph/inference	(cached)
+ok  	github.com/c360studio/semstreams/graph/llm	(cached)
+ok  	github.com/c360studio/semstreams/graph/query	(cached)
+ok  	github.com/c360studio/semstreams/graph/readiness	(cached)
+ok  	github.com/c360studio/semstreams/graph/structural	(cached)
+ok  	github.com/c360studio/semstreams/health	(cached)
+ok  	github.com/c360studio/semstreams/input/file	(cached)
+ok  	github.com/c360studio/semstreams/input/http	(cached)
+ok  	github.com/c360studio/semstreams/input/udp	(cached)
+ok  	github.com/c360studio/semstreams/input/websocket	(cached)
+ok  	github.com/c360studio/semstreams/internal/agentprofiles	(cached)
+ok  	github.com/c360studio/semstreams/internal/agentterminal	(cached)
+ok  	github.com/c360studio/semstreams/internal/boot	(cached)
+ok  	github.com/c360studio/semstreams/internal/bootstrapobservability	(cached)
+?   	github.com/c360studio/semstreams/internal/componentadmission	[no test files]
+ok  	github.com/c360studio/semstreams/internal/deliverylane	(cached)
+ok  	github.com/c360studio/semstreams/internal/e2eboot	(cached)
+ok  	github.com/c360studio/semstreams/internal/e2eslowconsumer	(cached)
+ok  	github.com/c360studio/semstreams/internal/entityidaudit	26.373s
+ok  	github.com/c360studio/semstreams/internal/graphmutation	(cached)
+ok  	github.com/c360studio/semstreams/internal/lifecyclecleanup	(cached)
+ok  	github.com/c360studio/semstreams/internal/logforwarderpolicy	(cached)
+?   	github.com/c360studio/semstreams/internal/looptoken	[no test files]
+ok  	github.com/c360studio/semstreams/internal/maxdelivery	(cached)
+ok  	github.com/c360studio/semstreams/internal/modelresolveaudit	8.951s
+ok  	github.com/c360studio/semstreams/internal/portgrammarcontrol	14.460s
+ok  	github.com/c360studio/semstreams/internal/predicateaudit	(cached)
+ok  	github.com/c360studio/semstreams/internal/semantictest	(cached)
+ok  	github.com/c360studio/semstreams/message	(cached)
+ok  	github.com/c360studio/semstreams/metric	(cached)
+ok  	github.com/c360studio/semstreams/model	(cached)
+ok  	github.com/c360studio/semstreams/model/wire	(cached)
+ok  	github.com/c360studio/semstreams/model/wire/responses	(cached)
+ok  	github.com/c360studio/semstreams/natsclient	32.925s
+ok  	github.com/c360studio/semstreams/output/file	(cached)
+ok  	github.com/c360studio/semstreams/output/httppost	(cached)
+ok  	github.com/c360studio/semstreams/output/otel	(cached)
+ok  	github.com/c360studio/semstreams/output/websocket	(cached)
+ok  	github.com/c360studio/semstreams/payloadbuiltins	(cached)
+ok  	github.com/c360studio/semstreams/payloadregistry	(cached)
+ok  	github.com/c360studio/semstreams/persona	(cached)
+ok  	github.com/c360studio/semstreams/pkg/acme	(cached)
+ok  	github.com/c360studio/semstreams/pkg/buffer	(cached)
+ok  	github.com/c360studio/semstreams/pkg/cache	(cached)
+ok  	github.com/c360studio/semstreams/pkg/context	(cached)
+ok  	github.com/c360studio/semstreams/pkg/dispatch	(cached)
+ok  	github.com/c360studio/semstreams/pkg/errs	(cached)
+ok  	github.com/c360studio/semstreams/pkg/fusion	(cached)
+ok  	github.com/c360studio/semstreams/pkg/fusion/fusionnats	(cached)
+ok  	github.com/c360studio/semstreams/pkg/fusion/fusionvocab	(cached)
+ok  	github.com/c360studio/semstreams/pkg/fusion/lensregistry	(cached)
+ok  	github.com/c360studio/semstreams/pkg/gateddag	(cached)
+ok  	github.com/c360studio/semstreams/pkg/graphview	(cached)
+ok  	github.com/c360studio/semstreams/pkg/lifecycle	(cached)
+ok  	github.com/c360studio/semstreams/pkg/logging	(cached)
+?   	github.com/c360studio/semstreams/pkg/platform	[no test files]
+ok  	github.com/c360studio/semstreams/pkg/projection	(cached)
+ok  	github.com/c360studio/semstreams/pkg/projection/contract	(cached)
+ok  	github.com/c360studio/semstreams/pkg/resource	(cached)
+ok  	github.com/c360studio/semstreams/pkg/retry	(cached)
+ok  	github.com/c360studio/semstreams/pkg/revlag	(cached)
+ok  	github.com/c360studio/semstreams/pkg/rulepack	(cached)
+?   	github.com/c360studio/semstreams/pkg/security	[no test files]
+ok  	github.com/c360studio/semstreams/pkg/text	(cached)
+ok  	github.com/c360studio/semstreams/pkg/timestamp	(cached)
+ok  	github.com/c360studio/semstreams/pkg/tlsutil	(cached)
+ok  	github.com/c360studio/semstreams/pkg/types	(cached)
+ok  	github.com/c360studio/semstreams/pkg/worker	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-detonator	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-dispatch	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-governance	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-governance/injection_corpus	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-loop	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/internal/loopbucket	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/lessonmatch	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/prompt	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-model	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-tools	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	4.901s
+ok  	github.com/c360studio/semstreams/processor/agentic-tools/runner	(cached)
+ok  	github.com/c360studio/semstreams/processor/gated-dag	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-clustering	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-embedding	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-index	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-index-spatial	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-index-temporal	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-ingest	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-query	(cached)
+ok  	github.com/c360studio/semstreams/processor/json_filter	(cached)
+ok  	github.com/c360studio/semstreams/processor/json_generic	(cached)
+ok  	github.com/c360studio/semstreams/processor/json_map	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-assess	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-classify	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-execute	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-llmwrap	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-route	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-synthesize	(cached)
+ok  	github.com/c360studio/semstreams/processor/rule	9.510s
+ok  	github.com/c360studio/semstreams/processor/rule/expression	(cached)
+ok  	github.com/c360studio/semstreams/service	(cached)
+?   	github.com/c360studio/semstreams/storage	[no test files]
+ok  	github.com/c360studio/semstreams/storage/objectstore	(cached)
+ok  	github.com/c360studio/semstreams/storage/storeregistry	(cached)
+ok  	github.com/c360studio/semstreams/test	(cached)
+ok  	github.com/c360studio/semstreams/test/compat/semteams	(cached)
+ok  	github.com/c360studio/semstreams/test/contract	29.192s
+ok  	github.com/c360studio/semstreams/test/e2e/client	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/config	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/harness/lessoncuration	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/harness/milestoneprobe	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/harness/processbarrier	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/mock	(cached)
+?   	github.com/c360studio/semstreams/test/e2e/mock/cmd	[no test files]
+?   	github.com/c360studio/semstreams/test/e2e/results	[no test files]
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/agentic	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/anomaly	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/community	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools	(cached)
+?   	github.com/c360studio/semstreams/test/e2e/scenarios/deep-research	[no test files]
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/lessons	(cached)
+?   	github.com/c360studio/semstreams/test/e2e/scenarios/lifecycle	[no test files]
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/ops	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/research-graph	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/search	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/stages	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/throughput	(cached)
+?   	github.com/c360studio/semstreams/test/fixtures/corecomposition	[no test files]
+ok  	github.com/c360studio/semstreams/test/natsclient	10.578s
+ok  	github.com/c360studio/semstreams/test/release	20.526s
+ok  	github.com/c360studio/semstreams/test/testinfra	133.504s
+?   	github.com/c360studio/semstreams/testutil	[no test files]
+ok  	github.com/c360studio/semstreams/types	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary/agentic	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary/bfo	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary/builtins	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary/cco	(cached)
+?   	github.com/c360studio/semstreams/vocabulary/examples	[no test files]
+ok  	github.com/c360studio/semstreams/vocabulary/export	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary/governance	(cached)
+?   	github.com/c360studio/semstreams/vocabulary/rulepacks	[no test files]
+ok  	github.com/c360studio/semstreams/test/testinfra	7.719s
+[INTEGRATION] docker info latency: 1000ms (integer-second clock fallback)
+[INTEGRATION] using cached nats:2.14-alpine (registry pull skipped)
+[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)
+?   	github.com/c360studio/semstreams	[no test files]
+ok  	github.com/c360studio/semstreams/agentic	5.401s
+ok  	github.com/c360studio/semstreams/agentic/agentrun	12.521s
+ok  	github.com/c360studio/semstreams/agentic/identity	1.235s
+ok  	github.com/c360studio/semstreams/agentic/research	1.324s
+ok  	github.com/c360studio/semstreams/cmd/detonate-injections	1.295s
+ok  	github.com/c360studio/semstreams/cmd/e2e	1.486s
+?   	github.com/c360studio/semstreams/cmd/e2e-semstreams	[no test files]
+ok  	github.com/c360studio/semstreams/cmd/e2e-semstreams/fixtures	1.242s
+ok  	github.com/c360studio/semstreams/cmd/e2e-semstreams/mission	1.304s
+?   	github.com/c360studio/semstreams/cmd/entity-id-audit	[no test files]
+?   	github.com/c360studio/semstreams/cmd/measure-injection-classifier	[no test files]
+ok  	github.com/c360studio/semstreams/cmd/openapi-generator	1.674s
+?   	github.com/c360studio/semstreams/cmd/predicate-audit	[no test files]
+?   	github.com/c360studio/semstreams/cmd/predicate-test-audit	[no test files]
+ok  	github.com/c360studio/semstreams/cmd/semstreams	1.523s
+ok  	github.com/c360studio/semstreams/component	2.522s
+ok  	github.com/c360studio/semstreams/component/flowgraph	1.301s
+ok  	github.com/c360studio/semstreams/componentregistry	1.777s
+ok  	github.com/c360studio/semstreams/composition	1.863s
+ok  	github.com/c360studio/semstreams/composition/cli	1.480s
+ok  	github.com/c360studio/semstreams/config	27.094s
+ok  	github.com/c360studio/semstreams/examples/processors/document	1.766s
+ok  	github.com/c360studio/semstreams/examples/processors/iot_sensor	1.811s
+ok  	github.com/c360studio/semstreams/examples/processors/weather_station	2.405s
+?   	github.com/c360studio/semstreams/frameworkadapters/otel	[no test files]
+ok  	github.com/c360studio/semstreams/frameworkcapabilities/graphresearch	2.179s
+ok  	github.com/c360studio/semstreams/frameworkcapabilities/rulepacks	1.302s
+ok  	github.com/c360studio/semstreams/gateway	1.351s
+ok  	github.com/c360studio/semstreams/gateway/graph-gateway	2.351s
+ok  	github.com/c360studio/semstreams/gateway/http	1.311s
+ok  	github.com/c360studio/semstreams/gateway/lifecycle-gateway	1.951s
+ok  	github.com/c360studio/semstreams/governance	1.322s
+ok  	github.com/c360studio/semstreams/graph	4.796s
+ok  	github.com/c360studio/semstreams/graph/clustering	1.892s
+ok  	github.com/c360studio/semstreams/graph/embedding	2.192s
+ok  	github.com/c360studio/semstreams/graph/geo/geojson	1.202s
+ok  	github.com/c360studio/semstreams/graph/inference	4.705s
+ok  	github.com/c360studio/semstreams/graph/llm	1.303s
+ok  	github.com/c360studio/semstreams/graph/query	1.660s
+ok  	github.com/c360studio/semstreams/graph/readiness	1.426s
+ok  	github.com/c360studio/semstreams/graph/structural	1.331s
+ok  	github.com/c360studio/semstreams/health	1.337s
+ok  	github.com/c360studio/semstreams/input/file	1.357s
+ok  	github.com/c360studio/semstreams/input/http	1.430s
+ok  	github.com/c360studio/semstreams/input/udp	4.605s
+ok  	github.com/c360studio/semstreams/input/websocket	3.019s
+ok  	github.com/c360studio/semstreams/internal/agentprofiles	1.220s
+ok  	github.com/c360studio/semstreams/internal/agentterminal	1.238s
+ok  	github.com/c360studio/semstreams/internal/boot	2.151s
+ok  	github.com/c360studio/semstreams/internal/bootstrapobservability	1.800s
+?   	github.com/c360studio/semstreams/internal/componentadmission	[no test files]
+ok  	github.com/c360studio/semstreams/internal/deliverylane	1.370s
+ok  	github.com/c360studio/semstreams/internal/e2eboot	1.499s
+ok  	github.com/c360studio/semstreams/internal/e2eslowconsumer	1.431s
+ok  	github.com/c360studio/semstreams/internal/entityidaudit	19.022s
+ok  	github.com/c360studio/semstreams/internal/graphmutation	1.280s
+ok  	github.com/c360studio/semstreams/internal/lifecyclecleanup	1.196s
+ok  	github.com/c360studio/semstreams/internal/logforwarderpolicy	1.230s
+?   	github.com/c360studio/semstreams/internal/looptoken	[no test files]
+ok  	github.com/c360studio/semstreams/internal/maxdelivery	15.551s
+ok  	github.com/c360studio/semstreams/internal/modelresolveaudit	4.674s
+ok  	github.com/c360studio/semstreams/internal/portgrammarcontrol	7.437s
+ok  	github.com/c360studio/semstreams/internal/predicateaudit	1.266s
+ok  	github.com/c360studio/semstreams/internal/semantictest	1.216s
+ok  	github.com/c360studio/semstreams/message	1.236s
+ok  	github.com/c360studio/semstreams/metric	1.349s
+ok  	github.com/c360studio/semstreams/model	1.475s
+ok  	github.com/c360studio/semstreams/model/wire	1.305s
+ok  	github.com/c360studio/semstreams/model/wire/responses	1.251s
+ok  	github.com/c360studio/semstreams/natsclient	88.840s
+ok  	github.com/c360studio/semstreams/output/file	14.980s
+ok  	github.com/c360studio/semstreams/output/httppost	10.608s
+ok  	github.com/c360studio/semstreams/output/otel	3.728s
+ok  	github.com/c360studio/semstreams/output/websocket	16.097s
+ok  	github.com/c360studio/semstreams/payloadbuiltins	1.288s
+ok  	github.com/c360studio/semstreams/payloadregistry	1.269s
+ok  	github.com/c360studio/semstreams/persona	1.791s
+ok  	github.com/c360studio/semstreams/pkg/acme	1.277s
+ok  	github.com/c360studio/semstreams/pkg/buffer	1.770s
+ok  	github.com/c360studio/semstreams/pkg/cache	2.385s
+ok  	github.com/c360studio/semstreams/pkg/context	1.247s
+ok  	github.com/c360studio/semstreams/pkg/dispatch	4.013s
+ok  	github.com/c360studio/semstreams/pkg/errs	1.265s
+ok  	github.com/c360studio/semstreams/pkg/fusion	1.390s
+ok  	github.com/c360studio/semstreams/pkg/fusion/fusionnats	2.088s
+ok  	github.com/c360studio/semstreams/pkg/fusion/fusionvocab	1.308s
+ok  	github.com/c360studio/semstreams/pkg/fusion/lensregistry	1.327s
+ok  	github.com/c360studio/semstreams/pkg/gateddag	1.229s
+ok  	github.com/c360studio/semstreams/pkg/graphview	1.991s
+ok  	github.com/c360studio/semstreams/pkg/lifecycle	5.278s
+ok  	github.com/c360studio/semstreams/pkg/logging	2.278s
+?   	github.com/c360studio/semstreams/pkg/platform	[no test files]
+ok  	github.com/c360studio/semstreams/pkg/projection	1.274s
+ok  	github.com/c360studio/semstreams/pkg/projection/contract	1.211s
+ok  	github.com/c360studio/semstreams/pkg/resource	1.847s
+ok  	github.com/c360studio/semstreams/pkg/retry	1.566s
+ok  	github.com/c360studio/semstreams/pkg/revlag	1.559s
+ok  	github.com/c360studio/semstreams/pkg/rulepack	1.333s
+?   	github.com/c360studio/semstreams/pkg/security	[no test files]
+ok  	github.com/c360studio/semstreams/pkg/text	1.252s
+ok  	github.com/c360studio/semstreams/pkg/timestamp	1.221s
+ok  	github.com/c360studio/semstreams/pkg/tlsutil	3.813s
+ok  	github.com/c360studio/semstreams/pkg/types	1.290s
+ok  	github.com/c360studio/semstreams/pkg/worker	4.226s
+ok  	github.com/c360studio/semstreams/processor/agentic-detonator	1.365s
+ok  	github.com/c360studio/semstreams/processor/agentic-dispatch	81.850s
+ok  	github.com/c360studio/semstreams/processor/agentic-governance	2.654s
+ok  	github.com/c360studio/semstreams/processor/agentic-governance/injection_corpus	1.310s
+ok  	github.com/c360studio/semstreams/processor/agentic-loop	65.295s
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/internal/loopbucket	1.315s
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest	1.306s
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/lessonmatch	1.237s
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/prompt	1.266s
+ok  	github.com/c360studio/semstreams/processor/agentic-model	19.230s
+ok  	github.com/c360studio/semstreams/processor/agentic-tools	58.162s
+ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	5.213s
+ok  	github.com/c360studio/semstreams/processor/agentic-tools/runner	1.290s
+ok  	github.com/c360studio/semstreams/processor/gated-dag	8.017s
+ok  	github.com/c360studio/semstreams/processor/graph-clustering	30.816s
+ok  	github.com/c360studio/semstreams/processor/graph-embedding	15.541s
+ok  	github.com/c360studio/semstreams/processor/graph-index	42.204s
+ok  	github.com/c360studio/semstreams/processor/graph-index-spatial	8.376s
+ok  	github.com/c360studio/semstreams/processor/graph-index-temporal	8.382s
+ok  	github.com/c360studio/semstreams/processor/graph-ingest	51.771s
+ok  	github.com/c360studio/semstreams/processor/graph-query	13.009s
+ok  	github.com/c360studio/semstreams/processor/json_filter	4.601s
+ok  	github.com/c360studio/semstreams/processor/json_generic	1.773s
+ok  	github.com/c360studio/semstreams/processor/json_map	4.584s
+ok  	github.com/c360studio/semstreams/processor/research-graph-assess	6.550s
+ok  	github.com/c360studio/semstreams/processor/research-graph-classify	6.839s
+ok  	github.com/c360studio/semstreams/processor/research-graph-execute	6.648s
+ok  	github.com/c360studio/semstreams/processor/research-graph-llmwrap	1.331s
+ok  	github.com/c360studio/semstreams/processor/research-graph-route	6.616s
+ok  	github.com/c360studio/semstreams/processor/research-graph-synthesize	6.585s
+ok  	github.com/c360studio/semstreams/processor/rule	44.939s
+ok  	github.com/c360studio/semstreams/processor/rule/expression	1.313s
+ok  	github.com/c360studio/semstreams/service	24.480s
+?   	github.com/c360studio/semstreams/storage	[no test files]
+ok  	github.com/c360studio/semstreams/storage/objectstore	64.843s
+ok  	github.com/c360studio/semstreams/storage/storeregistry	1.334s
+ok  	github.com/c360studio/semstreams/test	1.981s
+ok  	github.com/c360studio/semstreams/test/compat/semteams	1.335s
+ok  	github.com/c360studio/semstreams/test/contract	20.401s
+ok  	github.com/c360studio/semstreams/test/e2e/client	7.265s
+ok  	github.com/c360studio/semstreams/test/e2e/config	1.288s
+ok  	github.com/c360studio/semstreams/test/e2e/harness/lessoncuration	1.713s
+ok  	github.com/c360studio/semstreams/test/e2e/harness/milestoneprobe	1.308s
+ok  	github.com/c360studio/semstreams/test/e2e/harness/processbarrier	1.339s
+ok  	github.com/c360studio/semstreams/test/e2e/mock	1.430s
+?   	github.com/c360studio/semstreams/test/e2e/mock/cmd	[no test files]
+?   	github.com/c360studio/semstreams/test/e2e/results	[no test files]
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	3.437s
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/agentic	1.357s
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/anomaly	1.340s
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/community	1.329s
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools	1.510s
+?   	github.com/c360studio/semstreams/test/e2e/scenarios/deep-research	[no test files]
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/lessons	1.359s
+?   	github.com/c360studio/semstreams/test/e2e/scenarios/lifecycle	[no test files]
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/ops	1.334s
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/research-graph	1.339s
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/search	1.307s
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/stages	8.070s
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/throughput	1.306s
+?   	github.com/c360studio/semstreams/test/fixtures/corecomposition	[no test files]
+ok  	github.com/c360studio/semstreams/test/natsclient	4.500s
+ok  	github.com/c360studio/semstreams/test/release	16.200s
+ok  	github.com/c360studio/semstreams/test/testinfra	130.688s
+?   	github.com/c360studio/semstreams/testutil	[no test files]
+ok  	github.com/c360studio/semstreams/types	1.185s
+ok  	github.com/c360studio/semstreams/vocabulary	1.219s
+ok  	github.com/c360studio/semstreams/vocabulary/agentic	1.249s
+ok  	github.com/c360studio/semstreams/vocabulary/bfo	1.174s
+ok  	github.com/c360studio/semstreams/vocabulary/builtins	1.228s
+ok  	github.com/c360studio/semstreams/vocabulary/cco	1.296s
+?   	github.com/c360studio/semstreams/vocabulary/examples	[no test files]
+ok  	github.com/c360studio/semstreams/vocabulary/export	1.365s
+ok  	github.com/c360studio/semstreams/vocabulary/governance	1.211s
+?   	github.com/c360studio/semstreams/vocabulary/rulepacks	[no test files]
+[INTEGRATION] recorded latency distributions (submission order):
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=predicate-owner reps=5 p50=711.125µs p95=721.416µs p99=721.416µs max=733µs submitted=733µs,683µs,710.458µs,711.125µs,721.416µs
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=predicate-forward reps=5 p50=60.109833ms p95=60.5095ms p99=60.5095ms max=61.96625ms submitted=61.96625ms,60.5095ms,60.109833ms,57.719667ms,58.532459ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=name-owner reps=5 p50=1.049125ms p95=1.055917ms p99=1.055917ms max=1.473375ms submitted=1.473375ms,1.049125ms,1.055917ms,945.625µs,1.007833ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=name-forward reps=5 p50=70.59575ms p95=72.191583ms p99=72.191583ms max=75.500458ms submitted=72.191583ms,70.348791ms,75.500458ms,70.59575ms,69.037541ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=incoming-owner reps=5 p50=1.002958ms p95=1.05025ms p99=1.05025ms max=1.164458ms submitted=1.164458ms,1.05025ms,986.458µs,863.125µs,1.002958ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=incoming-forward reps=5 p50=67.790042ms p95=68.40025ms p99=68.40025ms max=81.461125ms submitted=68.40025ms,81.461125ms,67.790042ms,67.613ms,67.406542ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=predicate reps=5 p50=1.721417ms p95=1.8825ms p99=1.8825ms max=1.922917ms submitted=1.564167ms,1.922917ms,1.721417ms,1.8825ms,1.272666ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=name reps=5 p50=1.485958ms p95=1.615416ms p99=1.615416ms max=2.121333ms submitted=1.615416ms,1.485958ms,2.121333ms,1.434208ms,1.181208ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=incoming reps=5 p50=1.599916ms p95=1.609875ms p99=1.609875ms max=1.653ms submitted=1.599916ms,1.653ms,1.609875ms,1.414084ms,1.26975ms
+[INTEGRATION] tests complete

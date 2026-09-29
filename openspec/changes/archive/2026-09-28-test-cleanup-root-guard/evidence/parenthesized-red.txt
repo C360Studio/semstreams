@@ -1,0 +1,5 @@
+--- FAIL: TestCleanupRootGuardParenthesizedCallbackFailsClosed (0.17s)
+    cleanup_guard_test.go:1887: parenthesized callback concealed lifecycle Stop: [], <nil>
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.405s
+FAIL
