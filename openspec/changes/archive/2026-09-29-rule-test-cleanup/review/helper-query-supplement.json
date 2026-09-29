@@ -1,0 +1,1066 @@
+{
+  "base": "caa98f5acae60efbc669ad1e1795ab6e903abd42",
+  "note": "Annotations of the four already-recorded integration queries; no gopls queries re-run. Physical references and lexical source evidence are not independent semantic proof.",
+  "queries": [
+    {
+      "query": "GOFLAGS=-tags=integration gopls references processor/rule/cron_scheduler_test.go:76:6",
+      "build": "integration",
+      "raw_query_index": 11,
+      "search_record": 51,
+      "declaration": {
+        "path": "processor/rule/cron_scheduler_test.go",
+        "line": 76,
+        "text": "func newSchedulerForTest(t *testing.T, exec ActionExecutorInterface) *CronScheduler {"
+      },
+      "references": [
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 129,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 127,
+          "enclosing_declaration": "func TestCronScheduler_RegisterAndDeregister(t *testing.T) {",
+          "enclosing_declaration_end": 148,
+          "evidence_lines": [],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 237,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, &recordingExecutor{})",
+          "enclosing_declaration_line": 236,
+          "enclosing_declaration": "func TestCronScheduler_StartTwiceFails(t *testing.T) {",
+          "enclosing_declaration_end": 254,
+          "evidence_lines": [
+            {
+              "line": 238,
+              "text": "ctx, cancel := context.WithCancel(context.Background())"
+            },
+            {
+              "line": 239,
+              "text": "defer cancel()"
+            },
+            {
+              "line": 241,
+              "text": "if err := s.Start(ctx); err != nil {"
+            },
+            {
+              "line": 245,
+              "text": "if err := s.Stop(context.Background()); err != nil {"
+            },
+            {
+              "line": 246,
+              "text": "t.Errorf(\"Stop = %v, want nil\", err)"
+            },
+            {
+              "line": 250,
+              "text": "if err := s.Start(ctx); err == nil {"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 256,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, &recordingExecutor{})",
+          "enclosing_declaration_line": 255,
+          "enclosing_declaration": "func TestCronScheduler_StartRejectsNilContext(t *testing.T) {",
+          "enclosing_declaration_end": 261,
+          "evidence_lines": [
+            {
+              "line": 257,
+              "text": "if err := s.Start(nil); err == nil {"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 264,
+          "column": 8,
+          "text": "s := newSchedulerForTest(t, &recordingExecutor{})",
+          "enclosing_declaration_line": 262,
+          "enclosing_declaration": "func TestCronScheduler_StopOnNeverStartedIsSafe(t *testing.T) {",
+          "enclosing_declaration_end": 275,
+          "evidence_lines": [
+            {
+              "line": 262,
+              "text": "func TestCronScheduler_StopOnNeverStartedIsSafe(t *testing.T) {"
+            },
+            {
+              "line": 265,
+              "text": "stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)"
+            },
+            {
+              "line": 266,
+              "text": "defer cancel()"
+            },
+            {
+              "line": 267,
+              "text": "if err := s.Stop(stopCtx); err != nil {"
+            },
+            {
+              "line": 268,
+              "text": "t.Fatalf(\"Stop on never-started scheduler = %v, want nil\", err)"
+            },
+            {
+              "line": 270,
+              "text": "if err := s.Stop(stopCtx); err != nil {"
+            },
+            {
+              "line": 271,
+              "text": "t.Fatalf(\"repeated completed Stop = %v, want nil\", err)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 277,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, &recordingExecutor{})",
+          "enclosing_declaration_line": 276,
+          "enclosing_declaration": "func TestCronScheduler_StopRejectsNilContext(t *testing.T) {",
+          "enclosing_declaration_end": 285,
+          "evidence_lines": [
+            {
+              "line": 276,
+              "text": "func TestCronScheduler_StopRejectsNilContext(t *testing.T) {"
+            },
+            {
+              "line": 278,
+              "text": "if err := s.Stop(nil); err == nil {"
+            },
+            {
+              "line": 279,
+              "text": "t.Fatal(\"Stop(nil) err = nil, want non-nil\")"
+            },
+            {
+              "line": 282,
+              "text": "t.Fatalf(\"rejected Stop fenced registration: %v\", err)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 337,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 335,
+          "enclosing_declaration": "func TestCronScheduler_FireDispatchesAllActions(t *testing.T) {",
+          "enclosing_declaration_end": 376,
+          "evidence_lines": [
+            {
+              "line": 349,
+              "text": "ctx := context.Background()"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 407,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 405,
+          "enclosing_declaration": "func TestCronScheduler_FireFireEveryNGate(t *testing.T) {",
+          "enclosing_declaration_end": 425,
+          "evidence_lines": [
+            {
+              "line": 415,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 428,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 426,
+          "enclosing_declaration": "func TestCronScheduler_FireCooldownGate(t *testing.T) {",
+          "enclosing_declaration_end": 445,
+          "evidence_lines": [
+            {
+              "line": 436,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 451,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 446,
+          "enclosing_declaration": "func TestCronScheduler_FireInflightGuard(t *testing.T) {",
+          "enclosing_declaration_end": 472,
+          "evidence_lines": [
+            {
+              "line": 458,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            },
+            {
+              "line": 464,
+              "text": "time.Sleep(20 * time.Millisecond)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 477,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 473,
+          "enclosing_declaration": "func TestCronScheduler_FirePanicRecover(t *testing.T) {",
+          "enclosing_declaration_end": 495,
+          "evidence_lines": [
+            {
+              "line": 487,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 500,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 496,
+          "enclosing_declaration": "func TestCronScheduler_FireUnknownRuleIsNoop(t *testing.T) {",
+          "enclosing_declaration_end": 509,
+          "evidence_lines": [
+            {
+              "line": 501,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 514,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 510,
+          "enclosing_declaration": "func TestCronScheduler_FireSurvivesActionError(t *testing.T) {",
+          "enclosing_declaration_end": 532,
+          "evidence_lines": [
+            {
+              "line": 511,
+              "text": "// One failing action does not stop sibling actions in the same tick \u2014"
+            },
+            {
+              "line": 524,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 537,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 533,
+          "enclosing_declaration": "func TestCronScheduler_StartIntegratesWithRegister(t *testing.T) {",
+          "enclosing_declaration_end": 556,
+          "evidence_lines": [
+            {
+              "line": 534,
+              "text": "// Smoke test: Start, Register, Deregister, Stop sequence \u2014 confirms"
+            },
+            {
+              "line": 540,
+              "text": "ctx, cancel := context.WithCancel(context.Background())"
+            },
+            {
+              "line": 541,
+              "text": "defer cancel()"
+            },
+            {
+              "line": 546,
+              "text": "if err := s.Start(ctx); err != nil {"
+            },
+            {
+              "line": 550,
+              "text": "stopCtx, cancelStop := context.WithTimeout(context.Background(), 2*time.Second)"
+            },
+            {
+              "line": 551,
+              "text": "defer cancelStop()"
+            },
+            {
+              "line": 552,
+              "text": "if err := s.Stop(stopCtx); err != nil {"
+            },
+            {
+              "line": 553,
+              "text": "t.Fatalf(\"Stop drain = %v, want nil\", err)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 565,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 557,
+          "enclosing_declaration": "func TestCronScheduler_StartActuallyFiresFromRobfig(t *testing.T) {",
+          "enclosing_declaration_end": 603,
+          "evidence_lines": [
+            {
+              "line": 575,
+              "text": "ctx, cancel := context.WithCancel(context.Background())"
+            },
+            {
+              "line": 576,
+              "text": "defer cancel()"
+            },
+            {
+              "line": 581,
+              "text": "if err := s.Start(ctx); err != nil {"
+            },
+            {
+              "line": 585,
+              "text": "if err := s.Stop(context.Background()); err != nil {"
+            },
+            {
+              "line": 586,
+              "text": "t.Errorf(\"Stop = %v, want nil\", err)"
+            },
+            {
+              "line": 595,
+              "text": "time.Sleep(50 * time.Millisecond)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 676,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec) // tracker is nil",
+          "enclosing_declaration_line": 674,
+          "enclosing_declaration": "func TestCronScheduler_FireWithNilTrackerNoops(t *testing.T) {",
+          "enclosing_declaration_end": 689,
+          "evidence_lines": [
+            {
+              "line": 681,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 745,
+          "column": 7,
+          "text": "s := newSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 743,
+          "enclosing_declaration": "func TestCronScheduler_RestoreFromTracker_NilTrackerNoop(t *testing.T) {",
+          "enclosing_declaration_end": 756,
+          "evidence_lines": [
+            {
+              "line": 750,
+              "text": "s.restoreFromTracker(context.Background())"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        }
+      ]
+    },
+    {
+      "query": "GOFLAGS=-tags=integration gopls references processor/rule/cron_scheduler_test.go:82:6",
+      "build": "integration",
+      "raw_query_index": 12,
+      "search_record": 52,
+      "declaration": {
+        "path": "processor/rule/cron_scheduler_test.go",
+        "line": 82,
+        "text": "func newUnstartedSchedulerForTest(t *testing.T, exec ActionExecutorInterface) *CronScheduler {"
+      },
+      "references": [
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1388,
+          "column": 8,
+          "text": "s := newUnstartedSchedulerForTest(t, &recordingExecutor{})",
+          "enclosing_declaration_line": 1386,
+          "enclosing_declaration": "func TestCronScheduler_StopSettlesWhenBarrierRacesDispatcherExit(t *testing.T) {",
+          "enclosing_declaration_end": 1416,
+          "evidence_lines": [
+            {
+              "line": 1386,
+              "text": "func TestCronScheduler_StopSettlesWhenBarrierRacesDispatcherExit(t *testing.T) {"
+            },
+            {
+              "line": 1389,
+              "text": "startCtx, cancelStart := context.WithCancel(context.Background())"
+            },
+            {
+              "line": 1390,
+              "text": "if err := s.Start(startCtx); err != nil {"
+            },
+            {
+              "line": 1393,
+              "text": "parked := laneCommand{run: func(context.Context) error { return nil }, result: make(chan error, 1)}"
+            },
+            {
+              "line": 1394,
+              "text": "parked.result <- errors.New(\"prefilled\")"
+            },
+            {
+              "line": 1399,
+              "text": "cancelStart()"
+            },
+            {
+              "line": 1402,
+              "text": "stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)"
+            },
+            {
+              "line": 1403,
+              "text": "defer cancelStop()"
+            },
+            {
+              "line": 1404,
+              "text": "stopReturned := make(chan error, 1)"
+            },
+            {
+              "line": 1405,
+              "text": "go func() { stopReturned <- s.Stop(stopCtx) }()"
+            },
+            {
+              "line": 1407,
+              "text": "<-parked.result"
+            },
+            {
+              "line": 1409,
+              "text": "if err := <-stopReturned; err != nil {"
+            },
+            {
+              "line": 1410,
+              "text": "t.Fatalf(\"Stop = %v, want nil: its fence raced the dispatcher's exit and was orphaned\", err)"
+            },
+            {
+              "line": 1412,
+              "text": "if got := <-parked.result; !errors.Is(got, context.Canceled) {"
+            },
+            {
+              "line": 1413,
+              "text": "t.Fatalf(\"parked dispatch end error = %v, want context.Canceled\", got)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 150,
+          "column": 7,
+          "text": "s := newUnstartedSchedulerForTest(t, &recordingExecutor{})",
+          "enclosing_declaration_line": 149,
+          "enclosing_declaration": "func TestCronScheduler_RegisterDuplicate(t *testing.T) {",
+          "enclosing_declaration_end": 160,
+          "evidence_lines": [],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 162,
+          "column": 7,
+          "text": "s := newUnstartedSchedulerForTest(t, &recordingExecutor{})",
+          "enclosing_declaration_line": 161,
+          "enclosing_declaration": "func TestCronScheduler_RegisterSkipsDisabled(t *testing.T) {",
+          "enclosing_declaration_end": 172,
+          "evidence_lines": [],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 174,
+          "column": 7,
+          "text": "s := newUnstartedSchedulerForTest(t, &recordingExecutor{})",
+          "enclosing_declaration_line": 173,
+          "enclosing_declaration": "func TestCronScheduler_RegisterRejectsNil(t *testing.T) {",
+          "enclosing_declaration_end": 179,
+          "evidence_lines": [],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 181,
+          "column": 7,
+          "text": "s := newUnstartedSchedulerForTest(t, &recordingExecutor{})",
+          "enclosing_declaration_line": 180,
+          "enclosing_declaration": "func TestCronScheduler_RegisterAfterStopIsRejectedWithoutMutation(t *testing.T) {",
+          "enclosing_declaration_end": 194,
+          "evidence_lines": [
+            {
+              "line": 180,
+              "text": "func TestCronScheduler_RegisterAfterStopIsRejectedWithoutMutation(t *testing.T) {"
+            },
+            {
+              "line": 183,
+              "text": "if err := s.Stop(context.Background()); err != nil {"
+            },
+            {
+              "line": 184,
+              "text": "t.Fatalf(\"Stop = %v, want nil\", err)"
+            },
+            {
+              "line": 188,
+              "text": "t.Fatal(\"Register after terminal Stop succeeded\")"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 196,
+          "column": 7,
+          "text": "s := newUnstartedSchedulerForTest(t, &recordingExecutor{})",
+          "enclosing_declaration_line": 195,
+          "enclosing_declaration": "func TestCronScheduler_StopSerializesWithAdmittedRegister(t *testing.T) {",
+          "enclosing_declaration_end": 235,
+          "evidence_lines": [
+            {
+              "line": 195,
+              "text": "func TestCronScheduler_StopSerializesWithAdmittedRegister(t *testing.T) {"
+            },
+            {
+              "line": 200,
+              "text": "// cannot commit its entry. Stop must serialize behind that admission."
+            },
+            {
+              "line": 203,
+              "text": "go func() { registerDone <- s.Register(rule) }()"
+            },
+            {
+              "line": 216,
+              "text": "// Stop waits on the lifecycle mutex Register holds; mutex waits are not"
+            },
+            {
+              "line": 218,
+              "text": "stopReturned := make(chan error, 1)"
+            },
+            {
+              "line": 219,
+              "text": "go func() { stopReturned <- s.Stop(context.Background()) }()"
+            },
+            {
+              "line": 222,
+              "text": "if err := <-registerDone; err != nil {"
+            },
+            {
+              "line": 225,
+              "text": "if err := <-stopReturned; err != nil {"
+            },
+            {
+              "line": 226,
+              "text": "t.Fatalf(\"Stop = %v, want nil\", err)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 293,
+          "column": 8,
+          "text": "s := newUnstartedSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 286,
+          "enclosing_declaration": "func TestCronScheduler_StandaloneStartContextAndStopSettlement(t *testing.T) {",
+          "enclosing_declaration_end": 334,
+          "evidence_lines": [
+            {
+              "line": 286,
+              "text": "func TestCronScheduler_StandaloneStartContextAndStopSettlement(t *testing.T) {"
+            },
+            {
+              "line": 290,
+              "text": "started: make(chan context.Context, 1),"
+            },
+            {
+              "line": 298,
+              "text": "startCtx := context.WithValue(context.Background(), contextKey(\"owner\"), \"start\")"
+            },
+            {
+              "line": 299,
+              "text": "if err := s.Start(startCtx); err != nil {"
+            },
+            {
+              "line": 308,
+              "text": "dispatchCtx := <-exec.started"
+            },
+            {
+              "line": 312,
+              "text": "stopReturned := make(chan error, 1)"
+            },
+            {
+              "line": 313,
+              "text": "go func() { stopReturned <- s.Stop(context.Background()) }()"
+            },
+            {
+              "line": 316,
+              "text": "case err := <-stopReturned:"
+            },
+            {
+              "line": 317,
+              "text": "t.Fatalf(\"Stop returned (%v) while an admitted cron action was still running\", err)"
+            },
+            {
+              "line": 320,
+              "text": "if err := s.Stop(context.Background()); !errs.IsTransient(err) {"
+            },
+            {
+              "line": 321,
+              "text": "t.Fatalf(\"concurrent Stop = %v, want a transient refusal\", err)"
+            },
+            {
+              "line": 324,
+              "text": "<-fireDone"
+            },
+            {
+              "line": 325,
+              "text": "if err := <-stopReturned; err != nil {"
+            },
+            {
+              "line": 326,
+              "text": "t.Fatalf(\"Stop = %v, want nil\", err)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 78,
+          "column": 7,
+          "text": "s := newUnstartedSchedulerForTest(t, exec)",
+          "enclosing_declaration_line": 76,
+          "enclosing_declaration": "func newSchedulerForTest(t *testing.T, exec ActionExecutorInterface) *CronScheduler {",
+          "enclosing_declaration_end": 81,
+          "evidence_lines": [],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        }
+      ]
+    },
+    {
+      "query": "GOFLAGS=-tags=integration gopls references processor/rule/cron_scheduler_test.go:627:6",
+      "build": "integration",
+      "raw_query_index": 13,
+      "search_record": 53,
+      "declaration": {
+        "path": "processor/rule/cron_scheduler_test.go",
+        "line": 627,
+        "text": "func newSchedulerWithTrackerForTest(t *testing.T, exec ActionExecutorInterface) (*CronScheduler, *ScheduleTracker) {"
+      },
+      "references": [
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 646,
+          "column": 16,
+          "text": "s, tracker := newSchedulerWithTrackerForTest(t, exec)",
+          "enclosing_declaration_line": 644,
+          "enclosing_declaration": "func TestCronScheduler_FirePersistsLastFiredRecord(t *testing.T) {",
+          "enclosing_declaration_end": 673,
+          "evidence_lines": [
+            {
+              "line": 651,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            },
+            {
+              "line": 656,
+              "text": "rec, err := tracker.LastFiredAt(context.Background(), rule.ID())"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 692,
+          "column": 16,
+          "text": "s, tracker := newSchedulerWithTrackerForTest(t, exec)",
+          "enclosing_declaration_line": 690,
+          "enclosing_declaration": "func TestCronScheduler_FireOverwritesPriorRecord(t *testing.T) {",
+          "enclosing_declaration_end": 720,
+          "evidence_lines": [
+            {
+              "line": 697,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            },
+            {
+              "line": 700,
+              "text": "first, err := tracker.LastFiredAt(context.Background(), rule.ID())"
+            },
+            {
+              "line": 708,
+              "text": "time.Sleep(2 * time.Millisecond)"
+            },
+            {
+              "line": 710,
+              "text": "second, err := tracker.LastFiredAt(context.Background(), rule.ID())"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 723,
+          "column": 10,
+          "text": "s, _ := newSchedulerWithTrackerForTest(t, exec)",
+          "enclosing_declaration_line": 721,
+          "enclosing_declaration": "func TestCronScheduler_RestoreFromTracker_NoRecordSkips(t *testing.T) {",
+          "enclosing_declaration_end": 735,
+          "evidence_lines": [
+            {
+              "line": 730,
+              "text": "s.restoreFromTracker(context.Background())"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 738,
+          "column": 10,
+          "text": "s, _ := newSchedulerWithTrackerForTest(t, exec)",
+          "enclosing_declaration_line": 736,
+          "enclosing_declaration": "func TestCronScheduler_RestoreFromTracker_NoRulesNoop(t *testing.T) {",
+          "enclosing_declaration_end": 742,
+          "evidence_lines": [
+            {
+              "line": 739,
+              "text": "s.restoreFromTracker(context.Background())"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 759,
+          "column": 16,
+          "text": "s, tracker := newSchedulerWithTrackerForTest(t, exec)",
+          "enclosing_declaration_line": 757,
+          "enclosing_declaration": "func TestCronScheduler_RestoreFromTracker_CountsExpectedFires(t *testing.T) {",
+          "enclosing_declaration_end": 787,
+          "evidence_lines": [
+            {
+              "line": 771,
+              "text": "if err := tracker.RecordFire(context.Background(), rule.ID(), rule.ScheduleString(), five); err != nil {"
+            },
+            {
+              "line": 777,
+              "text": "s.restoreFromTracker(context.Background())"
+            },
+            {
+              "line": 787,
+              "text": "// substitution context."
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 790,
+          "column": 16,
+          "text": "s, tracker := newSchedulerWithTrackerForTest(t, exec)",
+          "enclosing_declaration_line": 788,
+          "enclosing_declaration": "func TestCronScheduler_RestoreFromTracker_HydratesLastFiredNanos(t *testing.T) {",
+          "enclosing_declaration_end": 819,
+          "evidence_lines": [
+            {
+              "line": 797,
+              "text": "if err := tracker.RecordFire(context.Background(), rule.ID(), rule.ScheduleString(), persisted); err != nil {"
+            },
+            {
+              "line": 801,
+              "text": "s.restoreFromTracker(context.Background())"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 822,
+          "column": 16,
+          "text": "s, tracker := newSchedulerWithTrackerForTest(t, exec)",
+          "enclosing_declaration_line": 820,
+          "enclosing_declaration": "func TestCronScheduler_RestoreFromTracker_EnforcesCooldownAcrossRestart(t *testing.T) {",
+          "enclosing_declaration_end": 850,
+          "evidence_lines": [
+            {
+              "line": 829,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            },
+            {
+              "line": 833,
+              "text": "if err := tracker.RecordFire(context.Background(), rule.ID(), rule.ScheduleString(), prev); err != nil {"
+            },
+            {
+              "line": 837,
+              "text": "s.restoreFromTracker(context.Background())"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 853,
+          "column": 10,
+          "text": "s, _ := newSchedulerWithTrackerForTest(t, rec)",
+          "enclosing_declaration_line": 851,
+          "enclosing_declaration": "func TestCronScheduler_FireBuildsScheduleContext(t *testing.T) {",
+          "enclosing_declaration_end": 886,
+          "evidence_lines": [
+            {
+              "line": 861,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 889,
+          "column": 10,
+          "text": "s, _ := newSchedulerWithTrackerForTest(t, rec)",
+          "enclosing_declaration_line": 887,
+          "enclosing_declaration": "func TestCronScheduler_FireScheduleContextSeesPriorFire(t *testing.T) {",
+          "enclosing_declaration_end": 928,
+          "evidence_lines": [
+            {
+              "line": 894,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            },
+            {
+              "line": 902,
+              "text": "time.Sleep(2 * time.Millisecond)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        }
+      ]
+    },
+    {
+      "query": "GOFLAGS=-tags=integration gopls references processor/rule/cron_scheduler_test.go:937:6",
+      "build": "integration",
+      "raw_query_index": 14,
+      "search_record": 54,
+      "declaration": {
+        "path": "processor/rule/cron_scheduler_test.go",
+        "line": 937,
+        "text": "func newSchedulerWithMetricsForTest(t *testing.T, exec ActionExecutorInterface) (*CronScheduler, *cronMetrics) {"
+      },
+      "references": [
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1002,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 1000,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_FireErrorRecorded(t *testing.T) {",
+          "enclosing_declaration_end": 1022,
+          "evidence_lines": [
+            {
+              "line": 1007,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1025,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 1023,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_FirePanicRecordedAsPanic(t *testing.T) {",
+          "enclosing_declaration_end": 1042,
+          "evidence_lines": [
+            {
+              "line": 1032,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1045,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 1043,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_CooldownSkippedRecorded(t *testing.T) {",
+          "enclosing_declaration_end": 1069,
+          "evidence_lines": [
+            {
+              "line": 1052,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1072,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 1070,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_FireUpdatesNextFireGauge(t *testing.T) {",
+          "enclosing_declaration_end": 1091,
+          "evidence_lines": [
+            {
+              "line": 1079,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            },
+            {
+              "line": 1090,
+              "text": "// Start flips scheduler_running to 1; Stop returns it to 0. Catches"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1094,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 1092,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_SchedulerRunningGauge(t *testing.T) {",
+          "enclosing_declaration_end": 1117,
+          "evidence_lines": [
+            {
+              "line": 1099,
+              "text": "if err := s.Start(context.Background()); err != nil {"
+            },
+            {
+              "line": 1106,
+              "text": "if err := s.Stop(context.Background()); err != nil {"
+            },
+            {
+              "line": 1107,
+              "text": "t.Fatalf(\"Stop = %v, want nil\", err)"
+            },
+            {
+              "line": 1110,
+              "text": "t.Errorf(\"running after Stop = %f, want 0\", got)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1120,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 1118,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_PanicWinsOverPartialSuccess(t *testing.T) {",
+          "enclosing_declaration_end": 1146,
+          "evidence_lines": [
+            {
+              "line": 1131,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1149,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 1147,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_HotReloadKeepsRegisteredAtOne(t *testing.T) {",
+          "enclosing_declaration_end": 1167,
+          "evidence_lines": [],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1170,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 1168,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_DisabledRuleNoGaugeBump(t *testing.T) {",
+          "enclosing_declaration_end": 1184,
+          "evidence_lines": [],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1187,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 1185,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_CooldownSkippedDoesNotUpdateNextFire(t *testing.T) {",
+          "enclosing_declaration_end": 1214,
+          "evidence_lines": [
+            {
+              "line": 1194,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            },
+            {
+              "line": 1201,
+              "text": "time.Sleep(2 * time.Millisecond)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 1220,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 1215,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_InflightSkippedRecorded(t *testing.T) {",
+          "enclosing_declaration_end": 1240,
+          "evidence_lines": [
+            {
+              "line": 1225,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            },
+            {
+              "line": 1230,
+              "text": "time.Sleep(10 * time.Millisecond) // let first fire grab the inflight CAS"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 956,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 954,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_RegisterDeregisterFlipsGauges(t *testing.T) {",
+          "enclosing_declaration_end": 978,
+          "evidence_lines": [],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        },
+        {
+          "path": "processor/rule/cron_scheduler_test.go",
+          "line": 981,
+          "column": 10,
+          "text": "s, m := newSchedulerWithMetricsForTest(t, exec)",
+          "enclosing_declaration_line": 979,
+          "enclosing_declaration": "func TestCronScheduler_Metrics_FireSuccessRecorded(t *testing.T) {",
+          "enclosing_declaration_end": 999,
+          "evidence_lines": [
+            {
+              "line": 986,
+              "text": "startSchedulerForTest(context.Background(), t, s)"
+            }
+          ],
+          "source_sha256": "50fe44768ca5dd96b02f321418e5a532d21aaaeb68532864d3d925c5a6b2d5b2"
+        }
+      ]
+    }
+  ]
+}

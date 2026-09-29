@@ -1,0 +1,11 @@
+{
+  "archive": "verified-claims.zip",
+  "sha256": "6846daec260ec2d7faa1f9a1835e27e6db142fe935984a58cc5c7d80635ea8f9",
+  "members": [
+    {
+      "name": "verified-claims.json",
+      "bytes": 127058,
+      "sha256": "a6b62af1c23872df8233e1eaaadfce35d91ca293a2e75d58e3624878c18c19a8"
+    }
+  ]
+}

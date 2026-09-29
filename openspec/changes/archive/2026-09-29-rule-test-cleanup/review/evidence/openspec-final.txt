@@ -1,0 +1,2189 @@
+{
+  "items": [
+    {
+      "id": "agent-run-milestones",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 10
+    },
+    {
+      "id": "agentic-dispatch",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[10]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[11]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 7
+    },
+    {
+      "id": "agentic-governance",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 5
+    },
+    {
+      "id": "agentic-lessons",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 5
+    },
+    {
+      "id": "agentic-loop",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[10]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[11]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[14]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[15]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[16]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[17]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[19]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[20]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[21]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[22]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[23]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[24]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[25]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[26]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 4
+    },
+    {
+      "id": "agentic-model",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "agentic-terminal-events",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[10]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[11]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "agentic-tools",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[11]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[14]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[15]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[16]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[17]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[19]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[20]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[23]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "application-logging",
+      "type": "spec",
+      "valid": true,
+      "issues": [],
+      "durationMs": 2
+    },
+    {
+      "id": "component-discovery",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "component-lifecycle",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "component-runtime-config",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[11]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[14]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "composition-validation",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 4
+    },
+    {
+      "id": "entity-id-contract",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[10]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[11]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[14]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[15]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[16]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[17]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[18]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "framework-bucket-catalog",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "framework-composition",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[10]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "fusion",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 0
+    },
+    {
+      "id": "gated-dag-dispatch",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 0
+    },
+    {
+      "id": "gateway-error-projection",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "gateway-query-routing",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "gateway-response-projection",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "graph-clustering",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "graph-embedding",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "graph-events",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "graph-index",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[10]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[11]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[14]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 5
+    },
+    {
+      "id": "graph-index-readiness",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[10]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[11]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[14]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[15]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[16]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[17]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 4
+    },
+    {
+      "id": "graph-ingest",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[10]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[11]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[18]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[19]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[20]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[22]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[28]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[33]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[35]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[37]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "graph-query",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[10]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[11]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[14]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[19]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[20]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "graph-retention",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 0
+    },
+    {
+      "id": "graph-state-contract",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 0
+    },
+    {
+      "id": "graph-view-subscription",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "jetstream-consumer-policy",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[13]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[15]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[16]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[17]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[18]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[22]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[23]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[25]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[26]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "keyed-dispatch",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "lifecycle",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[14]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "max-delivery-observability",
+      "type": "spec",
+      "valid": true,
+      "issues": [],
+      "durationMs": 0
+    },
+    {
+      "id": "message-logger",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 0
+    },
+    {
+      "id": "nats-client-diagnostics",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "nats-kv-keys",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "nats-streaming",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "nats-subscription-lifecycle",
+      "type": "spec",
+      "valid": true,
+      "issues": [],
+      "durationMs": 2
+    },
+    {
+      "id": "payload-registry",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "predicate-contract",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[9]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[10]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "projection-mutation-client",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[12]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "release-candidate-proof",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "request-reply-response-bounds",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "rule-action-observability",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "rule-engine",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[8]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "rule-entity-watching",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 0
+    },
+    {
+      "id": "rule-projection-mutations",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "runtime-context-ownership",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "service-composition",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 3
+    },
+    {
+      "id": "service-shutdown",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "storage-observability",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 2
+    },
+    {
+      "id": "stream-provisioning",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[3]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "structural-identity",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "test-cleanup-policy",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[5]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[6]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[7]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "user-response-subject-ownership",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[0]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[4]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 1
+    },
+    {
+      "id": "websocket-output",
+      "type": "spec",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "requirements[1]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        },
+        {
+          "level": "INFO",
+          "path": "requirements[2]",
+          "message": "Requirement text is very long (>500 characters). Consider breaking it down."
+        }
+      ],
+      "durationMs": 0
+    }
+  ],
+  "summary": {
+    "totals": {
+      "items": 58,
+      "passed": 58,
+      "failed": 0
+    },
+    "byType": {
+      "change": {
+        "items": 0,
+        "passed": 0,
+        "failed": 0
+      },
+      "spec": {
+        "items": 58,
+        "passed": 58,
+        "failed": 0
+      }
+    }
+  },
+  "version": "1.0",
+  "root": {
+    "path": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams",
+    "source": "nearest"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "source_draft_sha256": "2111521d809aa3c6861b96c6f9ffa0a04a994b09596164a277febda245868c38",
+  "materialized_sha256": "0a5d50dfedf10925deb730d8bbef40d2000f2b72c1e5632f22cf9df0bc82ae02",
+  "transformation": "Converted prose bullets to paragraphs and appended deduplicated copies of all inline source pins using the canonical verifier grammar. Existing narrative, table cells, claims and pin text unchanged.",
+  "inline_pins": 94,
+  "unique_pins": 93
+}

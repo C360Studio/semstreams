@@ -1,0 +1,17 @@
+{
+  "command": [
+    "openspec",
+    "validate",
+    "--all",
+    "--strict",
+    "--no-interactive",
+    "--json"
+  ],
+  "cwd": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams",
+  "pid": 4594,
+  "started_epoch": 1790709833.899734,
+  "state": "completed",
+  "log": "/private/tmp/gh1428-openspec-final.log",
+  "exit_code": 0,
+  "elapsed_seconds": 0.334
+}

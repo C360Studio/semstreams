@@ -25,7 +25,11 @@ func TestIntegration_Processor_DebounceZero_NoCoalescingSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test client: %v", err)
 	}
-	defer testClient.Terminate()
+	defer func() {
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate debounce test client: %v", err)
+		}
+	}()
 
 	tests := []struct {
 		name               string
@@ -56,18 +60,23 @@ func TestIntegration_Processor_DebounceZero_NoCoalescingSet(t *testing.T) {
 			config.DebounceDelayMs = tt.debounceDelayMs
 
 			// Create processor
+			operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancelOperation()
 			processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
+			var owner *processorTestOwner
+			if processor != nil {
+				owner = newProcessorTestOwner(processor)
+				defer owner.finish(operationCtx, t)
+			}
 			if err != nil {
 				t.Fatalf("NewProcessor failed: %v", err)
 			}
 			processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
-			ctx := context.Background()
-			err = processor.Start(ctx)
+			err = processor.Start(owner.startContext(operationCtx))
 			if err != nil {
 				t.Fatalf("Start failed: %v", err)
 			}
-			defer processor.Stop(context.Background())
 
 			// Check entityCoalescer state
 			isNil := processor.entityCoalescer == nil
@@ -102,20 +111,29 @@ func TestIntegration_Processor_DebounceZero_ImmediateProcessing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test client: %v", err)
 	}
-	defer testClient.Terminate()
+	defer func() {
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate debounce test client: %v", err)
+		}
+	}()
 
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(operationCtx, t)
+	}
 	if err != nil {
 		t.Fatalf("NewProcessor failed: %v", err)
 	}
 	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
-	ctx := context.Background()
-	err = processor.Start(ctx)
+	err = processor.Start(owner.startContext(operationCtx))
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer processor.Stop(context.Background())
 
 	// Verify coalescer is nil
 	if processor.entityCoalescer != nil {
@@ -142,20 +160,29 @@ func TestIntegration_Processor_DebounceZero_NoTickerSpinning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test client: %v", err)
 	}
-	defer testClient.Terminate()
+	defer func() {
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate debounce test client: %v", err)
+		}
+	}()
 
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(operationCtx, t)
+	}
 	if err != nil {
 		t.Fatalf("NewProcessor failed: %v", err)
 	}
 	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
-	ctx := context.Background()
-	err = processor.Start(ctx)
+	err = processor.Start(owner.startContext(operationCtx))
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer processor.Stop(context.Background())
 
 	// When debounce=0, entityCoalescer should be nil
 	// Therefore no ticker goroutine exists
@@ -186,20 +213,29 @@ func TestIntegration_Processor_DebounceNonZero_CoalescingSetCreated(t *testing.T
 	if err != nil {
 		t.Fatalf("Failed to create test client: %v", err)
 	}
-	defer testClient.Terminate()
+	defer func() {
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate debounce test client: %v", err)
+		}
+	}()
 
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(operationCtx, t)
+	}
 	if err != nil {
 		t.Fatalf("NewProcessor failed: %v", err)
 	}
 	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
-	ctx := context.Background()
-	err = processor.Start(ctx)
+	err = processor.Start(owner.startContext(operationCtx))
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer processor.Stop(context.Background())
 
 	// Should have created coalescer
 	if processor.entityCoalescer == nil {
@@ -221,7 +257,11 @@ func TestIntegration_Processor_DebounceZero_Transition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test client: %v", err)
 	}
-	defer testClient.Terminate()
+	defer func() {
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate debounce test client: %v", err)
+		}
+	}()
 
 	tests := []struct {
 		name                  string
@@ -266,18 +306,23 @@ func TestIntegration_Processor_DebounceZero_Transition(t *testing.T) {
 			config := mustTestConfig(t, "rule-test-pack")
 			config.DebounceDelayMs = tt.debounceDelayMs
 
+			operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancelOperation()
 			processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
+			var owner *processorTestOwner
+			if processor != nil {
+				owner = newProcessorTestOwner(processor)
+				defer owner.finish(operationCtx, t)
+			}
 			if err != nil {
 				t.Fatalf("NewProcessor failed: %v", err)
 			}
 			processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
-			ctx := context.Background()
-			err = processor.Start(ctx)
+			err = processor.Start(owner.startContext(operationCtx))
 			if err != nil {
 				t.Fatalf("Start failed: %v", err)
 			}
-			defer processor.Stop(context.Background())
 
 			coalescerExists := processor.entityCoalescer != nil
 
@@ -307,21 +352,30 @@ func TestIntegration_Processor_DebounceZero_ConfigValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test client: %v", err)
 	}
-	defer testClient.Terminate()
+	defer func() {
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate debounce test client: %v", err)
+		}
+	}()
 
 	// Should not error on debounce=0
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(operationCtx, t)
+	}
 	if err != nil {
 		t.Fatalf("NewProcessor should accept debounce=0, got error: %v", err)
 	}
 	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
-	ctx := context.Background()
-	err = processor.Start(ctx)
+	err = processor.Start(owner.startContext(operationCtx))
 	if err != nil {
 		t.Fatalf("Start should succeed with debounce=0, got error: %v", err)
 	}
-	defer processor.Stop(context.Background())
 
 	// Verify coalescer is nil
 	if processor.entityCoalescer != nil {
@@ -343,7 +397,11 @@ func TestIntegration_Processor_DebounceZero_EdgeCases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test client: %v", err)
 	}
-	defer testClient.Terminate()
+	defer func() {
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate debounce test client: %v", err)
+		}
+	}()
 
 	tests := []struct {
 		name                  string
@@ -376,18 +434,23 @@ func TestIntegration_Processor_DebounceZero_EdgeCases(t *testing.T) {
 			config := mustTestConfig(t, "rule-test-pack")
 			config.DebounceDelayMs = tt.debounceDelayMs
 
+			operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancelOperation()
 			processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
+			var owner *processorTestOwner
+			if processor != nil {
+				owner = newProcessorTestOwner(processor)
+				defer owner.finish(operationCtx, t)
+			}
 			if err != nil {
 				t.Fatalf("NewProcessor failed: %v", err)
 			}
 			processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 
-			ctx := context.Background()
-			err = processor.Start(ctx)
+			err = processor.Start(owner.startContext(operationCtx))
 			if err != nil {
 				t.Fatalf("Start failed: %v", err)
 			}
-			defer processor.Stop(context.Background())
 
 			coalescerExists := processor.entityCoalescer != nil
 
@@ -414,7 +477,11 @@ func TestIntegration_Processor_DebounceZero_NoResourceLeak(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test client: %v", err)
 	}
-	defer testClient.Terminate()
+	defer func() {
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate debounce test client: %v", err)
+		}
+	}()
 
 	// Create and stop processor multiple times
 	for i := 0; i < 3; i++ {

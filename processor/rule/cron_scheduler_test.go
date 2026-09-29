@@ -91,16 +91,11 @@ func newUnstartedSchedulerForTest(t *testing.T, exec ActionExecutorInterface) *C
 	return s
 }
 
-func startSchedulerForTest(ctx context.Context, t *testing.T, scheduler *CronScheduler) {
+func startSchedulerForTest(ctx context.Context, t *testing.T, owner *cronSchedulerTestOwner) {
 	t.Helper()
-	if err := scheduler.Start(ctx); err != nil {
+	if err := owner.scheduler.Start(owner.startContext(ctx)); err != nil {
 		t.Fatalf("Start = %v, want nil", err)
 	}
-	t.Cleanup(func() {
-		if err := scheduler.Stop(context.Background()); err != nil {
-			t.Errorf("Stop = %v, want nil", err)
-		}
-	})
 }
 
 func cronRuleForTest(t *testing.T, mutate func(*Definition)) *CronRule {
@@ -235,19 +230,17 @@ func TestCronScheduler_StopSerializesWithAdmittedRegister(t *testing.T) {
 
 func TestCronScheduler_StartTwiceFails(t *testing.T) {
 	s := newSchedulerForTest(t, &recordingExecutor{})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
+	startCtx := owner.startContext(operationCtx)
 
-	if err := s.Start(ctx); err != nil {
+	if err := s.Start(startCtx); err != nil {
 		t.Fatalf("first Start = %v, want nil", err)
 	}
-	defer func() {
-		if err := s.Stop(context.Background()); err != nil {
-			t.Errorf("Stop = %v, want nil", err)
-		}
-	}()
 
-	if err := s.Start(ctx); err == nil {
+	if err := s.Start(startCtx); err == nil {
 		t.Fatal("second Start err = nil, want non-nil")
 	}
 }
@@ -335,6 +328,10 @@ func TestCronScheduler_StandaloneStartContextAndStopSettlement(t *testing.T) {
 func TestCronScheduler_FireDispatchesAllActions(t *testing.T) {
 	exec := &recordingExecutor{}
 	s := newSchedulerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Actions = []Action{
 			{Type: ActionTypePublish, Subject: "a"},
@@ -346,8 +343,7 @@ func TestCronScheduler_FireDispatchesAllActions(t *testing.T) {
 	}
 	// Tests that call fire directly supply the same operation adapter the
 	// production runtime coordinator supplies.
-	ctx := context.Background()
-	startSchedulerForTest(ctx, t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID())
 
@@ -385,7 +381,11 @@ func TestCronScheduler_GraphGuardBlocksDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCronScheduler: %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
+	startSchedulerForTest(operationCtx, t, owner)
 	rule := cronRuleForTest(t, nil)
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -405,6 +405,10 @@ func TestCronScheduler_GraphGuardBlocksDispatch(t *testing.T) {
 func TestCronScheduler_FireFireEveryNGate(t *testing.T) {
 	exec := &recordingExecutor{}
 	s := newSchedulerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.FireEveryNEvents = 3
 		d.Actions = []Action{{Type: ActionTypePublish, Subject: "a"}}
@@ -412,7 +416,7 @@ func TestCronScheduler_FireFireEveryNGate(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	// Tick 6 times. With N=3, only ticks 3 and 6 fire actions → 2 dispatches.
 	for i := 0; i < 6; i++ {
@@ -426,6 +430,10 @@ func TestCronScheduler_FireFireEveryNGate(t *testing.T) {
 func TestCronScheduler_FireCooldownGate(t *testing.T) {
 	exec := &recordingExecutor{}
 	s := newSchedulerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Cooldown = "10s"
 		d.Actions = []Action{{Type: ActionTypePublish, Subject: "a"}}
@@ -433,7 +441,7 @@ func TestCronScheduler_FireCooldownGate(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	// First fire dispatches; second within 10s is skipped by cooldown.
 	s.fire(rule.ID())
@@ -449,13 +457,17 @@ func TestCronScheduler_FireInflightGuard(t *testing.T) {
 	// CAS gate.
 	exec := &recordingExecutor{delay: 200 * time.Millisecond}
 	s := newSchedulerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Actions = []Action{{Type: ActionTypePublish, Subject: "a"}}
 	})
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -475,6 +487,10 @@ func TestCronScheduler_FirePanicRecover(t *testing.T) {
 	// recover keeps robfig's internal goroutine alive.
 	exec := &recordingExecutor{panicOn: "boom"}
 	s := newSchedulerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Actions = []Action{
 			{Type: ActionTypePublish, Subject: "boom"},
@@ -484,7 +500,7 @@ func TestCronScheduler_FirePanicRecover(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	// If recover were missing this would crash the test goroutine.
 	s.fire(rule.ID())
@@ -498,7 +514,11 @@ func TestCronScheduler_FireUnknownRuleIsNoop(t *testing.T) {
 	// closure's map lookup. Dropping silently is correct.
 	exec := &recordingExecutor{}
 	s := newSchedulerForTest(t, exec)
-	startSchedulerForTest(context.Background(), t, s)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire("never-registered")
 
@@ -512,6 +532,10 @@ func TestCronScheduler_FireSurvivesActionError(t *testing.T) {
 	// matches StatefulEvaluator best-effort semantics.
 	exec := &recordingExecutor{errOnce: errors.New("boom")}
 	s := newSchedulerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Actions = []Action{
 			{Type: ActionTypePublish, Subject: "first-fails"},
@@ -521,7 +545,7 @@ func TestCronScheduler_FireSurvivesActionError(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID())
 
@@ -563,6 +587,10 @@ func TestCronScheduler_StartActuallyFiresFromRobfig(t *testing.T) {
 	// on a busy CI host.
 	exec := &recordingExecutor{}
 	s := newSchedulerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 
 	def := validCronDef()
 	def.ID = "rule-" + t.Name()
@@ -572,20 +600,12 @@ func TestCronScheduler_StartActuallyFiresFromRobfig(t *testing.T) {
 		t.Fatalf("NewCronRule = %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	if err := s.Start(ctx); err != nil {
+	if err := s.Start(owner.startContext(operationCtx)); err != nil {
 		t.Fatalf("Start = %v", err)
 	}
-	defer func() {
-		if err := s.Stop(context.Background()); err != nil {
-			t.Errorf("Stop = %v, want nil", err)
-		}
-	}()
 
 	deadline := time.Now().Add(1500 * time.Millisecond)
 	for time.Now().Before(deadline) {
@@ -644,11 +664,15 @@ func newSchedulerWithTrackerForTest(t *testing.T, exec ActionExecutorInterface) 
 func TestCronScheduler_FirePersistsLastFiredRecord(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, tracker := newSchedulerWithTrackerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, nil)
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	before := time.Now()
 	s.fire(rule.ID())
@@ -674,11 +698,15 @@ func TestCronScheduler_FirePersistsLastFiredRecord(t *testing.T) {
 func TestCronScheduler_FireWithNilTrackerNoops(t *testing.T) {
 	exec := &recordingExecutor{}
 	s := newSchedulerForTest(t, exec) // tracker is nil
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, nil)
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 	s.fire(rule.ID()) // must not panic
 	if exec.callCount() != 1 {
 		t.Errorf("Execute calls = %d, want 1", exec.callCount())
@@ -690,11 +718,15 @@ func TestCronScheduler_FireWithNilTrackerNoops(t *testing.T) {
 func TestCronScheduler_FireOverwritesPriorRecord(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, tracker := newSchedulerWithTrackerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, nil)
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID())
 	first, err := tracker.LastFiredAt(context.Background(), rule.ID())
@@ -820,13 +852,17 @@ func TestCronScheduler_RestoreFromTracker_HydratesLastFiredNanos(t *testing.T) {
 func TestCronScheduler_RestoreFromTracker_EnforcesCooldownAcrossRestart(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, tracker := newSchedulerWithTrackerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Cooldown = "1h"
 	})
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	// Pretend the previous process fired one minute ago and persisted.
 	prev := time.Now().Add(-1 * time.Minute)
@@ -851,6 +887,10 @@ func TestCronScheduler_RestoreFromTracker_EnforcesCooldownAcrossRestart(t *testi
 func TestCronScheduler_FireBuildsScheduleContext(t *testing.T) {
 	rec := &ecCapturingExecutor{}
 	s, _ := newSchedulerWithTrackerForTest(t, rec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Schedule = "0 9 * * MON"
 		d.Actions = []Action{{Type: ActionTypePublish, Subject: "$schedule.id"}}
@@ -858,7 +898,7 @@ func TestCronScheduler_FireBuildsScheduleContext(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID())
 
@@ -887,11 +927,15 @@ func TestCronScheduler_FireBuildsScheduleContext(t *testing.T) {
 func TestCronScheduler_FireScheduleContextSeesPriorFire(t *testing.T) {
 	rec := &ecCapturingExecutor{}
 	s, _ := newSchedulerWithTrackerForTest(t, rec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, nil)
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID())
 	firstFireNanos := time.Now().UnixNano()
@@ -979,11 +1023,15 @@ func TestCronScheduler_Metrics_RegisterDeregisterFlipsGauges(t *testing.T) {
 func TestCronScheduler_Metrics_FireSuccessRecorded(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, m := newSchedulerWithMetricsForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, nil)
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID())
 
@@ -1000,11 +1048,15 @@ func TestCronScheduler_Metrics_FireSuccessRecorded(t *testing.T) {
 func TestCronScheduler_Metrics_FireErrorRecorded(t *testing.T) {
 	exec := &recordingExecutor{errOnce: errors.New("boom")}
 	s, m := newSchedulerWithMetricsForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, nil)
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID())
 
@@ -1023,13 +1075,17 @@ func TestCronScheduler_Metrics_FireErrorRecorded(t *testing.T) {
 func TestCronScheduler_Metrics_FirePanicRecordedAsPanic(t *testing.T) {
 	exec := &recordingExecutor{panicOn: "boom"}
 	s, m := newSchedulerWithMetricsForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Actions = []Action{{Type: ActionTypePublish, Subject: "boom"}}
 	})
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID()) // recover keeps the test alive
 
@@ -1043,13 +1099,17 @@ func TestCronScheduler_Metrics_FirePanicRecordedAsPanic(t *testing.T) {
 func TestCronScheduler_Metrics_CooldownSkippedRecorded(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, m := newSchedulerWithMetricsForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Cooldown = "10s"
 	})
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID()) // first fire dispatches
 	s.fire(rule.ID()) // second within 10s is cooldown-skipped
@@ -1070,13 +1130,17 @@ func TestCronScheduler_Metrics_CooldownSkippedRecorded(t *testing.T) {
 func TestCronScheduler_Metrics_FireUpdatesNextFireGauge(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, m := newSchedulerWithMetricsForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Schedule = "@every 1h"
 	})
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID())
 
@@ -1118,6 +1182,10 @@ func TestCronScheduler_Metrics_SchedulerRunningGauge(t *testing.T) {
 func TestCronScheduler_Metrics_PanicWinsOverPartialSuccess(t *testing.T) {
 	exec := &recordingExecutor{panicOn: "boom"}
 	s, m := newSchedulerWithMetricsForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Actions = []Action{
 			{Type: ActionTypePublish, Subject: "ok-1"},
@@ -1128,7 +1196,7 @@ func TestCronScheduler_Metrics_PanicWinsOverPartialSuccess(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID()) // recover keeps the test alive
 
@@ -1185,13 +1253,17 @@ func TestCronScheduler_Metrics_DisabledRuleNoGaugeBump(t *testing.T) {
 func TestCronScheduler_Metrics_CooldownSkippedDoesNotUpdateNextFire(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, m := newSchedulerWithMetricsForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Cooldown = "10s"
 	})
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID()) // first fire dispatches; updates next_fire
 	afterFirstFire := testutil.ToFloat64(m.nextFireTimestampSecs.WithLabelValues(rule.ID()))
@@ -1218,11 +1290,15 @@ func TestCronScheduler_Metrics_InflightSkippedRecorded(t *testing.T) {
 	// reflect inflight_skipped.
 	exec := &recordingExecutor{delay: 100 * time.Millisecond}
 	s, m := newSchedulerWithMetricsForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 	rule := cronRuleForTest(t, nil)
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -1323,6 +1399,10 @@ func newDenySchedulerForTest(t *testing.T, exec ActionExecutorInterface) (*CronS
 func TestCronFire_DenyShortCircuits(t *testing.T) {
 	exec := &denyOnceExecutor{}
 	s, m := newDenySchedulerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Actions = []Action{
@@ -1333,7 +1413,7 @@ func TestCronFire_DenyShortCircuits(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID())
 
@@ -1354,6 +1434,10 @@ func TestCronFire_DenyShortCircuits(t *testing.T) {
 func TestCronFire_DeniedStatusDistinctFromError(t *testing.T) {
 	exec := &denyOnceExecutor{}
 	s, m := newDenySchedulerForTest(t, exec)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newCronSchedulerTestOwner(s)
+	defer owner.finish(operationCtx, t)
 
 	rule := cronRuleForTest(t, func(d *Definition) {
 		d.Actions = []Action{
@@ -1363,7 +1447,7 @@ func TestCronFire_DeniedStatusDistinctFromError(t *testing.T) {
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	startSchedulerForTest(context.Background(), t, s)
+	startSchedulerForTest(operationCtx, t, owner)
 
 	s.fire(rule.ID())
 

@@ -1,0 +1,48 @@
+{
+  "archive": "vet-correction-evidence.zip",
+  "sha256": "a69d30ad10fdb84c49ed14b84e67780589c0fca48fc08ddbeb15af61e0aea404",
+  "members": [
+    {
+      "original_path": "/private/tmp/gh1428-vet-fix-addendum.md",
+      "member": "gh1428-vet-fix-addendum.md",
+      "sha256": "a1815fcc7ad3654714a4424872f9e80deaa4be587fd09b3d1c3f721b6d37d833",
+      "bytes": 3390
+    },
+    {
+      "original_path": "/private/tmp/gh1428-vet-corrected-source-manifest.json",
+      "member": "gh1428-vet-corrected-source-manifest.json",
+      "sha256": "fbaf28c90d9b646a43d41a641b5e5e1b5d497f8d8dda4faad7eac4418e533607",
+      "bytes": 2082
+    },
+    {
+      "original_path": "/private/tmp/gh1428-rule-source-manifest.json",
+      "member": "gh1428-rule-source-manifest.json",
+      "sha256": "b5f5f527e0ffea507300a30779e62f79624748ff6acff4e7fdbd210e00e75f04",
+      "bytes": 14053
+    },
+    {
+      "original_path": "/private/tmp/gh1428-implementation-evidence.md",
+      "member": "gh1428-implementation-evidence.md",
+      "sha256": "afcd4faf5fcd28de46e4640fbbf8838cb2ae4ce453efc84094dcf9fa955417d9",
+      "bytes": 26825
+    },
+    {
+      "original_path": "/private/tmp/gh1428-rule-tagged-vet-after.log",
+      "member": "gh1428-rule-tagged-vet-after.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "/private/tmp/gh1428-vet-fix-external-integration.log",
+      "member": "gh1428-vet-fix-external-integration.log",
+      "sha256": "1d2a3f73fea3db6892fc47c7241357ea9e997e69c91cf9be8f54fe6efddc18ea",
+      "bytes": 18849
+    },
+    {
+      "original_path": "/private/tmp/gh1428-rule-vet-before.bak",
+      "member": "gh1428-rule-vet-before.bak",
+      "sha256": "bd1555af8fa008af9c08da1ceb86502f4e30f0079d955c4338b5011770efab4e",
+      "bytes": 32833
+    }
+  ]
+}

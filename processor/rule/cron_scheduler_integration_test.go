@@ -49,15 +49,18 @@ func getIntegrationNATSClient(t *testing.T) *natsclient.Client {
 	if err != nil {
 		t.Fatalf("Failed to create test client: %v", err)
 	}
-	t.Cleanup(func() { testClient.Terminate() })
+	t.Cleanup(func() {
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate cron test client: %v", err)
+		}
+	})
 	return testClient.Client
 }
 
 // startCronProcessorForTest builds a rule.Processor wired with the
 // supplied inline rules and brings it through Initialize → Start. The
-// caller can stop the processor explicitly (cross-restart tests need
-// that control); a t.Cleanup handler also Stops it as a backstop.
-func startCronProcessorForTest(t *testing.T, natsClient *natsclient.Client, rules []Definition) (*Processor, *metric.MetricsRegistry) {
+// caller owns the returned Processor, including explicit cross-restart fences.
+func startCronProcessorForTest(operationCtx context.Context, t *testing.T, natsClient *natsclient.Client, rules []Definition) (*processorTestOwner, *metric.MetricsRegistry) {
 	t.Helper()
 
 	cfg := mustTestConfig(t, "rule-test-pack")
@@ -74,6 +77,12 @@ func startCronProcessorForTest(t *testing.T, natsClient *natsclient.Client, rule
 
 	registry := metric.NewMetricsRegistry()
 	proc, err := NewProcessorWithMetrics(natsClient, &cfg, registry)
+	if proc == nil {
+		require.NoError(t, err)
+		t.Fatal("NewProcessorWithMetrics returned a nil Processor")
+	}
+	owner := newProcessorTestOwner(proc)
+	defer owner.provisionalFinish(operationCtx, t)
 	require.NoError(t, err)
 	proc.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	// No SetDecoder call: cron rules fire on a clock, not on incoming
@@ -81,12 +90,10 @@ func startCronProcessorForTest(t *testing.T, natsClient *natsclient.Client, rule
 	// kv_hot_reload_integration_test.go.
 	require.NoError(t, proc.Initialize())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	t.Cleanup(cancel)
-	require.NoError(t, proc.Start(ctx))
-	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+	require.NoError(t, proc.Start(owner.startContext(operationCtx)))
 
-	return proc, registry
+	owner.transfer()
+	return owner, registry
 }
 
 // TestIntegration_CronRule_FiresOnSchedule registers an @every 1s
@@ -94,18 +101,24 @@ func startCronProcessorForTest(t *testing.T, natsClient *natsclient.Client, rule
 // message arrives within 3 seconds. Smoke test for the full path:
 // scheduler tick → fire → ActionExecutor → NATS publish.
 func TestIntegration_CronRule_FiresOnSchedule(t *testing.T) {
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	natsClient := getIntegrationNATSClient(t)
 	subject := fmt.Sprintf("test.cron.heartbeat.%s", t.Name())
 
 	received := make(chan *nats.Msg, 4)
-	sub, err := natsClient.Subscribe(context.Background(), subject, func(_ context.Context, msg *nats.Msg) {
+	sub, err := natsClient.Subscribe(operationCtx, subject, func(_ context.Context, msg *nats.Msg) {
 		select {
 		case received <- msg:
 		default:
 		}
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	t.Cleanup(func() {
+		if err := sub.Unsubscribe(); err != nil {
+			t.Errorf("unsubscribe cron observer: %v", err)
+		}
+	})
 
 	rules := []Definition{{
 		ID:       "every-second-heartbeat-" + t.Name(),
@@ -118,7 +131,8 @@ func TestIntegration_CronRule_FiresOnSchedule(t *testing.T) {
 			Subject: subject,
 		}},
 	}}
-	startCronProcessorForTest(t, natsClient, rules)
+	owner, _ := startCronProcessorForTest(operationCtx, t, natsClient, rules)
+	defer owner.finish(operationCtx, t)
 
 	select {
 	case msg := <-received:
@@ -137,19 +151,25 @@ func TestIntegration_CronRule_FiresOnSchedule(t *testing.T) {
 // landed. Closes the loop on Chunk 3's KV-write semantics through
 // real JetStream (not the mock bucket the unit tests use).
 func TestIntegration_CronRule_PersistsLastFiredToKV(t *testing.T) {
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	natsClient := getIntegrationNATSClient(t)
 	subject := fmt.Sprintf("test.cron.persist.%s", t.Name())
 	ruleID := "persist-test-" + t.Name()
 
 	received := make(chan struct{}, 1)
-	sub, err := natsClient.Subscribe(context.Background(), subject, func(_ context.Context, _ *nats.Msg) {
+	sub, err := natsClient.Subscribe(operationCtx, subject, func(_ context.Context, _ *nats.Msg) {
 		select {
 		case received <- struct{}{}:
 		default:
 		}
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	t.Cleanup(func() {
+		if err := sub.Unsubscribe(); err != nil {
+			t.Errorf("unsubscribe cron observer: %v", err)
+		}
+	})
 
 	rules := []Definition{{
 		ID:       ruleID,
@@ -162,7 +182,8 @@ func TestIntegration_CronRule_PersistsLastFiredToKV(t *testing.T) {
 			Subject: subject,
 		}},
 	}}
-	startCronProcessorForTest(t, natsClient, rules)
+	owner, _ := startCronProcessorForTest(operationCtx, t, natsClient, rules)
+	defer owner.finish(operationCtx, t)
 
 	select {
 	case <-received:
@@ -175,13 +196,13 @@ func TestIntegration_CronRule_PersistsLastFiredToKV(t *testing.T) {
 	// retry loop avoids flakes on slow CI.
 	js, err := natsClient.JetStream()
 	require.NoError(t, err)
-	bucket, err := js.KeyValue(context.Background(), ScheduleBucketName)
+	bucket, err := js.KeyValue(operationCtx, ScheduleBucketName)
 	require.NoError(t, err)
 
 	var rec LastFireRecord
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		entry, err := bucket.Get(context.Background(), ruleID)
+		entry, err := bucket.Get(operationCtx, ruleID)
 		if err == nil {
 			require.NoError(t, json.Unmarshal(entry.Value(), &rec))
 			break
@@ -200,6 +221,8 @@ func TestIntegration_CronRule_PersistsLastFiredToKV(t *testing.T) {
 // same NATS instance and assert restoreFromTracker increments the
 // missed_fires_total counter on the second registry.
 func TestIntegration_CronRule_DetectsMissedFiresAcrossRestart(t *testing.T) {
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	natsClient := getIntegrationNATSClient(t)
 	ruleID := "missed-fire-test-" + t.Name()
 	subject := fmt.Sprintf("test.cron.missed.%s", t.Name())
@@ -217,22 +240,27 @@ func TestIntegration_CronRule_DetectsMissedFiresAcrossRestart(t *testing.T) {
 	}}
 
 	received := make(chan struct{}, 1)
-	sub, err := natsClient.Subscribe(context.Background(), subject, func(_ context.Context, _ *nats.Msg) {
+	sub, err := natsClient.Subscribe(operationCtx, subject, func(_ context.Context, _ *nats.Msg) {
 		select {
 		case received <- struct{}{}:
 		default:
 		}
 	})
 	require.NoError(t, err)
-	defer func() { _ = sub.Unsubscribe() }()
+	t.Cleanup(func() {
+		if err := sub.Unsubscribe(); err != nil {
+			t.Errorf("unsubscribe cron observer: %v", err)
+		}
+	})
 
-	proc1, _ := startCronProcessorForTest(t, natsClient, rules)
+	owner1, _ := startCronProcessorForTest(operationCtx, t, natsClient, rules)
+	defer owner1.finish(operationCtx, t)
 	select {
 	case <-received:
 	case <-time.After(3 * time.Second):
 		t.Fatal("first run did not fire")
 	}
-	require.NoError(t, proc1.Stop(context.Background()))
+	require.NoError(t, owner1.stop(operationCtx))
 
 	// Seed a stale timestamp so missed-fire detection sees several
 	// expected fires without us waiting real seconds. Six seconds of
@@ -240,7 +268,7 @@ func TestIntegration_CronRule_DetectsMissedFiresAcrossRestart(t *testing.T) {
 	// fires — well above the cap and well above any flake threshold.
 	js, err := natsClient.JetStream()
 	require.NoError(t, err)
-	bucket, err := js.KeyValue(context.Background(), ScheduleBucketName)
+	bucket, err := js.KeyValue(operationCtx, ScheduleBucketName)
 	require.NoError(t, err)
 
 	stale := LastFireRecord{
@@ -250,14 +278,15 @@ func TestIntegration_CronRule_DetectsMissedFiresAcrossRestart(t *testing.T) {
 	}
 	staleData, err := json.Marshal(stale)
 	require.NoError(t, err)
-	_, err = bucket.Put(context.Background(), ruleID, staleData)
+	_, err = bucket.Put(operationCtx, ruleID, staleData)
 	require.NoError(t, err)
 
 	// Second run: fresh processor against the same NATS. The new
 	// metrics registry sees missed_fires_total > 0 only if
 	// restoreFromTracker walked the stale record + emitted to the
 	// counter.
-	_, registry2 := startCronProcessorForTest(t, natsClient, rules)
+	owner2, registry2 := startCronProcessorForTest(operationCtx, t, natsClient, rules)
+	defer owner2.finish(operationCtx, t)
 
 	cronM := getCronMetrics(registry2)
 	deadline := time.Now().Add(2 * time.Second)
@@ -279,6 +308,8 @@ func TestIntegration_CronRule_DetectsMissedFiresAcrossRestart(t *testing.T) {
 // restoreFromTracker, the gauge would treat the first post-restart
 // fire as "never fired" and double-dispatch.
 func TestIntegration_CronRule_CooldownAcrossRestart(t *testing.T) {
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	natsClient := getIntegrationNATSClient(t)
 	ruleID := "cooldown-restart-" + t.Name()
 	subject := fmt.Sprintf("test.cron.cooldown.%s", t.Name())
@@ -300,19 +331,24 @@ func TestIntegration_CronRule_CooldownAcrossRestart(t *testing.T) {
 		mu       sync.Mutex
 		received int
 	)
-	sub, err := natsClient.Subscribe(context.Background(), subject, func(_ context.Context, _ *nats.Msg) {
+	sub, err := natsClient.Subscribe(operationCtx, subject, func(_ context.Context, _ *nats.Msg) {
 		mu.Lock()
 		received++
 		mu.Unlock()
 	})
 	require.NoError(t, err)
-	defer func() { _ = sub.Unsubscribe() }()
+	t.Cleanup(func() {
+		if err := sub.Unsubscribe(); err != nil {
+			t.Errorf("unsubscribe cron observer: %v", err)
+		}
+	})
 
 	// First run: expect one fire (cooldown=1h, so subsequent ticks
 	// within the same run are cooldown-skipped).
-	proc1, _ := startCronProcessorForTest(t, natsClient, rules)
+	owner1, _ := startCronProcessorForTest(operationCtx, t, natsClient, rules)
+	defer owner1.finish(operationCtx, t)
 	time.Sleep(2500 * time.Millisecond)
-	require.NoError(t, proc1.Stop(context.Background()))
+	require.NoError(t, owner1.stop(operationCtx))
 
 	mu.Lock()
 	firstRunCount := received
@@ -324,9 +360,10 @@ func TestIntegration_CronRule_CooldownAcrossRestart(t *testing.T) {
 	// Hydration in restoreFromTracker is what makes this work — without
 	// it, the post-restart cooldown gate would treat the rule as "never
 	// fired" and dispatch immediately.
-	proc2, _ := startCronProcessorForTest(t, natsClient, rules)
+	owner2, _ := startCronProcessorForTest(operationCtx, t, natsClient, rules)
+	defer owner2.finish(operationCtx, t)
 	time.Sleep(2500 * time.Millisecond)
-	require.NoError(t, proc2.Stop(context.Background()))
+	require.NoError(t, owner2.stop(operationCtx))
 
 	mu.Lock()
 	totalCount := received
