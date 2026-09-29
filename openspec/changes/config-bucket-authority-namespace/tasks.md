@@ -271,3 +271,37 @@ re-run by the coordinating session at the new final code revision.
         160 ok / 0 FAIL / 20 no test files / 0 DATA RACE; `task schema:generate` exit 0 with an empty `git diff
         schemas/ specs/`; `openspec validate config-bucket-authority-namespace --strict` valid; `openspec validate
         --all --strict` 58/58; `task spec:properties` 455/455.
+
+- [ ] 4.12 Rebased onto `bb98043a` (#1414, the cleanup-root guard and its #1064 baseline; no file overlap, no
+      conflict); 4.11's `b112ce17` is now `978ff2a6`. Non-test Go is identical to `b112ce17`.
+      - Guard verdict before (`task lint:cleanup-roots` on the rebased tree, exit 201, `TestCleanupRootGuard` at
+        `cleanup_guard_test.go:189`), the same six findings hosted CI reported at `555677ef`: one "new
+        uncertain-owner-provenance" at `internal/boot/rule_config_service_test.go|(*componentsStandIn).Stop|ordinary|
+        github.com/c360studio/semstreams/service.Stop|*github.com/c360studio/semstreams/service.BaseService|unknown|1`,
+        and five "stale cleanup approval" entries, `processor/rule/kv_hot_reload_integration_test.go|<Test>|defer|
+        github.com/c360studio/semstreams/processor/rule.Stop|*github.com/c360studio/semstreams/processor/rule.Processor|
+        unbounded|1` for `TestHotReload_DebounceCoalescing`, `_ReconcileFromKV`, `_SeedIdempotency`,
+        `_SeedRespectsOperatorEdits` and `_WatcherPicksUpNewRule` (fingerprint `e3d8c585…`, owner `#1064`).
+      - Retired (commit `142e4a11`): those five entries are deleted from `entries`, debt this change paid when
+        `b3687f48` bounded each `defer proc.Stop(context.Background())` under `stopProcessorWithinBudget`. Nothing
+        is added to the baseline (`docs/contributing/01-testing.md` § Cleanup admission).
+      - Repaired (commit `263dad3a`, test-only): the ordering test's component-manager stand-in forwarded its Stop
+        context into an embedded `BaseService.Stop`, whose provenance the guard cannot resolve. The stand-in owns no
+        runtime, so its Start and Stop now only record the rule-config status and return nil; the embedded
+        `BaseService` is never started, so nothing it spawns needs joining, and neither the manager nor the test reads
+        the double's own status. Chosen over a finite forwarding context because a recorder has nothing to stop.
+      - Guard verdict after: `scripts/check-cleanup-roots.sh` exit 0; `TestCleanupRootGuard` PASS, "cleanup root
+        guard: 2350 sources, 2347 typed, 1412 sites, 976 exclusions". A clean guard also shows no other ordinary-origin
+        `Stop(ctx)` forwarder remains in this change's test files.
+      - The new runner on the touched packages (`scripts/run-integration-tests.sh ./config/... ./processor/rule/...
+        ./internal/boot/... ./test/e2e/config/...`, lock wait 600 s) exit 0, 5 ok.
+      - Gates at `142e4a11` (the final code-bearing commit), `task check:push` exit 201: cleanup guard, lint, build,
+        `go vet -tags=integration`, `go vet -tags=live_llm`, schema generate with no drift, contract tests, and
+        `go test -race ./...` (160 ok / 0 FAIL / 20 no test files / 0 DATA RACE) all passed; `task test:integration`
+        FAILED in two packages this change does not touch the failing tests of, `config`
+        (`TestCreateStream_ReconcilesEachEditableFieldIndependently/max_bytes_drift_alone_is_repaired`,
+        `stream_drift_integration_test.go:156`) and `graph/clustering` (shared test client creation), both with
+        "resolve required mapped ports: ... inspect container port snapshot: ... context deadline exceeded", the
+        Docker-oversubscription class of open #736. Not re-run. Also exit 0: `go build ./...`, `go vet ./...`, `go run
+        ./cmd/entity-id-audit .` (1334), `openspec validate` (change valid, `--all --strict` 59/59), `task
+        spec:properties` 456/456. Unticked: the integration gate is not green.
