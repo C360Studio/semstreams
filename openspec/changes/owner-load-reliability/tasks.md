@@ -1,6 +1,6 @@
 # Owner load reliability tasks
 
-- [ ] Materialize a source-pinned inventory and original incident evidence; obtain independent INVENTORY PASS.
+- [x] Materialize a source-pinned inventory and original incident evidence; obtain independent INVENTORY PASS.
 - [ ] Produce a bounded design with alternatives, test-fidelity and mutation decisions; obtain independent review
       and acceptance within the owner's authorized repair scope, surfacing any change to prior owner rulings.
 - [ ] Implement the accepted correction with a failing behavior proof and bounded cleanup verification.

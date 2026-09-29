@@ -25,6 +25,8 @@ cleanup tracker, #1293 the verification-infrastructure tracker, and Claude's #14
 
 ## Stop Point
 
-Claim only. No inventory, design, implementation, validation result, or root cause is asserted by this proposal.
-The original incident is CI run 36567709902, job 109403662339; its evidence and the related owner rulings must be
-retained with the reviewed inventory. No spec delta exists before the target behavior is accepted.
+The source-pinned inventory passed independent review at SHA-256
+`d0872671356ee5505087160054d890384c13ceb19d4364d7fc2745a3b01fd3a1`; all 164 pins verified.
+Original CI run 36567709902 / job 109403662339 and related issue/ruling snapshots are retained in the evidence
+bundle. Historical attribution remains unproven. Next is a bounded causal experiment design and independent review;
+no implementation or new test pass is claimed. No spec delta exists before the target behavior is accepted.
