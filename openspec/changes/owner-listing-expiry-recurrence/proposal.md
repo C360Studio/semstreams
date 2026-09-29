@@ -3,7 +3,7 @@
 ## Why
 
 Post-merge main CI run 36641021599 failed on `41d6236a84a8443b284785372126a092331096f6` after the reviewed #1432
-harness repair. The new diagnostics place the failure in the fourth measured predicate-forward listing, before the
+harness repair. The new diagnostics place the failure in measured predicate-forward listing repetition 4 (the fifth attempt), before the
 concurrent phase. The caller context was live, the configured framework KV default was five seconds, and the call
 returned a typed deadline error after 10.001209581 seconds. The 39-entry graph-query cleanup batch remains preserved
 in #1433 / #1434 while this observed required-job failure takes priority under #1417.
