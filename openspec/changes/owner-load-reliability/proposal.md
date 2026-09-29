@@ -28,5 +28,6 @@ cleanup tracker, #1293 the verification-infrastructure tracker, and Claude's #14
 The source-pinned inventory passed independent review at SHA-256
 `d0872671356ee5505087160054d890384c13ceb19d4364d7fc2745a3b01fd3a1`; all 164 pins verified.
 Original CI run 36567709902 / job 109403662339 and related issue/ruling snapshots are retained in the evidence
-bundle. Historical attribution remains unproven. Next is a bounded causal experiment design and independent review;
-no implementation or new test pass is claimed. No spec delta exists before the target behavior is accepted.
+bundle. Historical attribution remains unproven. The bounded diagnostic design passed independent review and was accepted at SHA-256
+`5dae252d611467eaba43f83b747f321e9c8ae4ca5cabca164ba76b88dbff0da6`. Implementation of that diagnostic is next;
+no diagnostic execution, production correction or new test pass is claimed. No spec delta exists before the target behavior is accepted.
