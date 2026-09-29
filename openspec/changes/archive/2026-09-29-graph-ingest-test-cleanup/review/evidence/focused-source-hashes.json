@@ -1,0 +1,86 @@
+{
+  "selected": [
+    {
+      "name": "TestGraphIngestOwnerAssertionExitAndCleanupError",
+      "file": "processor/graph-ingest/test_owner_child_test.go",
+      "line": 54,
+      "skip_call": false
+    },
+    {
+      "name": "TestAuthorityGateRejectsForeignOnFactLane",
+      "file": "processor/graph-ingest/authority_gate_integration_test.go",
+      "line": 222,
+      "skip_call": false
+    },
+    {
+      "name": "TestIntegration_AddTriples_SingleSubjectIsOneCAS",
+      "file": "processor/graph-ingest/batch_integration_test.go",
+      "line": 67,
+      "skip_call": false
+    },
+    {
+      "name": "TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool",
+      "file": "processor/graph-ingest/keyed_ingest_integration_test.go",
+      "line": 86,
+      "skip_call": false
+    },
+    {
+      "name": "TestIntegration_PrefixQuery_ErrorClassification",
+      "file": "processor/graph-ingest/query_prefix_integration_test.go",
+      "line": 146,
+      "skip_call": false
+    },
+    {
+      "name": "TestCreateAcceptsRegisteredMessageType",
+      "file": "processor/graph-ingest/registered_type_gate_integration_test.go",
+      "line": 103,
+      "skip_call": false
+    },
+    {
+      "name": "TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure",
+      "file": "processor/graph-ingest/readiness_integration_test.go",
+      "line": 382,
+      "skip_call": false
+    },
+    {
+      "name": "TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision",
+      "file": "processor/graph-ingest/hierarchy_replay_integration_test.go",
+      "line": 123,
+      "skip_call": false
+    },
+    {
+      "name": "TestIntegration_CacheStaleRepopulationRace",
+      "file": "processor/graph-ingest/cache_stale_repopulation_integration_test.go",
+      "line": 36,
+      "skip_call": false
+    }
+  ],
+  "source_sha256": {
+    "processor/graph-ingest/authority_gate_integration_test.go": "20a13b8f0181aa60947a6c5f5678ed300f7a8bce56726770719ca08fd5a8bcc1",
+    "processor/graph-ingest/batch_integration_test.go": "900b7e3ac41dc9997bc1aa199f9afb418afa982cfda5e734b2c6361a617dea90",
+    "processor/graph-ingest/batch_missing_integration_test.go": "5c2088f1c16a13edbbd30e9b4e39b05070c1514e73c7fcd0dca12df629a646ff",
+    "processor/graph-ingest/cache_coherence_integration_test.go": "6e11bce087c81a77b9dd473a209cc8c72f9b11a95047c07af438dcf9eb99185e",
+    "processor/graph-ingest/cache_stale_repopulation_integration_test.go": "024ef81f86630868c3499123402dd6971924d6f8eb357af0fb0a9dcb17c7643c",
+    "processor/graph-ingest/cas_integration_test.go": "0b78201a2d99eaedd5f82d8e8c991b7ed88b7628495338e4e86a5594507eb6ad",
+    "processor/graph-ingest/component_test.go": "9afc89e31fd3e2a8b31b178a60fbfd1ae32434678f8c070cef02fc20b09e05a9",
+    "processor/graph-ingest/entity_mutation_integration_test.go": "962d89c72fd52d1e55173fe283e72d427da82a63eaff5f29896199f2c2957e94",
+    "processor/graph-ingest/hierarchy_replay_integration_test.go": "6e9a2b269d1e449943602ea843cf51294070db275dd3814534ec77ccc59248f3",
+    "processor/graph-ingest/hierarchy_sync_integration_test.go": "6c08e8f026ee458eee428c0bb2e53fb031c4ed168258df11e18c77db44a91a8b",
+    "processor/graph-ingest/keyed_ingest_integration_test.go": "df8fe53a41f7554b4c21e786bf9c8f9158d955e0bf795be6ef9e0c5b942cd7ca",
+    "processor/graph-ingest/lifecycle_integration_test.go": "9eabd64f9a22c29898a0cae60618aac3a1c5a6c0b7664b8fa7e6d01b4fd1c308",
+    "processor/graph-ingest/merge_entity_integration_test.go": "10d52280930a88c8937adbcf5f67a6209e5d838a2436c308c3a75ac8296df035",
+    "processor/graph-ingest/poison_scoping_integration_test.go": "d5fafa6677b5f16686e936b88b463e90996f7dfee55c96ba95cfaa52b82264b3",
+    "processor/graph-ingest/query_integration_test.go": "86278400edb7778daa4bf9d44a572a5700ded6854a0897a28043669758a6c1f6",
+    "processor/graph-ingest/query_prefix_integration_test.go": "56c3095dff243717512975893f3450e1187ce715c6d3cce639946b0d4b0c7697",
+    "processor/graph-ingest/query_wire_contract_integration_test.go": "4fe7cfea8cbcde848e06795f794656461e06390dfb52618b344f80d64bb24583",
+    "processor/graph-ingest/readiness_gauges_integration_test.go": "b6167b1c41b890b04bd7d9062f7abb807d0038638246319b65e5bf37d27b83c6",
+    "processor/graph-ingest/readiness_integration_test.go": "7c27faae23b83d5db999b06fba7afc40af2c22b659f69e27f2b5dd8b2a84a4ea",
+    "processor/graph-ingest/registered_type_gate_integration_test.go": "a4187c82cb279b83905770d143f960002248279ac4f714fad45c4c34bb014cdb",
+    "processor/graph-ingest/resident_stamp_integration_test.go": "fe0592c5ec53430b8869eb8c0c28fb363ef004d5c93c2250b37d7460bdecb3e3",
+    "processor/graph-ingest/structural_gate_wire_integration_test.go": "82cd6f0b74dac515e1b3cdb86eb1547ef6933e677dd670d7677045b955ef906a",
+    "processor/graph-ingest/test_operation_support_test.go": "e1371eef8ce8d6cf232fc6c1857b85947d3520858e5d87a83c6fd62614dd8ac5",
+    "processor/graph-ingest/test_owner_child_test.go": "d30f9feb4ff9f8f33d0850b69991d88e785447bbaff3fa66bba20359b2b2564f",
+    "processor/graph-ingest/test_owner_support_test.go": "0a9e5ad3e4930d64d970b3d9b95df4a1b7370083e57fb0800a2d07952b43a945",
+    "processor/graph-ingest/test_owner_test.go": "c3784f36b6dede2608fdc98271d6dafa47472413c81aac938cae79c89a6aefe4"
+  }
+}

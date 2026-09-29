@@ -1,0 +1,9 @@
+{"Time":"2026-09-29T10:38:23.172436-05:00","Action":"start","Package":"github.com/c360studio/semstreams/processor/graph-ingest"}
+{"Time":"2026-09-29T10:38:23.432151-05:00","Action":"run","Package":"github.com/c360studio/semstreams/processor/graph-ingest","Test":"TestGraphIngestTestOwnerWaitsForObservedClosure"}
+{"Time":"2026-09-29T10:38:23.43228-05:00","Action":"output","Package":"github.com/c360studio/semstreams/processor/graph-ingest","Test":"TestGraphIngestTestOwnerWaitsForObservedClosure","Output":"=== RUN   TestGraphIngestTestOwnerWaitsForObservedClosure\n"}
+{"Time":"2026-09-29T10:38:23.432664-05:00","Action":"output","Package":"github.com/c360studio/semstreams/processor/graph-ingest","Test":"TestGraphIngestTestOwnerWaitsForObservedClosure","Output":"2026/09/29 10:38:23 INFO component stopped gracefully component=graph-ingest\n"}
+{"Time":"2026-09-29T10:38:23.432761-05:00","Action":"output","Package":"github.com/c360studio/semstreams/processor/graph-ingest","Test":"TestGraphIngestTestOwnerWaitsForObservedClosure","Output":"--- PASS: TestGraphIngestTestOwnerWaitsForObservedClosure (0.00s)\n"}
+{"Time":"2026-09-29T10:38:23.432779-05:00","Action":"pass","Package":"github.com/c360studio/semstreams/processor/graph-ingest","Test":"TestGraphIngestTestOwnerWaitsForObservedClosure","Elapsed":0}
+{"Time":"2026-09-29T10:38:23.432801-05:00","Action":"output","Package":"github.com/c360studio/semstreams/processor/graph-ingest","Output":"PASS\n"}
+{"Time":"2026-09-29T10:38:24.441941-05:00","Action":"output","Package":"github.com/c360studio/semstreams/processor/graph-ingest","Output":"ok  \tgithub.com/c360studio/semstreams/processor/graph-ingest\t1.269s\n"}
+{"Time":"2026-09-29T10:38:24.442135-05:00","Action":"pass","Package":"github.com/c360studio/semstreams/processor/graph-ingest","Elapsed":1.27}

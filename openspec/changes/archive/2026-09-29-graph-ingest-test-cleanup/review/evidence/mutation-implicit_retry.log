@@ -1,0 +1,6 @@
+--- FAIL: TestGraphIngestTestOwnerFailedAttemptIsNotRetried (0.00s)
+    test_owner_test.go:67: graph-ingest terminal cleanup: subscription drain failed
+    test_owner_test.go:69: failed-start Drain attempts = 2, want 1
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/graph-ingest	0.341s
+FAIL

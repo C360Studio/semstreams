@@ -41,8 +41,10 @@ func queryEntityViaPrefix(t *testing.T, ctx context.Context, nc *natsclient.Clie
 // returned the pre-write entity. The executor read a unit's claim marker as
 // absent right after committing it and re-dispatched on every pass.
 func TestIntegration_CacheCoherence_AppendVisibleAfterPrefixRead(t *testing.T) {
-	ctx := context.Background()
-	c, nc := startPrefixTestComponent(t, withAuthority("coh", "ops"))
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, nc, owner := startPrefixTestComponent(ctx, t, withAuthority("coh", "ops"))
+	defer owner.finish(ctx, t)
 
 	const id = "coh.ops.dom.sys.type.entity1"
 	seedPrefixEntity(t, ctx, c, id)

@@ -1,0 +1,16 @@
+{
+  "status": "PENDING independent source review; DO NOT INSTALL",
+  "source_baseline_sha256": "ab8f51cb3fccf5536b8602f206c62c8536256eface79c517753418082b91e502",
+  "candidate_path": "/private/tmp/gh1423-context-first-proposed-baseline.json",
+  "candidate_sha256": "909d254426e4b190d3fe10c86f936dcea742d8a6998b7b90a93bbe02ccab2615",
+  "entry_count": 297,
+  "resolution_count": 90,
+  "changed_resolution_identity": "processor/graph-ingest/test_owner_support_test.go|(*graphIngestTestOwner).stop|defer|o.cancelStart|unresolved callback|unknown|1",
+  "changed_dependency": {
+    "path": "processor/graph-ingest/test_owner_support_test.go",
+    "declaration": "graphIngestTestOwner.finish",
+    "fingerprint": "7c09d338f13fda8611e6eb4c42456ff8f2750f48323a0fcf071f3174621a40e3"
+  },
+  "old_dependency_fingerprint": "56c67efae0ce079ab217a933c0f6d309cb5bc3bfd9e64af9139e04fe7f9f954f",
+  "unchanged_resolution_count": 89
+}

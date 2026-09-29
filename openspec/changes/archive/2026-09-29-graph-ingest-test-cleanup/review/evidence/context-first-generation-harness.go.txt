@@ -1,0 +1,37 @@
+package testinfra_test
+
+import (
+	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// Temporary scratch-only dependency generation for the #1423 parameter reorder.
+func TestGH1423ContextFirstFinishDependency(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "processor/graph-ingest/test_owner_support_test.go"
+	file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, path), nil, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := map[string]*ast.File{path: file}
+	fingerprint, err := cleanupSourceDependencyFingerprint(root, parsed, path, "graphIngestTestOwner.finish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dependency := cleanupDependency{Path: path, Declaration: "graphIngestTestOwner.finish", Fingerprint: fingerprint}
+	raw, err := json.MarshalIndent(dependency, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("/private/tmp/gh1423-context-first-finish-dependency.json", append(raw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

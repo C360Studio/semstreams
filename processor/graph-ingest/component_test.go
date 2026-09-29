@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,8 +36,8 @@ type mockKVBucket struct {
 	watchAllFactory  func() (jetstream.KeyWatcher, error)
 }
 
-// entity-id-audit:classify intentional-malformed "" line=782 column=16 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
-// entity-id-audit:classify intentional-malformed "" line=884 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=789 column=16 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=891 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
 
 // mockKVData stores value with revision for CAS testing
 type mockKVData struct {
@@ -540,11 +541,13 @@ func TestComponent_Health_NotStarted(t *testing.T) {
 func TestComponent_Health_Running(t *testing.T) {
 	t.Skip("requires real NATS connection - move to integration tests")
 	comp := createTestComponent(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	owner := newGraphIngestTestOwner(comp)
+	defer owner.finish(ctx, t)
 
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 	// Allow time for component to become healthy
 	time.Sleep(100 * time.Millisecond)
@@ -598,11 +601,13 @@ func TestComponent_Initialize_InvalidConfig(t *testing.T) {
 func TestComponent_Start_Success(t *testing.T) {
 	t.Skip("requires real NATS connection - move to integration tests")
 	comp := createTestComponent(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	owner := newGraphIngestTestOwner(comp)
+	defer owner.finish(ctx, t)
 
 	require.NoError(t, comp.Initialize())
-	err := comp.Start(ctx)
-	defer comp.Stop(context.Background())
+	err := comp.Start(owner.startContext(ctx))
 
 	assert.NoError(t, err)
 }
@@ -620,16 +625,18 @@ func TestComponent_Start_BeforeInitialize(t *testing.T) {
 func TestComponent_Start_AlreadyStarted(t *testing.T) {
 	t.Skip("requires real NATS connection - move to integration tests")
 	comp := createTestComponent(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	owner := newGraphIngestTestOwner(comp)
+	defer owner.finish(ctx, t)
 
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(owner.startContext(ctx)))
 
-	// Start again - should be idempotent
+	// Start is one-shot, even while the first generation is running.
 	err := comp.Start(ctx)
 
-	assert.NoError(t, err, "Start should be idempotent")
+	assert.ErrorIs(t, err, errs.ErrAlreadyStarted)
 }
 
 func TestComponent_Stop_Success(t *testing.T) {

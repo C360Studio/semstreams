@@ -31,7 +31,8 @@ import (
 //	X-Error-Code:  entity_not_found | invalid_request | ...
 //	body:          {"message": "<text>"}
 func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
@@ -49,9 +50,11 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 	require.NoError(t, err)
 
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	require.NoError(t, c.Initialize())
-	require.NoError(t, c.Start(ctx))
-	defer func() { _ = c.Stop(context.Background()) }()
+	require.NoError(t, c.Start(owner.startContext(ctx)))
+
 	time.Sleep(100 * time.Millisecond)
 
 	t.Run("not_found_path", func(t *testing.T) {

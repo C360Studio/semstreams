@@ -1,0 +1,79 @@
+[
+  {
+    "query": "GOFLAGS=-tags=integration gopls references processor/graph-ingest/authority_gate_integration_test.go:136:6",
+    "location": "authority_gate_integration_test.go:136:6",
+    "result": {
+      "chunk_id": "7fa236",
+      "wall_time_seconds": 2.212396083,
+      "exit_code": 0,
+      "original_token_count": 318,
+      "output": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/authority_gate_integration_test.go:221:7-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/authority_gate_integration_test.go:242:7-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/authority_gate_integration_test.go:273:7-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/authority_gate_integration_test.go:323:7-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/authority_gate_integration_test.go:347:7-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/authority_gate_integration_test.go:379:7-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/authority_gate_integration_test.go:421:7-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/authority_gate_integration_test.go:480:7-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/authority_gate_integration_test.go:529:7-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/authority_gate_integration_test.go:579:7-34\n"
+    }
+  },
+  {
+    "query": "GOFLAGS=-tags=integration gopls references processor/graph-ingest/batch_integration_test.go:23:6",
+    "location": "batch_integration_test.go:23:6",
+    "result": {
+      "chunk_id": "11aff7",
+      "wall_time_seconds": 2.350910083,
+      "exit_code": 0,
+      "original_token_count": 652,
+      "output": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/batch_integration_test.go:113:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/batch_integration_test.go:167:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/batch_integration_test.go:193:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/batch_integration_test.go:223:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/batch_integration_test.go:277:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/batch_integration_test.go:292:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/batch_integration_test.go:324:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/batch_integration_test.go:69:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/batch_missing_integration_test.go:115:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/batch_missing_integration_test.go:26:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/entity_mutation_integration_test.go:21:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/entity_mutation_integration_test.go:84:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/keyed_ingest_integration_test.go:126:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/keyed_ingest_integration_test.go:162:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/merge_entity_integration_test.go:116:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/merge_entity_integration_test.go:149:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/merge_entity_integration_test.go:187:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/merge_entity_integration_test.go:46:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/merge_entity_integration_test.go:73:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/structural_gate_wire_integration_test.go:36:12-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/structural_gate_wire_integration_test.go:88:12-35\n"
+    }
+  },
+  {
+    "query": "GOFLAGS=-tags=integration gopls references processor/graph-ingest/keyed_ingest_integration_test.go:184:6",
+    "location": "keyed_ingest_integration_test.go:184:6",
+    "result": {
+      "chunk_id": "131279",
+      "wall_time_seconds": 2.077733834,
+      "exit_code": 0,
+      "original_token_count": 63,
+      "output": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/keyed_ingest_integration_test.go:215:24-47\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/keyed_ingest_integration_test.go:85:24-47\n"
+    }
+  },
+  {
+    "query": "GOFLAGS=-tags=integration gopls references processor/graph-ingest/query_prefix_integration_test.go:25:6",
+    "location": "query_prefix_integration_test.go:25:6",
+    "result": {
+      "chunk_id": "c557ae",
+      "wall_time_seconds": 1.2824441659999999,
+      "exit_code": 0,
+      "original_token_count": 161,
+      "output": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/cache_coherence_integration_test.go:45:11-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/cache_stale_repopulation_integration_test.go:38:10-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/query_prefix_integration_test.go:145:11-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/query_prefix_integration_test.go:214:11-35\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/query_prefix_integration_test.go:78:11-35\n"
+    }
+  },
+  {
+    "query": "GOFLAGS=-tags=integration gopls references processor/graph-ingest/readiness_integration_test.go:62:6",
+    "location": "readiness_integration_test.go:62:6",
+    "result": {
+      "chunk_id": "e3dc30",
+      "wall_time_seconds": 1.773300125,
+      "exit_code": 0,
+      "original_token_count": 62,
+      "output": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/readiness_integration_test.go:126:11-34\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/readiness_integration_test.go:381:14-37\n"
+    }
+  },
+  {
+    "query": "GOFLAGS=-tags=integration gopls references processor/graph-ingest/registered_type_gate_integration_test.go:32:6",
+    "location": "registered_type_gate_integration_test.go:32:6",
+    "result": {
+      "chunk_id": "5e6258",
+      "wall_time_seconds": 3.669329,
+      "exit_code": 0,
+      "original_token_count": 134,
+      "output": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/registered_type_gate_integration_test.go:100:16-38\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/registered_type_gate_integration_test.go:117:16-38\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/registered_type_gate_integration_test.go:158:15-37\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/registered_type_gate_integration_test.go:75:16-38\n"
+    }
+  },
+  {
+    "query": "GOFLAGS=-tags=integration gopls references processor/graph-ingest/hierarchy_integration_test.go:48:6",
+    "location": "hierarchy_integration_test.go:48:6",
+    "result": {
+      "chunk_id": "557c12",
+      "wall_time_seconds": 3.5059911660000003,
+      "exit_code": 0,
+      "original_token_count": 320,
+      "output": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/hierarchy_sync_integration_test.go:132:12-50\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/hierarchy_sync_integration_test.go:207:10-48\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/hierarchy_sync_integration_test.go:265:10-48\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/hierarchy_sync_integration_test.go:425:12-50\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/hierarchy_sync_integration_test.go:440:11-49\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/hierarchy_sync_integration_test.go:52:12-50\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/hierarchy_sync_integration_test.go:530:12-50\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/hierarchy_sync_integration_test.go:591:11-49\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/hierarchy_sync_integration_test.go:639:11-49\n/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-ingest/hierarchy_sync_integration_test.go:737:11-49\n"
+    }
+  }
+]

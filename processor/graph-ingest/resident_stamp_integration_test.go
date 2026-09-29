@@ -25,7 +25,8 @@ import (
 // a key no binary registers is swept without a poison entry, reads back with
 // the stamp unchanged, and stays mutable through must-exist operations.
 func TestResidentUnregisteredStampIsNotPoison(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 	streams := []natsclient.TestStreamConfig{{Name: "ENTITY", Subjects: []string{"entity.>"}}}
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
 	nc := testClient.Client
@@ -52,9 +53,11 @@ func TestResidentUnregisteredStampIsNotPoison(t *testing.T) {
 	})
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	require.NoError(t, c.Initialize())
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	require.NoError(t, c.Start(owner.startContext(ctx)))
+
 	require.NoError(t, c.ensureEntityQueriesReady())
 
 	_, inventoried := poisonInventoryEntry(c, id)

@@ -29,9 +29,8 @@ const gateCreateSubject = "graph.mutation.entity.create"
 
 // startGateTestComponent boots graph-ingest over a real NATS testcontainer with
 // the supplied payload registry, serving the mutation subjects.
-func startGateTestComponent(t *testing.T, reg *payloadregistry.Registry, enableHierarchy bool, opts ...testComponentOption) (context.Context, *Component, *natsclient.Client) {
+func startGateTestComponent(ctx context.Context, t *testing.T, reg *payloadregistry.Registry, enableHierarchy bool, opts ...testComponentOption) (*Component, *natsclient.Client, *graphIngestTestOwner) {
 	t.Helper()
-	ctx := context.Background()
 
 	streams := []natsclient.TestStreamConfig{{Name: "ENTITY", Subjects: []string{"entity.>"}}}
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
@@ -46,11 +45,13 @@ func startGateTestComponent(t *testing.T, reg *payloadregistry.Registry, enableH
 	comp, err := CreateGraphIngest(configJSON, deps)
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.provisionalFinish(ctx, t)
 	require.NoError(t, c.Initialize())
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 	require.NoError(t, testClient.GetNativeConnection().Flush())
-	return ctx, c, testClient.Client
+	owner.transfer()
+	return c, testClient.Client, owner
 }
 
 func gateMutationClient(t *testing.T, nc *natsclient.Client) *graphmutation.Client {
@@ -72,7 +73,10 @@ func gateCreateRequest(id string, mt message.Type) graph.CreateEntityRequest {
 // ENTITY_STATES — the reply carries the closed code and the key in detail, the
 // rejection is metered exactly once, and no key is created.
 func TestCreateRejectsUnregisteredMessageType(t *testing.T) {
-	ctx, c, nc := startGateTestComponent(t, payloadbuiltins.NewTestRegistry(t), false, withAuthority("c360", "test"))
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, nc, owner := startGateTestComponent(ctx, t, payloadbuiltins.NewTestRegistry(t), false, withAuthority("c360", "test"))
+	defer owner.finish(ctx, t)
 	counter := getMutationRejectionsMetric(nil).WithLabelValues(gateCreateSubject, graph.ErrorCodeMessageTypeUnregistered)
 	before := testutil.ToFloat64(counter)
 
@@ -97,7 +101,10 @@ func TestCreateRejectsUnregisteredMessageType(t *testing.T) {
 
 // TestCreateAcceptsRegisteredMessageType: a registered stamp is born unchanged.
 func TestCreateAcceptsRegisteredMessageType(t *testing.T) {
-	ctx, c, nc := startGateTestComponent(t, payloadbuiltins.NewTestRegistry(t), false, withAuthority("c360", "test"))
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, nc, owner := startGateTestComponent(ctx, t, payloadbuiltins.NewTestRegistry(t), false, withAuthority("c360", "test"))
+	defer owner.finish(ctx, t)
 
 	const id = "c360.test.gate.system.lesson.registered"
 	response, err := gateMutationClient(t, nc).Create(ctx, gateCreateRequest(id, agentic.AgentLessonMessageType()))
@@ -114,7 +121,10 @@ func TestCreateAcceptsRegisteredMessageType(t *testing.T) {
 func TestFloorComesFromRegistration(t *testing.T) {
 	reg := payloadbuiltins.NewTestRegistry(t)
 	payloadregistry.RegisterTestType(t, reg, message.Type{Domain: "test", Category: "nofloor", Version: "v1"})
-	ctx, c, nc := startGateTestComponent(t, reg, false, withAuthority("c360", "test"))
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, nc, owner := startGateTestComponent(ctx, t, reg, false, withAuthority("c360", "test"))
+	defer owner.finish(ctx, t)
 	client := gateMutationClient(t, nc)
 
 	t.Run("registered floor is stamped without a metric", func(t *testing.T) {
@@ -155,7 +165,10 @@ func TestFloorComesFromRegistration(t *testing.T) {
 func TestHierarchyContainerBirthCarriesRegisteredType(t *testing.T) {
 	reg := payloadbuiltins.NewTestRegistry(t)
 	payloadregistry.RegisterTestType(t, reg, message.Type{Domain: "test", Category: "entity", Version: "v1"})
-	ctx, c, _ := startGateTestComponent(t, reg, true)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, _, owner := startGateTestComponent(ctx, t, reg, true)
+	defer owner.finish(ctx, t)
 	unknown := getIndexingProfileDefaultMetric(nil).WithLabelValues("unknown")
 	before := testutil.ToFloat64(unknown)
 

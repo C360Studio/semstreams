@@ -37,7 +37,8 @@ func entityStatesConsumerCount(t *testing.T, ctx context.Context, natsClient *na
 }
 
 func TestIntegration_NoGuardConsumerOnEntityStatesAfterStart(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
@@ -52,12 +53,13 @@ func TestIntegration_NoGuardConsumerOnEntityStatesAfterStart(t *testing.T) {
 	comp, err := CreateGraphIngest(configJSON, deps)
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	require.NoError(t, c.Initialize())
 
 	// Seed one resident entity so the snapshot sweep has real pre-marker work.
 	const seededID = "c360.test.poison.scope.entity.pre"
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 
 	// The sweep watcher is stopped inside Start (snapshot-then-stop). Its
 	// ephemeral ordered consumer is deleted asynchronously by the server;
@@ -99,7 +101,8 @@ func TestIntegration_NoGuardConsumerOnEntityStatesAfterStart(t *testing.T) {
 // while ingest boots and unaffected entities keep serving; delete + recreate
 // recovers Health without a restart (spec scenarios on the real wire).
 func TestIntegration_BootSweepInventoriesResidentPoisonRealNATS(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
@@ -126,9 +129,10 @@ func TestIntegration_BootSweepInventoriesResidentPoisonRealNATS(t *testing.T) {
 	comp, err := CreateGraphIngest(configJSON, deps)
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	require.NoError(t, c.Initialize())
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 
 	// Boots with the poison inventoried; queries ready.
 	require.NoError(t, c.ensureEntityQueriesReady())

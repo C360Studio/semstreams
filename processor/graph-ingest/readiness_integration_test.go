@@ -59,7 +59,7 @@ func tryReadEnvelope(
 	return status, entry.Value(), true
 }
 
-func startIngestForReadiness(ctx context.Context, t *testing.T) (*natsclient.TestClient, *Component) {
+func startIngestForReadiness(ctx context.Context, t *testing.T) (*natsclient.TestClient, *Component, *graphIngestTestOwner) {
 	t.Helper()
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
@@ -74,6 +74,8 @@ func startIngestForReadiness(ctx context.Context, t *testing.T) (*natsclient.Tes
 	require.NoError(t, err)
 
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.provisionalFinish(ctx, t)
 	// Tick fast so the test observes successive heartbeats without sleeping through
 	// production cadence.
 	c.statusInterval = 200 * time.Millisecond
@@ -83,9 +85,9 @@ func startIngestForReadiness(ctx context.Context, t *testing.T) (*natsclient.Tes
 	// without one entity reaching ENTITY_STATES, and a readiness assertion passes
 	// vacuously.
 	registerMergeTestPayload(t, c)
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
-	return tc, c
+	require.NoError(t, c.Start(owner.startContext(ctx)))
+	owner.transfer()
+	return tc, c, owner
 }
 
 // publishEntity publishes an entity graph-ingest can actually DECODE.
@@ -120,10 +122,11 @@ func publishEntity(ctx context.Context, t *testing.T, tc *natsclient.TestClient,
 // envelope reaches Ready with bootstrap complete on an idle stack — the gh#712 signal
 // that did not exist.
 func TestIntegration_ReadinessEnvelope_PublishedAndCatchesUp(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
-	tc, _ := startIngestForReadiness(ctx, t)
+	tc, _, owner := startIngestForReadiness(ctx, t)
+	defer owner.finish(ctx, t)
 
 	require.Eventually(t, func() bool {
 		status, _, ok := tryReadEnvelope(ctx, t, tc)
@@ -153,7 +156,7 @@ func TestIntegration_ReadinessEnvelope_PublishedAndCatchesUp(t *testing.T) {
 // change a consumer could only see total_entities > 0 plus green health, which is
 // exactly what read as settled while ingest was mid-flight.
 func TestIntegration_ReadinessEnvelope_BacklogIsNotReady(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
 
 	streams := []natsclient.TestStreamConfig{
@@ -174,11 +177,12 @@ func TestIntegration_ReadinessEnvelope_BacklogIsNotReady(t *testing.T) {
 	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	c.statusInterval = 100 * time.Millisecond
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c)
-	require.NoError(t, c.Start(ctx))
-	defer func() { _ = c.Stop(context.Background()) }()
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 
 	// FIRST assert the not-ready window this test is named for. Without it the test
 	// only proved eventual readiness plus a non-zero scope — the gh#732 case — while
@@ -238,7 +242,7 @@ func TestIntegration_ReadinessEnvelope_BacklogIsNotReady(t *testing.T) {
 // shape stops being reachable. (An ABSENT input list cannot be used: Config.Validate
 // requires at least one input port.)
 func TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
@@ -251,11 +255,12 @@ func TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp(t *test
 	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	c.statusInterval = 100 * time.Millisecond
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c)
-	require.NoError(t, c.Start(ctx))
-	defer func() { _ = c.Stop(context.Background()) }()
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 
 	require.Eventually(t, func() bool {
 		status, _, ok := tryReadEnvelope(ctx, t, tc)
@@ -307,14 +312,13 @@ func itoa(n int) string {
 // IT DELIBERATELY DOES NOT ASSERT ON THE ACK FLOOR. §D0 measured it unusable, nothing
 // here reads it, and it would pass for the wrong reason under MaxDeliver exhaustion.
 func TestIntegration_ReadyImpliesTheWritesAreDurable(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
 
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
 	}
 	tc := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
-	defer func() { _ = tc.Terminate() }()
 
 	// Publish BEFORE start so the consumer binds onto a real backlog: a single
 	// message is applied faster than any status tick can sample, so only a backlog
@@ -333,11 +337,12 @@ func TestIntegration_ReadyImpliesTheWritesAreDurable(t *testing.T) {
 	comp, err := CreateGraphIngest(configJSON, testDependencies(t, tc.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	c.statusInterval = 50 * time.Millisecond
 	require.NoError(t, c.Initialize())
 	registerMergeTestPayload(t, c)
-	require.NoError(t, c.Start(ctx))
-	defer func() { _ = c.Stop(context.Background()) }()
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 
 	bucket, err := tc.GetKVBucket(ctx, graph.BucketEntityStates)
 	require.NoError(t, err)
@@ -375,10 +380,11 @@ func TestIntegration_ReadyImpliesTheWritesAreDurable(t *testing.T) {
 // tryReadEnvelope must report not-observed, and readEnvelope must still fail hard,
 // because absent is a legitimate answer only to a poller.
 func TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
-	tc, comp := startIngestForReadiness(ctx, t)
+	tc, comp, owner := startIngestForReadiness(ctx, t)
+	defer owner.finish(ctx, t)
 
 	require.Eventually(t, func() bool {
 		_, _, ok := tryReadEnvelope(ctx, t, tc)
@@ -387,7 +393,15 @@ func TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure(t *testing.T) {
 	// Fence the producer before the fixture-admin purge. Otherwise the 200ms
 	// heartbeat can legitimately republish between Purge and Get, making this a
 	// scheduler race rather than a test of the absent-key decoder branch.
-	require.NoError(t, comp.Stop(ctx))
+	producerDone := comp.statusDone
+	require.NotNil(t, producerDone, "Start must establish a status producer")
+	require.NoError(t, owner.stop(ctx))
+	select {
+	case <-producerDone:
+	default:
+		t.Fatal("explicit Stop did not join the status producer before Purge")
+	}
+	require.NoError(t, ctx.Err(), "operation authority must remain usable after the phase fence")
 
 	bucket, err := tc.Client.GetKeyValueBucket(ctx, readiness.BucketGraphStatus)
 	require.NoError(t, err)

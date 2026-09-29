@@ -1,0 +1,18 @@
+task: [lint:cleanup-roots] scripts/check-cleanup-roots.sh
+ok  	github.com/c360studio/semstreams/test/testinfra	7.896s
+task: [lint:default] go vet ./...
+task: [lint:default] go fmt ./...
+task: [lint:default] go tool revive -config revive.toml -formatter friendly ./...
+  ⚠  https://revive.run/r#context-as-argument  context.Context should be the first parameter of a function
+  processor/graph-ingest/test_owner_support_test.go:48:53
+
+  ⚠  https://revive.run/r#context-as-argument  context.Context should be the first parameter of a function
+  processor/graph-ingest/test_owner_support_test.go:58:64
+
+⚠ 2 problems (0 errors, 2 warnings)
+
+Warnings:
+  2  context-as-argument
+
+
+task: Failed to run task "check:push": task: Failed to run task "lint:default": exit status 1

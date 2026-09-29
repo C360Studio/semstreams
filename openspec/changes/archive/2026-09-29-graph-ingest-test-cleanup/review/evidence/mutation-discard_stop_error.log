@@ -1,0 +1,6 @@
+2026/09/29 10:21:48 INFO component stopped gracefully component=graph-ingest
+--- FAIL: TestGraphIngestTestOwnerCanceledOperationKeepsFreshTerminalAuthority (0.00s)
+    test_owner_test.go:93: canceled-operation Stop error = graph-ingest operation authority ended before controlled Stop: context canceled, want concrete and operation causes
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/graph-ingest	0.393s
+FAIL

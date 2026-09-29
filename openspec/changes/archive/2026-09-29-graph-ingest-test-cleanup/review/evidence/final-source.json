@@ -1,0 +1,37 @@
+{
+  "files": {
+    "processor/graph-ingest/authority_gate_integration_test.go": "3b8b0f2f4efa23de3bc70e8b3db977b2cbb49b9c3d4f2aa41cacea089ae92a2d",
+    "processor/graph-ingest/batch_integration_test.go": "b8972a06b568bfef33c0fbfd41b67b3173c4cb9385cef8e30fb902a2dbd882e7",
+    "processor/graph-ingest/batch_missing_integration_test.go": "538781a0e7a7e4fd09bc235e1c7b51ed3017594d7d0fa1143e399b5235f3911c",
+    "processor/graph-ingest/cache_coherence_integration_test.go": "b2a7b5c78a9e873251669bafbdefb935d9a68a6b749b10f178eeae3af3648e8f",
+    "processor/graph-ingest/cache_stale_repopulation_integration_test.go": "d352e8d51f2fdc3f4f75cd2730a293f52499c4bcf657ecb78cbbcc9d5a17f4d2",
+    "processor/graph-ingest/cas_integration_test.go": "9ccd1d608244ce9bb9e35947a54f7dee07e88788a63eb005f2e9fcf745296761",
+    "processor/graph-ingest/component_test.go": "912a7688fe78580dad3a953f8a017114df710247affb15eccd9e98629a0fa257",
+    "processor/graph-ingest/entity_mutation_integration_test.go": "912f2151a906448e8f24ea7d620f5180536bc39ed51d2cccda3da9337aea3144",
+    "processor/graph-ingest/hierarchy_replay_integration_test.go": "aeeedff58fa5392d261040cae3b7111be3b547dcf11272f93cdac77c7569e8e6",
+    "processor/graph-ingest/hierarchy_sync_integration_test.go": "0bcb8a2957ca97eb47cbc4cae3e65c9dc17dec2b36256b22e29daf1ca3446cb2",
+    "processor/graph-ingest/keyed_ingest_integration_test.go": "e629e1084fbcb8e1ae68ed49ace478aec0901b4fa67da21df57d44776263908a",
+    "processor/graph-ingest/lifecycle_integration_test.go": "9eabd64f9a22c29898a0cae60618aac3a1c5a6c0b7664b8fa7e6d01b4fd1c308",
+    "processor/graph-ingest/merge_entity_integration_test.go": "0dec3c83fc1b346553e46e792b895af8d5c6c4635a56027d8c2bac87045f4ad0",
+    "processor/graph-ingest/poison_scoping_integration_test.go": "1fcf10f0d6b43c20ee23cb9d33ce0c2510fbee627cefe5b156e52e7c2368613a",
+    "processor/graph-ingest/query_integration_test.go": "3a6659950d889318a4331f05afbe6fedc67a588200d8de78d84ef85c62351de7",
+    "processor/graph-ingest/query_prefix_integration_test.go": "568a4c3a7034a09e344ef12d2e19fda5b424c3487f8ef0335ea5e56d0b8167c0",
+    "processor/graph-ingest/query_wire_contract_integration_test.go": "0b886e59ba1db063a7e4b645636dcc2d7c89a11779a79bf1f432513fd89bb993",
+    "processor/graph-ingest/readiness_gauges_integration_test.go": "f50d0849431eed144acc974f318eec34067d4a6d2d797e1216ee592e5540399f",
+    "processor/graph-ingest/readiness_integration_test.go": "5f5ba1e0f36a6a32a9a2a4738d605b8089acfc0e9f9c3e1ee1ea84a40afaeb37",
+    "processor/graph-ingest/registered_type_gate_integration_test.go": "209ca6c69e3f8e0032f27afb093ef829d7c85360bb7f0ab9e60bda782ab81ef3",
+    "processor/graph-ingest/resident_stamp_integration_test.go": "7da0f6df89ae4aef5233fd7857bcd8aef7148e8e857bb145e6a6c44272f5bcf3",
+    "processor/graph-ingest/structural_gate_wire_integration_test.go": "5e1cd928324cca3d2943f105a8a19348bee59e107c9138cc8eb2a4b35aaf8060",
+    "processor/graph-ingest/test_owner_child_test.go": "fb917010849b53b6be0de92097bf11a1c6d4745767ffb76cfdd4e59aee2b36c4",
+    "processor/graph-ingest/test_owner_support_test.go": "8ce98ae0bfc1b851128dfe9e5048c171506b5cd5ea8278ac71f26031edb58d38",
+    "processor/graph-ingest/test_owner_test.go": "d35af1f6ff3fec20b6fb04176f66b5a6cf79a271c2b18c1c3795da5d16f3b3f9"
+  },
+  "count": 25,
+  "previous_freeze_sha256": "5e1fabfe88d20d76d2c705d37d6098a9b6049cfafac40ea912198fdc06bbc1c7",
+  "changes_since_previous": [
+    "processor/graph-ingest/component_test.go",
+    "processor/graph-ingest/hierarchy_sync_integration_test.go"
+  ],
+  "cleanup_baseline_sha256": "909d254426e4b190d3fe10c86f936dcea742d8a6998b7b90a93bbe02ccab2615",
+  "annotation_correction_packet_sha256": "bf469f40e92b94dc390ab11c27f8aca25a532cdfed37a5f62b238ada3b131025"
+}
