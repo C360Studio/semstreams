@@ -10,7 +10,7 @@
 
 ## 2. Delivery
 
-- [ ] 2.1 Implement the accepted per-stage decisions; each assertion has one mutation check (restore the
+- [x] 2.1 Implement the accepted per-stage decisions; each assertion has one mutation check (restore the
       warning path, see green; fix, see red) recorded on the PR.
 - [ ] 2.2 `task e2e:statistical` green on the branch; the #1117 path-only semantic run green or its reds filed
       with causes.

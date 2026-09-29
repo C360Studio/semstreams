@@ -519,3 +519,20 @@ Record (no issue):
   recorded as such.
 - tasks.md 2.1 stays as written; its per-stage content is this § 2 table. 2.2's gate at landing is statistical only
   (§ 5 item 5).
+
+## § 10 Amendments after implementation (2026-09-29, coordinating session; evidence.md § 4)
+
+- **§ 2 row 2, `test-nl-temporal-intent`: A-by-variant, not A everywhere.** Premise P3 is false for the temporal
+  probe under the semantic tier: "What happened in the last hour?" misses the keyword tier and is routed through
+  `query_classification`, which resolves to the answer model (`qwen3-1.7b`, app log); measured 17.5 s cold and
+  5.6 s warm on an idle stack against the 10 s client deadline, `count=0`. `includeSummaries:false` does not reach
+  that step. The row's variants are `{"statistical"}` (`tiered.go:347`); `test-nl-path-intent` stays in every
+  variant (its probe answers in 30 ms everywhere). Rule applied: spec delta requirement 1, third scenario.
+- **§ 2 row 4, `test-graphrag-global`: a second instance of the D4 class.** Its decoder read
+  `communitySummaries`/`communityId` while the wire is `community_summaries`/`community_id`
+  (`processor/graph-query/graphrag.go:195`, `:236`; the gateway typeDef `gateway/graph-gateway/component.go:1876`
+  is snake_case too, so this is a test tag error, not #1430). The prediction "green from `test-http-gateway`" was
+  wrong because that probe never decodes summaries. Fixed as D4(a)'s class (`tiered_statistical.go:48`, `:60`).
+- **§ 9:** the statistical variant is measured green end to end at `c418ec2e` (42/42, 25.0 s, local); the
+  semantic variant after this change is still unmeasured and PR #1425's rebased path-only run is its first
+  measurement. Three arms beyond § 2's list also assert, each with its reason in evidence.md § 1.
