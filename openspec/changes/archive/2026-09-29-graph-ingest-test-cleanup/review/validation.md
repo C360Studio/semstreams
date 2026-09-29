@@ -33,3 +33,14 @@ https://github.com/C360Studio/semstreams/issues/1417#issuecomment-5894050416.
 It explicitly distinguishes the reviewed branch's 297-entry remainder from main's pre-merge 329 entries, keeps
 #1417 open, and names the next refreshed rule batch plus remaining direct lifecycle-probe waits.
 This handoff claims neither a merge nor issue closure. Hosted checks will be evaluated on the pushed final head.
+
+## Archive and spec synchronization
+
+The CLI archived the complete change to `2026-09-29-graph-ingest-test-cleanup` and promoted exactly one requirement
+with four scenarios into `openspec/specs/test-cleanup-policy/spec.md`. No production source changed after the full gate.
+Final `openspec validate --all --strict` passed: 58 items, zero failures. `task spec:properties` resolved 461/461
+citations; its fixture suite passed 34 checks. These are citation checks, not generated-property execution.
+`task openspec:queue` reported this worktree's queue empty. Final `go test ./test/contract/...` passed in 4.708 seconds.
+Their complete outputs are retained as `evidence/final-openspec.log`, `final-spec-checks.log`, and `final-contract.log`.
+The CLI's incidental leading-section whitespace was restored to preserve the existing canonical spec formatting.
+Final independent archive/spec review is a separate record; hosted current-head CI follows the push.

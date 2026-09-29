@@ -14,7 +14,7 @@ calls with the identical native `context.WithTimeout(t.Context(), 60*time.Second
 60 uncertain callback roots at those callers. The final review correction to the owned-closure proof is recorded
 separately; older results below remain evidence for their recorded source, not an assertion that every later edit ran.
 
-`evidence/focused-artifact-hashes.json` identifies retained files copied byte-for-byte from scratch. Raw records keep
+`evidence/focused-artifact-hashes.json` identifies the original byte-for-byte scratch copies. Raw records keep
 their original scratch paths; the same basenames without the `gh1423-` prefix are retained beside this document.
 Backup source files use `.go.txt` so they cannot participate in compilation or the cleanup census.
 
@@ -120,3 +120,12 @@ contemporaneous test-file hashes. Their support-only driver, intended failures, 
 source snapshots establish reconstructed lineage for the unchanged selected unit/child assertions. The reviewer
 explicitly accepted this bounded evidence without a repeat solely to add timestamps. Do not describe it as
 contemporaneous oracle hashing. The later join-containment correction changes a different selected test.
+
+## Raw log retention
+
+Seven original testcontainer logs contain trailing spaces; the final spec-check CLI log also contains trailing
+spaces and an extra EOF blank line. Their reviewable `.log` copies normalize only those whitespace bytes so
+repository whitespace checks remain clean. `evidence/raw-log-normalization.json` records both original and
+retained-text SHA256 values; `evidence/raw-log-bytes.zip` preserves each exact original byte sequence under the same
+basename. Original raw hashes in earlier evidence remain valid for those ZIP members. No failure, timestamp, phase
+witness or other content was changed. All other retained logs remain byte-identical to their original copies.

@@ -1,0 +1,58 @@
+[
+  {
+    "file": "mutation-readiness-fence.log",
+    "raw_sha256": "b92059523c90201a305e627b20fc65ce80e398abe923b92ddcf05fa35d593144",
+    "retained_text_sha256": "ddd7181ebabce214a28d00e5f851297e87c8bba196f456ecf129839f4f057127",
+    "normalization": "remove trailing spaces/tabs only; line endings and all other bytes unchanged",
+    "raw_bytes": "raw-log-bytes.zip::mutation-readiness-fence.log"
+  },
+  {
+    "file": "mutation-stale-cache-early-exit.log",
+    "raw_sha256": "0660fe40372559bff882af478d1b78531d341a7fdcd6cf54c238ebc5fd241d85",
+    "retained_text_sha256": "b4d548a47ae54f318d69d0ec7c6acd2b625508be166eccfa05c13ee8104e31a9",
+    "normalization": "remove trailing spaces/tabs only; line endings and all other bytes unchanged",
+    "raw_bytes": "raw-log-bytes.zip::mutation-stale-cache-early-exit.log"
+  },
+  {
+    "file": "readiness-fence-green.log",
+    "raw_sha256": "a00ce098d542fe5870c0fe97c457143085e3cf7e04a249610e3c3a2767ec70cb",
+    "retained_text_sha256": "a36d336e85f8e92bfa78b06fdcc12191773718177c96bad1c9f3bb027d5525f4",
+    "normalization": "remove trailing spaces/tabs only; line endings and all other bytes unchanged",
+    "raw_bytes": "raw-log-bytes.zip::readiness-fence-green.log"
+  },
+  {
+    "file": "readiness-immediate-healthy.log",
+    "raw_sha256": "1276ad8818ebc9c9b73a3295145035d205e5c68b081716ec5ab3bded76bb2d2e",
+    "retained_text_sha256": "365adb2bfe12ad29bb5d9e816a9862a4732fe148f91885b0db945e474511984e",
+    "normalization": "remove trailing spaces/tabs only; line endings and all other bytes unchanged",
+    "raw_bytes": "raw-log-bytes.zip::readiness-immediate-healthy.log"
+  },
+  {
+    "file": "readiness-immediate-mutant.log",
+    "raw_sha256": "552d2bc7180e4892c7c72ac4bed5c0a5822b9556a9ab3aaec23921ff90b39dfc",
+    "retained_text_sha256": "8f175ca7158f09ef15f7eb424c3a65f7cc8f434c6efec67ebcf030fb8230d15f",
+    "normalization": "remove trailing spaces/tabs only; line endings and all other bytes unchanged",
+    "raw_bytes": "raw-log-bytes.zip::readiness-immediate-mutant.log"
+  },
+  {
+    "file": "readiness-immediate-restored.log",
+    "raw_sha256": "d52f61d2b753bfd545d66a4d06ca9d9a07ffc6f48614eedecc1748e06438c9ff",
+    "retained_text_sha256": "68801cedf8c54980d1084dc45f350a16c27ab7ffd8a2a625756163109ce50878",
+    "normalization": "remove trailing spaces/tabs only; line endings and all other bytes unchanged",
+    "raw_bytes": "raw-log-bytes.zip::readiness-immediate-restored.log"
+  },
+  {
+    "file": "restored-fences-green.log",
+    "raw_sha256": "b3867b3e76b58167ac5816dc6c2f9b2ae32f4ba92ef135147b0ecae63bf4cc10",
+    "retained_text_sha256": "cba9fcf63c97a0f1a1317396dcae4563ddaf2776e1e9e1c2ccfe33dcdcf5dae2",
+    "normalization": "remove trailing spaces/tabs only; line endings and all other bytes unchanged",
+    "raw_bytes": "raw-log-bytes.zip::restored-fences-green.log"
+  },
+  {
+    "file": "final-spec-checks.log",
+    "raw_sha256": "835639fe6a64b63678c9ee25043a893fc6903a3c222b71aea7ef4a57f9b43e96",
+    "retained_text_sha256": "ffa446eb2cf555b9ab2f6eaa4002c6aaa6d1d9ce02c3e8b1573470aa9d6c3b3a",
+    "normalization": "remove trailing spaces/tabs and extra blank lines at EOF; all other bytes unchanged",
+    "raw_bytes": "raw-log-bytes.zip::final-spec-checks.log"
+  }
+]

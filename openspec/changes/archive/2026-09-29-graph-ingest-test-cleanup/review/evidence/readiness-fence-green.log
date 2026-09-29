@@ -1,7 +1,7 @@
 [INTEGRATION] docker info latency: 0ms (integer-second clock fallback)
 [INTEGRATION] using cached nats:2.14-alpine (registry pull skipped)
 [INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)
-2026/09/29 10:24:16 github.com/testcontainers/testcontainers-go - Connected to docker: 
+2026/09/29 10:24:16 github.com/testcontainers/testcontainers-go - Connected to docker:
   Server Version: 29.8.0
   API Version: 1.51
   Operating System: Docker Desktop

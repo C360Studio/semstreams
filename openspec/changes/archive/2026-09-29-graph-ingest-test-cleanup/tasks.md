@@ -35,7 +35,7 @@
 - [x] 4.1 Obtain independent implementation review and resolve findings before integration.
 - [x] 4.2 Run canonical push/final gates once ready; retain exact commands, commits and outcomes.
 - [x] 4.3 Refresh live changed-source inventory pins, preserving accepted checkpoint 0085323e verbatim as history.
-- [ ] 4.4 Reconcile spec/task truth, archive as the last content change, and obtain final archive/spec review.
+- [x] 4.4 Reconcile spec/task truth, archive as the last content change, and obtain final archive/spec review.
 - [x] 4.5 Prepare the reviewable PR handoff with Closes #1423, required validation evidence and remaining limits;
       record the completed batch in #1417 without claiming merge, issue closure or parent completion.
 
