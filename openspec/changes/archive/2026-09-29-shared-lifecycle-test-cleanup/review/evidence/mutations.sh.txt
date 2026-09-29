@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source_file=component/lifecycle_test_suite.go
+backup=/private/tmp/gh1418-lifecycle-suite-mutation-backup.go
+cp "$source_file" "$backup"
+original=$(md5 -q "$source_file")
+restore() {
+  cp "$backup" "$source_file"
+  actual=$(md5 -q "$source_file")
+  if [[ "$actual" != "$original" ]]; then
+    echo "RESTORATION FAILED: $actual != $original" >&2
+    exit 1
+  fi
+}
+trap restore EXIT
+mutate() {
+  local label=$1 old=$2 new=$3 pattern=$4 assertion=$5
+  restore
+  python3 - "$source_file" "$old" "$new" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1]); original = path.read_text(); old, new = sys.argv[2:]
+if original.count(old) != 1: raise SystemExit(f'mutation match count {original.count(old)} != 1')
+path.write_text(original.replace(old,new,1))
+PY
+  if go test -count=1 ./component -run "$pattern" > "/private/tmp/gh1418-mutant-${label}.log" 2>&1; then
+    echo "VALID MUTANT SURVIVED: $label" >&2
+    return 1
+  fi
+  if ! rg -q "$assertion" "/private/tmp/gh1418-mutant-${label}.log"; then
+    echo "mutant failed for unintended reason: $label" >&2
+    cat "/private/tmp/gh1418-mutant-${label}.log" >&2
+    return 1
+  fi
+  echo "MUTANT KILLED $label: $assertion"
+}
+mutate ownership 'if err := owner.finish(workCtx, false); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("%s cleanup: %w", label, err))' 'if err := error(nil); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("%s cleanup: %w", label, err))' '^TestSharedLifecycleEarlyFailureFinalizes$' 'terminal calls = 0'
+mutate premature_cancel $'o.cancelStart = cancel' $'cancel()\n\to.cancelStart = cancel' '^TestSharedLifecycleOwnedCycleTransitions$/^normal$' 'cycle error'
+mutate missing_post_stop_cancel $'if o.cancelStart != nil {' $'if false && o.cancelStart != nil {' '^TestSharedLifecycleParallelReportedFailureKeepsLivePeerOwned$' 'live peer terminal/post-return cancellation'
+mutate wrapper_finalizer $'tt.inject(wrapped, injected)' $'tt.inject(wrapped, injected)\n\t\t\towner.component = wrapped' '^TestSharedLifecycleInjectionFinalizesBase$' 'concrete Stop calls = 0'
+mutate discarded_cleanup $'resultErr = errors.Join(resultErr, fmt.Errorf("%s cleanup: %w", label, err))' $'_ = err' '^TestSharedLifecycleOperationAndCleanupErrorsRemainDistinct$' 'cycle lost operation or cleanup error'
+restore
+trap - EXIT
+go test -count=1 ./component -run '^TestSharedLifecycle' > /private/tmp/gh1418-mutants-restored.log 2>&1
+printf 'RESTORED PASS checksum=%s\n' "$original"

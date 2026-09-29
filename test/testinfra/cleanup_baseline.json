@@ -2515,93 +2515,154 @@
       "identity": "component/lifecycle_test_suite.go|(*ErrorInjectingComponent).Stop|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
       "site_fingerprint": "7741631856b0a54e39240b0ce5cd88c36e2cdf61f337e671c4811a46119ebf26",
       "classification": "uncertain-owner-provenance",
-      "applicability": "ordinary-only",
       "question": "context provenance unresolved",
-      "reason": "The exact wrapper forwards contexts from the reviewed ordinary test operation and separate ordinary finalizer. Neither is a registered Cleanup or defer invocation; this does not classify all forwarded calls as contract assertions.",
-      "reviewer": "semstreams-reviewer / test_reliability_review; exact source review retained in the #1064 OpenSpec review packet",
-      "owner_issue": "#1064",
+      "reason": "The wrapper forwards only the ordinary injected-Stop operation in the reviewed TestErrorInjection path. Its terminal finalizer owns the base directly, so this forwarding site is ordinary-only; unknown context provenance remains visible and any new cleanup-owned variant must still fail.",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; candidate 20ddeb17716e170afd8f230ce20371225059f3163eefb740ee67af1745e397d4; implementation-review.md",
+      "owner_issue": "#1418",
       "dependencies": [
         {
           "path": "component/lifecycle_test_suite.go",
           "declaration": "ErrorInjectingComponent.Stop",
-          "fingerprint": "5ceac2af818289c586b399daf8cf871c26ab8ae1216fbbda3989e87328c23c0f"
+          "fingerprint": "20990386aebc1d7097eb72f14febac3d7699eeca5633b713f8218f648416ad91"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "ErrorInjectingComponent",
+          "fingerprint": "635b0dbb83823e8419a48fcde04a7d953b4c2e4e013f5fc20fcb9cca560ad05c"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "NewErrorInjectingComponent",
+          "fingerprint": "7c514caced9a9d7be200f5e2949406472dc0dec988df7632dc2e861d1a0e6f38"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "TestErrorInjection",
+          "fingerprint": "83bd9f135a463d691ef4c5de73d18829310994ead831436dcaa0f9b4d16b3642"
         },
         {
           "path": "component/lifecycle.go",
           "declaration": "LifecycleComponent",
           "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779"
-        },
-        {
-          "path": "component/lifecycle_test_suite.go",
-          "declaration": "ErrorInjectingComponent",
-          "fingerprint": "d13c3abdf66a15ca9b144cd1c77ccbf8c1f00737979ea3511fd349be19bd5a40"
-        },
-        {
-          "path": "component/lifecycle_test_suite.go",
-          "declaration": "NewErrorInjectingComponent",
-          "fingerprint": "4cbdc6656728cf3e76f3d6172f80ac3f689c4e9afd46eaeed89d261766836d3d"
-        },
-        {
-          "path": "component/lifecycle_test_suite.go",
-          "declaration": "TestErrorInjection",
-          "fingerprint": "2ec8a52d9f696c6b05565e5ede98edabf9f27a4ff54903b72ce89798b3f843af"
         },
         {
           "path": "output/websocket/websocket_test.go",
           "declaration": "TestWebSocketOutput_ErrorInjection",
           "fingerprint": "11d34863e638a2addba45328a0fe44ec0c4c1b0f0d0d594eeac4730d9d114173"
         }
+      ],
+      "applicability": "ordinary-only"
+    },
+    {
+      "identity": "component/lifecycle_test_suite.go|(*lifecycleTestOwner).finish|defer|o.cancelStart|unresolved callback|unknown|1",
+      "site_fingerprint": "07b402a848f099f4d1cd16737188ce3e05fdee4c127658aac047156674bca763",
+      "classification": "non-lifecycle-stop",
+      "question": "function-valued selector target unresolved on cleanup path",
+      "reason": "The private cancelStart field is assigned only the cancel returned by context.WithTimeout in workContext. finish invokes that verified cancel after the concrete terminal attempt; it does not invoke another lifecycle Stop.",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; budget candidate 687959ee4baabae38bcf14b3a59db6bed0be74a84f061f8ba9bf3aea9fc9dd3f; implementation-review.md",
+      "owner_issue": "#1418",
+      "dependencies": [
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner",
+          "fingerprint": "55208e881cd5ab08e690dac034c13a861781c897bce32a4d0de9a4f87f65b205"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "newLifecycleTestOwner",
+          "fingerprint": "4508a2bfb54a2ff0a4e45068a288b14001da98af0799aee031237700a759e9f2"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.workContext",
+          "fingerprint": "0e21eba24ecfd75f5404a2d064f4a4f319b762bc1293b1cb6191e2c0f22804a9"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.finish",
+          "fingerprint": "8545ebc88424c2c64c181a61caa6f66a94df99b45a6d46756f0ae295735c295b"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.stop",
+          "fingerprint": "cd20c17b7f149a3021b36e8e274d762bcbb54e007ddff3aa2f031ae962f9fa75"
+        }
+      ]
+    },
+    {
+      "identity": "component/lifecycle_test_suite.go|(*lifecycleTestOwner).stop|defer|o.stopWithContext|unresolved callback|unknown|1",
+      "site_fingerprint": "4da2ddce1608c9f0243776020c244a4c53d81268e8300c590e5bda536ad9051d",
+      "classification": "bounded-cleanup",
+      "question": "cleanup helper traversal exceeds bounded depth",
+      "reason": "The exact stop helper derives a finite timeout from Background using its private owner budget. The constructor initializes that budget and benchmarkLifecycleIteration selects its own budget; both pass the resulting context to stopWithContext for one concrete LifecycleComponent.Stop. This proves supplied finiteness, not wall-clock return or complete joining.",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; budget candidate 687959ee4baabae38bcf14b3a59db6bed0be74a84f061f8ba9bf3aea9fc9dd3f; implementation-review.md",
+      "owner_issue": "#1418",
+      "dependencies": [
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner",
+          "fingerprint": "55208e881cd5ab08e690dac034c13a861781c897bce32a4d0de9a4f87f65b205"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "newLifecycleTestOwner",
+          "fingerprint": "4508a2bfb54a2ff0a4e45068a288b14001da98af0799aee031237700a759e9f2"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.stop",
+          "fingerprint": "cd20c17b7f149a3021b36e8e274d762bcbb54e007ddff3aa2f031ae962f9fa75"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.stopWithContext",
+          "fingerprint": "9984a4769bab3d397bfd86aff9bd290db7282c04ed96b7ed670975ded9054ea5"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.finish",
+          "fingerprint": "8545ebc88424c2c64c181a61caa6f66a94df99b45a6d46756f0ae295735c295b"
+        },
+        {
+          "path": "component/lifecycle.go",
+          "declaration": "LifecycleComponent",
+          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "benchmarkLifecycleIteration",
+          "fingerprint": "fe470df9f43e016e576fca635edb78aad93f4482b81338027b7a660db73204a0"
+        }
       ]
     },
     {
       "identity": "component/lifecycle_test_suite.go|testNilStopContext|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
-      "site_fingerprint": "f097d914839f2e69a0b8031eb5fea90d9d52b2d025b0c7b9306279b102383063",
+      "site_fingerprint": "45fe903c0d774588d3927a08576e3d0dd42d4294c13421d375a1402fffc1abb0",
       "classification": "deliberate-contract-call",
       "question": "context provenance unresolved",
-      "reason": "The portable lifecycle-floor test explicitly asserts that Stop(nil) returns an error.",
-      "reviewer": "semstreams-reviewer / test_reliability_review; exact source review retained in the #1064 OpenSpec review packet",
-      "owner_issue": "#1064",
+      "reason": "The exact portable-floor probe calls Stop(nil) and asserts rejection; it is separate from the owned finite terminal finalizer.",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; candidate 20ddeb17716e170afd8f230ce20371225059f3163eefb740ee67af1745e397d4; implementation-review.md",
+      "owner_issue": "#1418",
       "dependencies": [
         {
           "path": "component/lifecycle_test_suite.go",
           "declaration": "testNilStopContext",
-          "fingerprint": "80148799a601fa108a10e835833665cef9df784bd78e702934539a71c1a900df"
-        },
-        {
-          "path": "component/lifecycle.go",
-          "declaration": "LifecycleComponent",
-          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779"
+          "fingerprint": "ffb560ebe76bc7458186eb090a02444dd24383ba9858244a1d513b8b1b3f1302"
         },
         {
           "path": "component/lifecycle_test_suite.go",
           "declaration": "testPortableLifecycleFloor",
-          "fingerprint": "f45f1e206194510b9decf430b7e0d241ad394b03942f1539f3ad35bc2955e0a0"
+          "fingerprint": "5c0043d7ca91c20a96bff94f47db45ea70532e21908b656fb90b4f7ee59315f7"
         },
         {
           "path": "component/lifecycle_test_suite.go",
           "declaration": "StandardLifecycleTests",
-          "fingerprint": "7cd6bade0713b19971ccdeecbee148ac63d4447ece177b23bebabb8fa3a12923"
+          "fingerprint": "7cf09e4c45fa9e21f2cbd6e62e634200bd6825fa91366913ceeae540e737c46f"
         },
         {
           "path": "component/lifecycle_test_suite.go",
-          "declaration": "LifecycleFactory",
-          "fingerprint": "d4b3609ad39f0bfa14a407e633a64bcb7cd08669e3e587634ec501c1ab7d69eb"
-        }
-      ]
-    },
-    {
-      "identity": "component/lifecycle_test_suite.go|testNoResourceLeaks|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
-      "site_fingerprint": "0744290e233da31c1400bfae211f5fa1bd44ad4e73c093e33a26847be1c0e2c0",
-      "classification": "bounded-cleanup",
-      "question": "context provenance unresolved",
-      "reason": "The complete loop body derives a fresh five-second WithTimeout context immediately before the Stop invocation. This establishes supplied-context finiteness, not wall-clock return or joining.",
-      "reviewer": "semstreams-reviewer / test_reliability_review; exact source review retained in the #1064 OpenSpec review packet",
-      "owner_issue": "#1064",
-      "dependencies": [
-        {
-          "path": "component/lifecycle_test_suite.go",
-          "declaration": "testNoResourceLeaks",
-          "fingerprint": "153228727bc3f0fea732944dd319ab3c26eff75e24212dbe8561ffd069ba15d8"
+          "declaration": "lifecycleTestOwner.finish",
+          "fingerprint": "8545ebc88424c2c64c181a61caa6f66a94df99b45a6d46756f0ae295735c295b"
         },
         {
           "path": "component/lifecycle.go",
@@ -2611,23 +2672,28 @@
       ]
     },
     {
-      "identity": "component/lifecycle_test_suite.go|testParallelFreshInstances|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
-      "site_fingerprint": "0744290e233da31c1400bfae211f5fa1bd44ad4e73c093e33a26847be1c0e2c0",
-      "classification": "bounded-cleanup",
-      "question": "context provenance unresolved",
-      "reason": "The complete loop body derives a fresh five-second WithTimeout context immediately before the Stop invocation. This establishes supplied-context finiteness, not wall-clock return or joining.",
-      "reviewer": "semstreams-reviewer / test_reliability_review; exact source review retained in the #1064 OpenSpec review packet",
-      "owner_issue": "#1064",
+      "identity": "component/lifecycle_test_suite.go|testPortableErrorPaths|defer|cancelInput|unresolved callback|unknown|1",
+      "site_fingerprint": "d867375d80f2af5eda09b25aae9b19efde3c9fd1a7e8f90886104ec2d569047f",
+      "classification": "non-lifecycle-stop",
+      "question": "deferred or cleanup callback variable target unresolved",
+      "reason": "Each exact switch branch directly constructs its rejected Start input with context.WithCancel or context.WithDeadline. cancelInput only cancels that input; the owned component finalizer is separate.",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; context-table candidate 136914470b71cce8902a457fbe16659ac1d081da985aac659efd503a2c9ea8c7; implementation-review.md",
+      "owner_issue": "#1418",
       "dependencies": [
         {
           "path": "component/lifecycle_test_suite.go",
-          "declaration": "testParallelFreshInstances",
-          "fingerprint": "905b912c332aa7fbb712f905a16d38a4935ca7fc658a744f5b9353877f2e8cf6"
+          "declaration": "testPortableErrorPaths",
+          "fingerprint": "29b84f71baeecdaed457e1a6f99292aeb45be944a165119d0b39618000bdf6fd"
         },
         {
-          "path": "component/lifecycle.go",
-          "declaration": "LifecycleComponent",
-          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779"
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "StandardLifecycleTests",
+          "fingerprint": "7cf09e4c45fa9e21f2cbd6e62e634200bd6825fa91366913ceeae540e737c46f"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.finish",
+          "fingerprint": "8545ebc88424c2c64c181a61caa6f66a94df99b45a6d46756f0ae295735c295b"
         }
       ]
     },
@@ -3838,6 +3904,118 @@
           "path": "vocabulary/predicates.go",
           "declaration": "PredicateMetadata",
           "fingerprint": "2947118e9e493326a880241e0890463692231fdf0cf6c7939bddefee4b97b26d"
+        }
+      ]
+    },
+    {
+      "identity": "processor/rule/lifecycle_integration_test.go|(*ruleLifecycleObservation).Stop|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
+      "site_fingerprint": "a0203b3a4f418423387f70bd80f7011e3a5bef9b2d8d41ca4e45212045425900",
+      "classification": "deliberate-contract-call",
+      "question": "context provenance unresolved",
+      "reason": "The first exact forwarding branch receives nil from the portable NilStopContext probe and preserves that nil argument so the real rule component must reject it; this is a distinct contract assertion.",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; candidate 20ddeb17716e170afd8f230ce20371225059f3163eefb740ee67af1745e397d4; implementation-review.md",
+      "owner_issue": "#1418",
+      "dependencies": [
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "ruleLifecycleObservation",
+          "fingerprint": "f4501e2955c506a9c856efedba63f4d12bc127eedca28e8a4002758ad5eb7f12"
+        },
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "ruleLifecycleObservation.Stop",
+          "fingerprint": "c4588a31b82db7c8da537919117ba7c04f0c63bb45c378dc28aaf49dfd1b45c5"
+        },
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "TestIntegration_RuleStandardLifecycle",
+          "fingerprint": "6ed4fdd260b03a51f50d6a4db60921e441479493b2bb191a638bf0e633e58a2f"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "testNilStopContext",
+          "fingerprint": "ffb560ebe76bc7458186eb090a02444dd24383ba9858244a1d513b8b1b3f1302"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "testPortableLifecycleFloor",
+          "fingerprint": "5c0043d7ca91c20a96bff94f47db45ea70532e21908b656fb90b4f7ee59315f7"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "StandardLifecycleTests",
+          "fingerprint": "7cf09e4c45fa9e21f2cbd6e62e634200bd6825fa91366913ceeae540e737c46f"
+        },
+        {
+          "path": "component/lifecycle.go",
+          "declaration": "LifecycleComponent",
+          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779"
+        }
+      ]
+    },
+    {
+      "identity": "processor/rule/lifecycle_integration_test.go|(*ruleLifecycleObservation).Stop|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|2",
+      "site_fingerprint": "97ca9f835d447493724d066e1a674ca2e8ec515f8221e83fc629ae5fa6c71d59",
+      "classification": "bounded-cleanup",
+      "question": "context provenance unresolved",
+      "reason": "The observer forwards the finite nonnil Stop context supplied by the shared owner to the real rule processor and records return. The explicit completed-repeat probe supplies its separate finite second context. The suite invokes that wrapper for each returned factory instance; this proves finite caller authority and observed return, not complete internal joining after abort.",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; budget candidate 687959ee4baabae38bcf14b3a59db6bed0be74a84f061f8ba9bf3aea9fc9dd3f; implementation-review.md",
+      "owner_issue": "#1418",
+      "dependencies": [
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "ruleLifecycleObservation",
+          "fingerprint": "f4501e2955c506a9c856efedba63f4d12bc127eedca28e8a4002758ad5eb7f12"
+        },
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "ruleLifecycleObservation.Stop",
+          "fingerprint": "c4588a31b82db7c8da537919117ba7c04f0c63bb45c378dc28aaf49dfd1b45c5"
+        },
+        {
+          "path": "processor/rule/lifecycle_integration_test.go",
+          "declaration": "TestIntegration_RuleStandardLifecycle",
+          "fingerprint": "6ed4fdd260b03a51f50d6a4db60921e441479493b2bb191a638bf0e633e58a2f"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "newLifecycleTestOwner",
+          "fingerprint": "4508a2bfb54a2ff0a4e45068a288b14001da98af0799aee031237700a759e9f2"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.stop",
+          "fingerprint": "cd20c17b7f149a3021b36e8e274d762bcbb54e007ddff3aa2f031ae962f9fa75"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "lifecycleTestOwner.stopWithContext",
+          "fingerprint": "9984a4769bab3d397bfd86aff9bd290db7282c04ed96b7ed670975ded9054ea5"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "testPortableLifecycleFloor",
+          "fingerprint": "5c0043d7ca91c20a96bff94f47db45ea70532e21908b656fb90b4f7ee59315f7"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "testCompletedRepeatedStop",
+          "fingerprint": "14e5ed5970c4d2e4375819d673e93f88faa6875bbc141b64a6d9354223915595"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "runLifecycleCycle",
+          "fingerprint": "a0ca9175c709a702e625059f400cf9d0153ede8de19246f2a2e71147e9a641d0"
+        },
+        {
+          "path": "component/lifecycle_test_suite.go",
+          "declaration": "StandardLifecycleTests",
+          "fingerprint": "7cf09e4c45fa9e21f2cbd6e62e634200bd6825fa91366913ceeae540e737c46f"
+        },
+        {
+          "path": "component/lifecycle.go",
+          "declaration": "LifecycleComponent",
+          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779"
         }
       ]
     },

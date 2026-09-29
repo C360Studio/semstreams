@@ -1,0 +1,14 @@
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+--- FAIL: TestSharedLifecycleParallelReportedFailureKeepsLivePeerOwned (0.00s)
+    lifecycle_test_support_test.go:349: live peer terminal/post-return cancellation: stops=1 Start-context=context.Background.WithCancel.WithDeadline(2026-09-29 07:36:23.289825 -0500 CDT m=+5.021058543 [4.99954325s])
+FAIL
+FAIL	github.com/c360studio/semstreams/component	0.317s
+FAIL

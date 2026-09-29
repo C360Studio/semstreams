@@ -1,0 +1,40 @@
+--- FAIL: TestSharedLifecycleBenchmarkTerminalBudgetAndError (0.07s)
+    --- FAIL: TestSharedLifecycleBenchmarkTerminalBudgetAndError/initialize_cleanup (0.03s)
+        lifecycle_test_support_test.go:478: benchmark exit=exit status 1, want failure=false: goos: darwin
+            goarch: arm64
+            pkg: github.com/c360studio/semstreams/component
+            cpu: Apple M3 Pro
+            BenchmarkSharedLifecycleBudgetChild
+            BenchmarkSharedLifecycleBudgetChild/Initialize
+            LIFECYCLE_EVENT stop
+                lifecycle_test_suite.go:334: Initialize iteration 0: terminal cleanup: benchmark Stop terminal budget exceeded one second: remaining=4.999986375s
+            --- FAIL: BenchmarkSharedLifecycleBudgetChild/Initialize
+            --- FAIL: BenchmarkSharedLifecycleBudgetChild
+            FAIL
+    --- FAIL: TestSharedLifecycleBenchmarkTerminalBudgetAndError/explicit_stop (0.02s)
+        lifecycle_test_support_test.go:478: benchmark exit=exit status 1, want failure=false: goos: darwin
+            goarch: arm64
+            pkg: github.com/c360studio/semstreams/component
+            cpu: Apple M3 Pro
+            BenchmarkSharedLifecycleBudgetChild
+            BenchmarkSharedLifecycleBudgetChild/Stop
+            LIFECYCLE_EVENT stop
+                lifecycle_test_suite.go:334: Stop iteration 0: Stop: benchmark Stop terminal budget exceeded one second: remaining=4.99999175s
+            --- FAIL: BenchmarkSharedLifecycleBudgetChild/Stop
+            --- FAIL: BenchmarkSharedLifecycleBudgetChild
+            FAIL
+    --- FAIL: TestSharedLifecycleBenchmarkTerminalBudgetAndError/stop_error (0.02s)
+        lifecycle_test_support_test.go:481: benchmark failed one-second terminal proof or retried concrete Stop: goos: darwin
+            goarch: arm64
+            pkg: github.com/c360studio/semstreams/component
+            cpu: Apple M3 Pro
+            BenchmarkSharedLifecycleBudgetChild
+            BenchmarkSharedLifecycleBudgetChild/Initialize
+            LIFECYCLE_EVENT stop
+                lifecycle_test_suite.go:334: Initialize iteration 0: terminal cleanup: benchmark Stop terminal budget exceeded one second: remaining=4.999983083s
+            --- FAIL: BenchmarkSharedLifecycleBudgetChild/Initialize
+            --- FAIL: BenchmarkSharedLifecycleBudgetChild
+            FAIL
+FAIL
+FAIL	github.com/c360studio/semstreams/component	0.406s
+FAIL

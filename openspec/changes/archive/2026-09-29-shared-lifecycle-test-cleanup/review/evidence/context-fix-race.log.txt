@@ -1,0 +1,4 @@
+ok  	github.com/c360studio/semstreams/component	1.593s
+ok  	github.com/c360studio/semstreams/gateway/http	1.289s
+ok  	github.com/c360studio/semstreams/input/udp	1.832s
+ok  	github.com/c360studio/semstreams/output/websocket	1.568s

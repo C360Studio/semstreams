@@ -1,0 +1,6 @@
+--- FAIL: TestProductionStructsRetainNoContext (1.06s)
+    context_ownership_contract_test.go:91: production context ownership violations:
+          component/lifecycle_test_suite.go:185: field start provides context.Context
+FAIL
+FAIL	github.com/c360studio/semstreams/test/contract	1.495s
+FAIL

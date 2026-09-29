@@ -1,0 +1,5 @@
+changed since base (32c01357..HEAD):
+  component/lifecycle_test_suite.go
+  component/lifecycle_test_support_test.go
+  processor/rule/lifecycle_integration_test.go
+pins=63 ok=63 moved=0 ambiguous=0 drift=0 malformed=0 unparsed=0

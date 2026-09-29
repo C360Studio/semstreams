@@ -1,0 +1,112 @@
+--- FAIL: TestSharedLifecycleEarlyFailureFinalizes (0.02s)
+    lifecycle_test_support_test.go:88: unexpected Initialize failure was not reported: === RUN   TestSharedLifecycleEarlyFailureChild
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 0: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 1: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 2: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 3: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 4: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 5: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 6: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 7: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 8: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 9: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 10: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 11: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 12: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 13: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 14: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 15: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 16: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 17: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 18: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 19: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 20: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 21: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 22: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 23: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 24: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 25: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 26: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 27: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 28: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 29: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 30: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 31: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 32: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 33: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 34: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 35: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 36: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 37: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 38: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 39: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 40: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 41: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 42: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 43: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 44: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 45: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 46: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 47: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 48: injected initialize failure
+        LIFECYCLE_EVENT factory
+            lifecycle_test_suite.go:222: Initialize failed on iteration 49: injected initialize failure
+            lifecycle_test_suite.go:271: Resource leak test completed: 50 iterations, memory growth: -1384 bytes, goroutine growth: 0
+        --- PASS: TestSharedLifecycleEarlyFailureChild (0.00s)
+        PASS
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+--- FAIL: TestSharedLifecycleInjectionFinalizesBase (0.00s)
+    lifecycle_test_support_test.go:113: base 2 concrete Stop calls = 0, want exactly one despite wrapper injection
+FAIL
+FAIL	github.com/c360studio/semstreams/component	0.379s
+FAIL

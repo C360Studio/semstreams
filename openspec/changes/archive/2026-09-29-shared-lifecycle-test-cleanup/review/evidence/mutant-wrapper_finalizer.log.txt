@@ -1,0 +1,9 @@
+LIFECYCLE_EVENT stop
+LIFECYCLE_EVENT stop
+--- FAIL: TestSharedLifecycleInjectionFinalizesBase (0.00s)
+    --- FAIL: TestSharedLifecycleInjectionFinalizesBase/inject_stop_error (0.00s)
+        lifecycle_test_suite.go:465: inject_stop_error base terminal cleanup: injected stop error
+    lifecycle_test_support_test.go:161: base 2 concrete Stop calls = 0, want exactly one despite wrapper injection
+FAIL
+FAIL	github.com/c360studio/semstreams/component	0.319s
+FAIL

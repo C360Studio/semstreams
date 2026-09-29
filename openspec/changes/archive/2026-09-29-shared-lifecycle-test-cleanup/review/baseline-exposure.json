@@ -1,0 +1,220 @@
+{
+  "base": "926677874711f888cb06c86584484996a001d9f6",
+  "baseline_sha256": "a5b7ea6f86d2b8a35b104063c1fdffba440b511cdb81f2667e591579eabcefe1",
+  "entries": [
+    {
+      "classification": "unbounded-terminal-cleanup",
+      "fingerprint": "a39fb6ac397b1d24a5e9e41cc5e43adf74d96829415b82c90605d78d0d4d8038",
+      "identity": "output/websocket/websocket_test.go|TestWebSocketOutput_AtomicCleanup|defer|github.com/c360studio/semstreams/output/websocket.Stop|*github.com/c360studio/semstreams/output/websocket.Output|unbounded|1",
+      "owner_issue": "#1064",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan."
+    },
+    {
+      "classification": "unbounded-terminal-cleanup",
+      "fingerprint": "82c94a995258329d9be0dcbe66c79acc27f1b096f50511aed8b43054935fe706",
+      "identity": "output/websocket/websocket_test.go|TestWebSocketOutput_BroadcastStress|defer|github.com/c360studio/semstreams/output/websocket.Stop|*github.com/c360studio/semstreams/output/websocket.Output|unbounded|1",
+      "owner_issue": "#1064",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan."
+    },
+    {
+      "classification": "unbounded-terminal-cleanup",
+      "fingerprint": "397038a1e3bfe881371eea70e4197bf5da5a9cf709f3958eed10b3d1faf8489d",
+      "identity": "output/websocket/websocket_test.go|TestWebSocketOutput_ConcurrentClientHandling|defer|github.com/c360studio/semstreams/output/websocket.Stop|*github.com/c360studio/semstreams/output/websocket.Output|unbounded|1",
+      "owner_issue": "#1064",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan."
+    },
+    {
+      "classification": "unbounded-terminal-cleanup",
+      "fingerprint": "05b25da1f0d6293443b2b1a79af55be5940304450dcf9e721886c1c0cbde8058",
+      "identity": "output/websocket/websocket_test.go|TestWebSocketOutput_ConcurrentClients|defer|github.com/c360studio/semstreams/output/websocket.Stop|*github.com/c360studio/semstreams/output/websocket.Output|unbounded|1",
+      "owner_issue": "#1064",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan."
+    },
+    {
+      "classification": "unbounded-terminal-cleanup",
+      "fingerprint": "c9d9fcc995c4e59afcabd9bc9026214ccbfad85108e4e37d33acb572a10f9673",
+      "identity": "output/websocket/websocket_test.go|TestWebSocketOutput_DoubleClose|defer|github.com/c360studio/semstreams/output/websocket.Stop|*github.com/c360studio/semstreams/output/websocket.Output|unbounded|1",
+      "owner_issue": "#1064",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan."
+    },
+    {
+      "classification": "unbounded-terminal-cleanup",
+      "fingerprint": "05852d620b110b0e350d7f23c1938132f0ae8b7f19c9242a9a9b9b9cfe814639",
+      "identity": "output/websocket/websocket_test.go|TestWebSocketOutput_MessageEnvelope|defer|github.com/c360studio/semstreams/output/websocket.Stop|*github.com/c360studio/semstreams/output/websocket.Output|unbounded|1",
+      "owner_issue": "#1064",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan."
+    },
+    {
+      "classification": "unbounded-terminal-cleanup",
+      "fingerprint": "5f99ba8cad383c8510a3c445c66a4fbaff54dd6a8f72aaa3d4a4e6c9897bd040",
+      "identity": "output/websocket/websocket_test.go|TestWebSocketOutput_PendingBufferCreation|defer|github.com/c360studio/semstreams/output/websocket.Stop|*github.com/c360studio/semstreams/output/websocket.Output|unbounded|1",
+      "owner_issue": "#1064",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan."
+    },
+    {
+      "classification": "unbounded-terminal-cleanup",
+      "fingerprint": "e4328920115a75f91c85fc16a4ae1d77855e4733e69d1ff22f281a67a404a81f",
+      "identity": "output/websocket/websocket_test.go|TestWebSocketOutput_RaceConditions|defer|github.com/c360studio/semstreams/output/websocket.Stop|*github.com/c360studio/semstreams/output/websocket.Output|unbounded|1",
+      "owner_issue": "#1064",
+      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan."
+    }
+  ],
+  "paths": {
+    "component/lifecycle.go": {
+      "direct_debt": 0,
+      "resolutions_with_site_or_dependency": 4
+    },
+    "component/lifecycle_test_suite.go": {
+      "direct_debt": 0,
+      "resolutions_with_site_or_dependency": 4
+    },
+    "component/test_helpers.go": {
+      "direct_debt": 0,
+      "resolutions_with_site_or_dependency": 0
+    },
+    "gateway/http/http_lifecycle_test.go": {
+      "direct_debt": 0,
+      "resolutions_with_site_or_dependency": 0
+    },
+    "input/udp/udp_lifecycle_test.go": {
+      "direct_debt": 0,
+      "resolutions_with_site_or_dependency": 0
+    },
+    "output/websocket/websocket_test.go": {
+      "direct_debt": 8,
+      "resolutions_with_site_or_dependency": 1
+    },
+    "processor/graph-index/lifecycle_integration_test.go": {
+      "direct_debt": 0,
+      "resolutions_with_site_or_dependency": 0
+    },
+    "processor/rule/lifecycle_integration_test.go": {
+      "direct_debt": 0,
+      "resolutions_with_site_or_dependency": 0
+    }
+  },
+  "resolutions": [
+    {
+      "applicability": "ordinary-only",
+      "classification": "uncertain-owner-provenance",
+      "dependencies": [
+        {
+          "declaration": "ErrorInjectingComponent.Stop",
+          "fingerprint": "5ceac2af818289c586b399daf8cf871c26ab8ae1216fbbda3989e87328c23c0f",
+          "path": "component/lifecycle_test_suite.go"
+        },
+        {
+          "declaration": "LifecycleComponent",
+          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779",
+          "path": "component/lifecycle.go"
+        },
+        {
+          "declaration": "ErrorInjectingComponent",
+          "fingerprint": "d13c3abdf66a15ca9b144cd1c77ccbf8c1f00737979ea3511fd349be19bd5a40",
+          "path": "component/lifecycle_test_suite.go"
+        },
+        {
+          "declaration": "NewErrorInjectingComponent",
+          "fingerprint": "4cbdc6656728cf3e76f3d6172f80ac3f689c4e9afd46eaeed89d261766836d3d",
+          "path": "component/lifecycle_test_suite.go"
+        },
+        {
+          "declaration": "TestErrorInjection",
+          "fingerprint": "2ec8a52d9f696c6b05565e5ede98edabf9f27a4ff54903b72ce89798b3f843af",
+          "path": "component/lifecycle_test_suite.go"
+        },
+        {
+          "declaration": "TestWebSocketOutput_ErrorInjection",
+          "fingerprint": "11d34863e638a2addba45328a0fe44ec0c4c1b0f0d0d594eeac4730d9d114173",
+          "path": "output/websocket/websocket_test.go"
+        }
+      ],
+      "identity": "component/lifecycle_test_suite.go|(*ErrorInjectingComponent).Stop|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
+      "owner_issue": "#1064",
+      "question": "context provenance unresolved",
+      "reason": "The exact wrapper forwards contexts from the reviewed ordinary test operation and separate ordinary finalizer. Neither is a registered Cleanup or defer invocation; this does not classify all forwarded calls as contract assertions.",
+      "reviewer": "semstreams-reviewer / test_reliability_review; exact source review retained in the #1064 OpenSpec review packet",
+      "site_fingerprint": "7741631856b0a54e39240b0ce5cd88c36e2cdf61f337e671c4811a46119ebf26"
+    },
+    {
+      "classification": "deliberate-contract-call",
+      "dependencies": [
+        {
+          "declaration": "testNilStopContext",
+          "fingerprint": "80148799a601fa108a10e835833665cef9df784bd78e702934539a71c1a900df",
+          "path": "component/lifecycle_test_suite.go"
+        },
+        {
+          "declaration": "LifecycleComponent",
+          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779",
+          "path": "component/lifecycle.go"
+        },
+        {
+          "declaration": "testPortableLifecycleFloor",
+          "fingerprint": "f45f1e206194510b9decf430b7e0d241ad394b03942f1539f3ad35bc2955e0a0",
+          "path": "component/lifecycle_test_suite.go"
+        },
+        {
+          "declaration": "StandardLifecycleTests",
+          "fingerprint": "7cd6bade0713b19971ccdeecbee148ac63d4447ece177b23bebabb8fa3a12923",
+          "path": "component/lifecycle_test_suite.go"
+        },
+        {
+          "declaration": "LifecycleFactory",
+          "fingerprint": "d4b3609ad39f0bfa14a407e633a64bcb7cd08669e3e587634ec501c1ab7d69eb",
+          "path": "component/lifecycle_test_suite.go"
+        }
+      ],
+      "identity": "component/lifecycle_test_suite.go|testNilStopContext|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
+      "owner_issue": "#1064",
+      "question": "context provenance unresolved",
+      "reason": "The portable lifecycle-floor test explicitly asserts that Stop(nil) returns an error.",
+      "reviewer": "semstreams-reviewer / test_reliability_review; exact source review retained in the #1064 OpenSpec review packet",
+      "site_fingerprint": "f097d914839f2e69a0b8031eb5fea90d9d52b2d025b0c7b9306279b102383063"
+    },
+    {
+      "classification": "bounded-cleanup",
+      "dependencies": [
+        {
+          "declaration": "testNoResourceLeaks",
+          "fingerprint": "153228727bc3f0fea732944dd319ab3c26eff75e24212dbe8561ffd069ba15d8",
+          "path": "component/lifecycle_test_suite.go"
+        },
+        {
+          "declaration": "LifecycleComponent",
+          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779",
+          "path": "component/lifecycle.go"
+        }
+      ],
+      "identity": "component/lifecycle_test_suite.go|testNoResourceLeaks|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
+      "owner_issue": "#1064",
+      "question": "context provenance unresolved",
+      "reason": "The complete loop body derives a fresh five-second WithTimeout context immediately before the Stop invocation. This establishes supplied-context finiteness, not wall-clock return or joining.",
+      "reviewer": "semstreams-reviewer / test_reliability_review; exact source review retained in the #1064 OpenSpec review packet",
+      "site_fingerprint": "0744290e233da31c1400bfae211f5fa1bd44ad4e73c093e33a26847be1c0e2c0"
+    },
+    {
+      "classification": "bounded-cleanup",
+      "dependencies": [
+        {
+          "declaration": "testParallelFreshInstances",
+          "fingerprint": "905b912c332aa7fbb712f905a16d38a4935ca7fc658a744f5b9353877f2e8cf6",
+          "path": "component/lifecycle_test_suite.go"
+        },
+        {
+          "declaration": "LifecycleComponent",
+          "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779",
+          "path": "component/lifecycle.go"
+        }
+      ],
+      "identity": "component/lifecycle_test_suite.go|testParallelFreshInstances|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
+      "owner_issue": "#1064",
+      "question": "context provenance unresolved",
+      "reason": "The complete loop body derives a fresh five-second WithTimeout context immediately before the Stop invocation. This establishes supplied-context finiteness, not wall-clock return or joining.",
+      "reviewer": "semstreams-reviewer / test_reliability_review; exact source review retained in the #1064 OpenSpec review packet",
+      "site_fingerprint": "0744290e233da31c1400bfae211f5fa1bd44ad4e73c093e33a26847be1c0e2c0"
+    }
+  ],
+  "total_entries": 334,
+  "total_resolutions": 86
+}

@@ -2,9 +2,12 @@ package component
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,322 +15,378 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// LifecycleFactory creates a new instance of a LifecycleComponent for testing
+// LifecycleFactory creates a new instance of a LifecycleComponent for testing.
+// Factories must return independent instances and permit concurrent calls. A
+// worker factory must report failures without calling Fatal or FailNow.
 type LifecycleFactory func() LifecycleComponent
+
+const lifecycleTestBudget = 5 * time.Second
+const benchmarkTerminalBudget = time.Second
+
+// lifecycleTestOwner is the lexical owner of one returned test component. It
+// stores only cancellation and terminal-attempt state; operation contexts stay
+// with the invoking case or iteration.
+type lifecycleTestOwner struct {
+	component       LifecycleComponent
+	stopBudget      time.Duration
+	cancelStart     context.CancelFunc
+	attempted       bool
+	concreteStopErr error
+	stopBoundErr    error
+}
+
+func newLifecycleTestOwner(component LifecycleComponent) *lifecycleTestOwner {
+	if component == nil {
+		return nil
+	}
+	value := reflect.ValueOf(component)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return nil
+		}
+	}
+	return &lifecycleTestOwner{component: component, stopBudget: lifecycleTestBudget}
+}
+
+func (o *lifecycleTestOwner) workContext(parent context.Context) context.Context {
+	ctx, cancel := context.WithTimeout(parent, lifecycleTestBudget)
+	o.cancelStart = cancel
+	return ctx
+}
+
+func (o *lifecycleTestOwner) stop(workCtx context.Context, abort bool) error {
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), o.stopBudget)
+	defer cancelStop()
+	return o.stopWithContext(stopCtx, workCtx, abort)
+}
+
+func (o *lifecycleTestOwner) stopWithContext(stopCtx, workCtx context.Context, abort bool) error {
+	o.attempted = true // A returned error or panic does not authorize an implicit retry.
+	o.concreteStopErr = o.component.Stop(stopCtx)
+	o.stopBoundErr = stopCtx.Err()
+	result := o.concreteStopErr
+	if o.stopBoundErr != nil {
+		result = errors.Join(result, fmt.Errorf("terminal context ended: %w", o.stopBoundErr))
+	}
+	if !abort && workCtx != nil && workCtx.Err() != nil {
+		result = errors.Join(result, fmt.Errorf("accepted Start authority ended before controlled Stop: %w", workCtx.Err()))
+	}
+	return result
+}
+
+func (o *lifecycleTestOwner) abortContractError() error {
+	if o.stopBoundErr != nil && !errors.Is(o.concreteStopErr, o.stopBoundErr) {
+		return fmt.Errorf("component Stop returned %v without preserving caller-context cause %v", o.concreteStopErr, o.stopBoundErr)
+	}
+	return nil
+}
+
+func (o *lifecycleTestOwner) finish(workCtx context.Context, abort bool) error {
+	if o.cancelStart != nil {
+		defer o.cancelStart() // Stop completes before accepted Start authority ends.
+	}
+	if o.attempted {
+		return nil
+	}
+	return o.stop(workCtx, abort)
+}
 
 // StandardLifecycleTests verifies the portable LifecycleComponent floor.
 // Resource-specific drain ordering, blocked joins, and partial-acquisition
 // rollback remain the responsibility of focused owner tests.
 func StandardLifecycleTests(t *testing.T, factory LifecycleFactory) {
-	t.Run("PortableFloor", func(t *testing.T) {
-		testPortableLifecycleFloor(t, factory)
-	})
-	t.Run("ErrorPaths", func(t *testing.T) {
-		testPortableErrorPaths(t, factory)
-	})
-	t.Run("ParallelFreshInstances", func(t *testing.T) {
-		testParallelFreshInstances(t, factory)
-	})
-	t.Run("NoLeaks", func(t *testing.T) {
-		testNoResourceLeaks(t, factory)
-	})
+	t.Run("PortableFloor", func(t *testing.T) { testPortableLifecycleFloor(t, factory) })
+	t.Run("ErrorPaths", func(t *testing.T) { testPortableErrorPaths(t, factory) })
+	t.Run("ParallelFreshInstances", func(t *testing.T) { testParallelFreshInstances(t, factory) })
+	t.Run("NoLeaks", func(t *testing.T) { testNoResourceLeaks(t, factory) })
 }
 
 func testPortableLifecycleFloor(t *testing.T, factory LifecycleFactory) {
 	tests := []struct {
-		name string
-		test func(t *testing.T, comp LifecycleComponent)
+		name  string
+		abort bool
+		test  func(context.Context, *testing.T, *lifecycleTestOwner)
 	}{
-		{"Initialize", testInitialize},
-		{"ControlledStopWithLiveStartAuthority", testControlledStopWithLiveStartAuthority},
-		{"AcceptedStartParentCancellation", testAcceptedStartParentCancellation},
-		{"CompletedRepeatedStop", testCompletedRepeatedStop},
-		{"NilStartContext", testNilStartContext},
-		{"NilStopContext", testNilStopContext},
-		{"StopBeforeStart", testStopBeforeStart},
+		{"Initialize", false, testInitialize},
+		{"ControlledStopWithLiveStartAuthority", false, testControlledStopWithLiveStartAuthority},
+		{"AcceptedStartParentCancellation", true, testAcceptedStartParentCancellation},
+		{"CompletedRepeatedStop", false, testCompletedRepeatedStop},
+		{"NilStartContext", false, testNilStartContext},
+		{"NilStopContext", false, testNilStopContext},
+		{"StopBeforeStart", false, testStopBeforeStart},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			comp := factory()
-			require.NotNil(t, comp, "Component factory returned nil")
-			tt.test(t, comp)
+			owner := newLifecycleTestOwner(factory())
+			if owner == nil {
+				t.Fatal("component factory returned nil")
+			}
+			var workCtx context.Context
+			defer func() {
+				if err := owner.finish(workCtx, tt.abort); err != nil {
+					t.Errorf("%s terminal cleanup: %v", tt.name, err)
+				}
+			}()
+			workCtx = owner.workContext(t.Context())
+			tt.test(workCtx, t, owner)
 		})
 	}
 }
 
-func testInitialize(t *testing.T, comp LifecycleComponent) {
-	require.NoError(t, comp.Initialize(), "Initialize should succeed on a fresh component")
+func testInitialize(_ context.Context, t *testing.T, owner *lifecycleTestOwner) {
+	require.NoError(t, owner.component.Initialize(), "Initialize should succeed on a fresh component")
 }
 
-func testControlledStopWithLiveStartAuthority(t *testing.T, comp LifecycleComponent) {
-	require.NoError(t, comp.Initialize())
-	startCtx, cancelStart := context.WithCancel(context.Background())
-	defer cancelStart()
-	require.NoError(t, comp.Start(startCtx))
-
-	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelStop()
-	require.NoError(t, comp.Stop(stopCtx))
-	require.NoError(t, startCtx.Err(), "the parent Start authority must remain live during controlled Stop")
+func testControlledStopWithLiveStartAuthority(workCtx context.Context, t *testing.T, owner *lifecycleTestOwner) {
+	require.NoError(t, owner.component.Initialize())
+	require.NoError(t, owner.component.Start(workCtx))
+	require.NoError(t, owner.stop(workCtx, false))
+	require.NoError(t, workCtx.Err(), "accepted Start authority must remain live during controlled Stop")
 }
 
-func testAcceptedStartParentCancellation(t *testing.T, comp LifecycleComponent) {
-	require.NoError(t, comp.Initialize())
-	startCtx, cancelStart := context.WithCancel(context.Background())
-	require.NoError(t, comp.Start(startCtx))
-	cancelStart()
-
-	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelStop()
+func testAcceptedStartParentCancellation(workCtx context.Context, t *testing.T, owner *lifecycleTestOwner) {
+	require.NoError(t, owner.component.Initialize())
+	require.NoError(t, owner.component.Start(workCtx))
+	owner.cancelStart()
 	var stopErr error
-	require.NotPanics(t, func() {
-		stopErr = comp.Stop(stopCtx)
-	}, "abort Stop must remain a synchronous bounded lifecycle call")
+	require.NotPanics(t, func() { stopErr = owner.stop(workCtx, true) },
+		"abort Stop must remain a synchronous bounded lifecycle call")
+	require.NoError(t, owner.abortContractError(), "abort Stop must preserve its exact caller-context cause")
 	if stopErr != nil {
 		t.Logf("abort Stop accurately reported terminal cleanup: %v", stopErr)
 	}
-	if stopCtx.Err() != nil {
-		require.ErrorIs(t, stopErr, stopCtx.Err(), "Stop must preserve its exact caller-context error when the bound wins")
-	}
 }
 
-func testCompletedRepeatedStop(t *testing.T, comp LifecycleComponent) {
-	require.NoError(t, comp.Initialize())
-	startCtx, cancelStart := context.WithCancel(context.Background())
-	defer cancelStart()
-	require.NoError(t, comp.Start(startCtx))
-
-	firstCtx, cancelFirst := context.WithTimeout(context.Background(), 5*time.Second)
-	require.NoError(t, comp.Stop(firstCtx))
-	cancelFirst()
-	secondCtx, cancelSecond := context.WithTimeout(context.Background(), 5*time.Second)
+func testCompletedRepeatedStop(workCtx context.Context, t *testing.T, owner *lifecycleTestOwner) {
+	require.NoError(t, owner.component.Initialize())
+	require.NoError(t, owner.component.Start(workCtx))
+	require.NoError(t, owner.stop(workCtx, false))
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), lifecycleTestBudget)
 	defer cancelSecond()
-	require.NoError(t, comp.Stop(secondCtx), "completed repeated Stop should be a no-op")
+	require.NoError(t, owner.component.Stop(secondCtx), "completed repeated Stop should be a no-op")
+	require.NoError(t, secondCtx.Err(), "completed repeated Stop exceeded its caller bound")
 }
 
-func testNilStartContext(t *testing.T, comp LifecycleComponent) {
-	require.NoError(t, comp.Initialize())
-	assert.Error(t, comp.Start(nil), "Start must reject a nil context")
+func testNilStartContext(_ context.Context, t *testing.T, owner *lifecycleTestOwner) {
+	require.NoError(t, owner.component.Initialize())
+	assert.Error(t, owner.component.Start(nil), "Start must reject a nil context")
 }
 
-func testNilStopContext(t *testing.T, comp LifecycleComponent) {
-	assert.Error(t, comp.Stop(nil), "Stop must reject a nil context")
+func testNilStopContext(_ context.Context, t *testing.T, owner *lifecycleTestOwner) {
+	assert.Error(t, owner.component.Stop(nil), "Stop must reject a nil context")
 }
 
-func testStopBeforeStart(t *testing.T, comp LifecycleComponent) {
-	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelStop()
-	require.NoError(t, comp.Stop(stopCtx), "Stop should be safe before Start")
+func testStopBeforeStart(workCtx context.Context, t *testing.T, owner *lifecycleTestOwner) {
+	require.NoError(t, owner.stop(workCtx, false), "Stop should be safe before Start")
 }
 
 func testPortableErrorPaths(t *testing.T, factory LifecycleFactory) {
-	t.Run("PreCanceledStart", func(t *testing.T) {
-		comp := factory()
-		require.NotNil(t, comp, "Component factory returned nil")
-		require.NoError(t, comp.Initialize())
-		startCtx, cancelStart := context.WithCancel(context.Background())
-		cancelStart()
-		require.ErrorIs(t, comp.Start(startCtx), context.Canceled)
-		requireSafeStopAfterRejectedStart(t, comp)
-	})
-
-	t.Run("PreExpiredStart", func(t *testing.T) {
-		comp := factory()
-		require.NotNil(t, comp, "Component factory returned nil")
-		require.NoError(t, comp.Initialize())
-		startCtx, cancelStart := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
-		defer cancelStart()
-		require.ErrorIs(t, comp.Start(startCtx), context.DeadlineExceeded)
-		requireSafeStopAfterRejectedStart(t, comp)
-	})
+	tests := []struct {
+		name    string
+		wantErr error
+	}{
+		{"PreCanceledStart", context.Canceled},
+		{"PreExpiredStart", context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			owner := newLifecycleTestOwner(factory())
+			if owner == nil {
+				t.Fatal("component factory returned nil")
+			}
+			var workCtx context.Context
+			defer func() {
+				if err := owner.finish(workCtx, false); err != nil {
+					t.Errorf("%s terminal cleanup: %v", tt.name, err)
+				}
+			}()
+			workCtx = owner.workContext(t.Context())
+			require.NoError(t, owner.component.Initialize())
+			var startCtx context.Context
+			var cancelInput context.CancelFunc
+			switch tt.name {
+			case "PreCanceledStart":
+				startCtx, cancelInput = context.WithCancel(context.Background())
+				cancelInput()
+			case "PreExpiredStart":
+				startCtx, cancelInput = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			default:
+				t.Fatalf("unsupported rejected-Start case %q", tt.name)
+			}
+			defer cancelInput()
+			require.ErrorIs(t, owner.component.Start(startCtx), tt.wantErr)
+			require.NoError(t, owner.stop(workCtx, false), "pre-action Start rejection must leave Stop safe")
+		})
+	}
 }
-
-func requireSafeStopAfterRejectedStart(t *testing.T, comp LifecycleComponent) {
-	t.Helper()
-	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelStop()
-	require.NoError(t, comp.Stop(stopCtx), "pre-action Start rejection must leave Stop safe")
+func runLifecycleCycle(parent context.Context, factory LifecycleFactory, label string) (resultErr error) {
+	owner := newLifecycleTestOwner(factory())
+	if owner == nil {
+		return fmt.Errorf("%s: component factory returned nil", label)
+	}
+	var workCtx context.Context
+	defer func() {
+		if err := owner.finish(workCtx, false); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("%s cleanup: %w", label, err))
+		}
+	}()
+	if err := owner.component.Initialize(); err != nil {
+		return fmt.Errorf("%s Initialize: %w", label, err)
+	}
+	workCtx = owner.workContext(parent)
+	if err := owner.component.Start(workCtx); err != nil {
+		return fmt.Errorf("%s Start: %w", label, err)
+	}
+	if err := owner.stop(workCtx, false); err != nil {
+		return fmt.Errorf("%s Stop: %w", label, err)
+	}
+	return nil
 }
 
 func testParallelFreshInstances(t *testing.T, factory LifecycleFactory) {
 	if testing.Short() {
 		t.Skip("Skipping parallel fresh-instance test in short mode")
 	}
+	runParallelFreshInstances(t.Context(), factory, func(err error) { t.Error(err) })
+}
 
+func runParallelFreshInstances(parent context.Context, factory LifecycleFactory, report func(error)) {
 	const iterations = 20
 	const concurrency = 10
-
-	var wg sync.WaitGroup
-	results := make(chan error, iterations*concurrency)
-
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < iterations; j++ {
-				comp := factory()
-				if comp == nil {
-					results <- fmt.Errorf("component factory returned nil")
-					continue
+	var failed atomic.Bool
+	results := make(chan error, concurrency)
+	var workers sync.WaitGroup
+	for worker := 0; worker < concurrency; worker++ {
+		workers.Add(1)
+		go func(worker int) {
+			defer workers.Done()
+			for iteration := 0; iteration < iterations; iteration++ {
+				// This check is admission; an instance acquired before another worker
+				// reports failure remains owned until its finalizer returns.
+				if failed.Load() {
+					return
 				}
-				if err := comp.Initialize(); err != nil {
-					results <- err
-					continue
+				err := runLifecycleCycle(parent, factory, fmt.Sprintf("worker %d iteration %d", worker, iteration))
+				if err != nil {
+					failed.Store(true)
 				}
-				startCtx, cancelStart := context.WithCancel(context.Background())
-				if err := comp.Start(startCtx); err != nil {
-					cancelStart()
-					results <- err
-					continue
-				}
-				stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
-				err := comp.Stop(stopCtx)
-				cancelStop()
-				cancelStart()
 				results <- err
+				if err != nil {
+					return
+				}
 			}
-		}()
+		}(worker)
 	}
-
-	wg.Wait()
-	close(results)
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
 	for err := range results {
-		require.NoError(t, err)
+		if err != nil {
+			report(err) // Caller reports while workers finish already-owned instances.
+		}
 	}
 }
 
-// testNoResourceLeaks tests for memory and goroutine leaks
 func testNoResourceLeaks(t *testing.T, factory LifecycleFactory) {
 	if testing.Short() {
 		t.Skip("Skipping resource leak test in short mode")
 	}
-
-	// Get baseline goroutine count
 	runtime.GC()
 	initialGoroutines := runtime.NumGoroutine()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
 
-	// Baseline memory
-	var m1 runtime.MemStats
-	runtime.ReadMemStats(&m1)
-
-	// Run lifecycle iterations - 50 is enough to detect leaks without being excessive
 	const iterations = 50
-	for i := 0; i < iterations; i++ {
-		comp := factory()
-		require.NotNil(t, comp, "Component factory returned nil")
-
-		err := comp.Initialize()
-		if err != nil {
-			t.Logf("Initialize failed on iteration %d: %v", i, err)
-			continue
+	for iteration := 0; iteration < iterations; iteration++ {
+		if err := runLifecycleCycle(t.Context(), factory, fmt.Sprintf("NoLeaks iteration %d", iteration)); err != nil {
+			t.Error(err)
+			return // The current lexical owner has already finalized.
 		}
-
-		startCtx, cancelStart := context.WithCancel(context.Background())
-		err = comp.Start(startCtx)
-		if err != nil {
-			t.Logf("Start failed on iteration %d: %v", i, err)
-		}
-
-		stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
-		err = comp.Stop(stopCtx)
-		cancelStop()
-		if err != nil {
-			t.Logf("Stop failed on iteration %d: %v", i, err)
-		}
-
-		cancelStart()
-
-		// Periodic cleanup check
-		if i%10 == 9 {
+		if iteration%10 == 9 {
 			runtime.GC()
 		}
 	}
-
-	// Stop is a join boundary; no scheduler delay is needed before inspection.
 	runtime.GC()
-
-	// Check memory after
-	var m2 runtime.MemStats
-	runtime.ReadMemStats(&m2)
-
-	// Check goroutine count
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
 	finalGoroutines := runtime.NumGoroutine()
-
-	// Memory should not grow significantly (allow 50MB growth)
-	growth := int64(m2.Alloc) - int64(m1.Alloc)
+	growth := int64(after.Alloc) - int64(before.Alloc)
 	if growth > 50*1024*1024 {
 		t.Errorf("Memory grew by %d bytes (%.2f MB), expected < 50MB", growth, float64(growth)/(1024*1024))
 	}
-
-	// Goroutine count should be stable - allow some variance for NATS async cleanup
-	// Each iteration should not leak goroutines, so 10 total growth is generous
 	goroutineGrowth := finalGoroutines - initialGoroutines
 	if goroutineGrowth > 10 {
 		t.Errorf("Goroutine count grew by %d (initial: %d, final: %d), expected growth < 10",
 			goroutineGrowth, initialGoroutines, finalGoroutines)
 	}
-
 	t.Logf("Resource leak test completed: %d iterations, memory growth: %d bytes, goroutine growth: %d",
 		iterations, growth, goroutineGrowth)
 }
 
-// BenchmarkLifecycleMethods provides benchmark tests for lifecycle operations
+// BenchmarkLifecycleMethods measures individual operations and the complete
+// lifecycle while each iteration retains its own checked terminal owner.
 func BenchmarkLifecycleMethods(b *testing.B, factory LifecycleFactory) {
-	b.Run("Initialize", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			comp := factory()
-			_ = comp.Initialize()
-			stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
-			_ = comp.Stop(stopCtx)
-			cancelStop()
-		}
-	})
-
-	b.Run("Start", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			comp := factory()
-			_ = comp.Initialize()
-			startCtx, cancelStart := context.WithCancel(context.Background())
-			_ = comp.Start(startCtx)
-			stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
-			_ = comp.Stop(stopCtx)
-			cancelStop()
-			cancelStart()
-		}
-	})
-
-	b.Run("Stop", func(b *testing.B) {
-		b.StopTimer()
-		for i := 0; i < b.N; i++ {
-			comp := factory()
-			_ = comp.Initialize()
-			startCtx, cancelStart := context.WithCancel(context.Background())
-			_ = comp.Start(startCtx)
-			stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
-			b.StartTimer()
-			_ = comp.Stop(stopCtx)
+	for _, mode := range []string{"Initialize", "Start", "Stop", "FullLifecycle"} {
+		b.Run(mode, func(b *testing.B) {
 			b.StopTimer()
-			cancelStop()
-			cancelStart()
-		}
-	})
+			for iteration := 0; iteration < b.N; iteration++ {
+				if err := benchmarkLifecycleIteration(b, factory, mode); err != nil {
+					b.Fatalf("%s iteration %d: %v", mode, iteration, err)
+				}
+			}
+		})
+	}
+}
 
-	b.Run("FullLifecycle", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			comp := factory()
-			_ = comp.Initialize()
-			startCtx, cancelStart := context.WithCancel(context.Background())
-			_ = comp.Start(startCtx)
-			stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
-			_ = comp.Stop(stopCtx)
-			cancelStop()
-			cancelStart()
+func benchmarkLifecycleIteration(b *testing.B, factory LifecycleFactory, mode string) (resultErr error) {
+	if mode == "FullLifecycle" {
+		b.StartTimer()
+	}
+	owner := newLifecycleTestOwner(factory())
+	if owner == nil {
+		b.StopTimer()
+		return errors.New("component factory returned nil")
+	}
+	owner.stopBudget = benchmarkTerminalBudget
+	var workCtx context.Context
+	defer func() {
+		b.StopTimer()
+		if err := owner.finish(workCtx, false); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("terminal cleanup: %w", err))
 		}
-	})
+	}()
+	if mode == "Initialize" {
+		b.StartTimer()
+	}
+	if err := owner.component.Initialize(); err != nil {
+		return fmt.Errorf("Initialize: %w", err)
+	}
+	if mode == "Initialize" {
+		b.StopTimer()
+	}
+	if mode == "Initialize" {
+		return nil
+	}
+	workCtx = owner.workContext(b.Context())
+	if mode == "Start" {
+		b.StartTimer()
+	}
+	if err := owner.component.Start(workCtx); err != nil {
+		return fmt.Errorf("Start: %w", err)
+	}
+	if mode == "Start" {
+		b.StopTimer()
+		return nil
+	}
+	if mode == "Stop" {
+		b.StartTimer()
+	}
+	if err := owner.stop(workCtx, false); err != nil {
+		return fmt.Errorf("Stop: %w", err)
+	}
+	return nil
 }
 
 // ErrorInjectingComponent wraps a component to inject errors for testing
@@ -388,71 +447,53 @@ func (e *ErrorInjectingComponent) Stop(ctx context.Context) error {
 	return e.LifecycleComponent.Stop(ctx)
 }
 
-// TestErrorInjection tests components with injected errors
+// TestErrorInjection tests components with injected errors while the underlying
+// component remains independently owned for terminal cleanup.
 func TestErrorInjection(t *testing.T, factory LifecycleFactory) {
 	tests := []struct {
-		name        string
-		setupError  func(*ErrorInjectingComponent)
-		operation   string
-		expectError bool
+		name      string
+		operation string
+		inject    func(*ErrorInjectingComponent, error)
 	}{
-		{
-			name: "inject_initialize_error",
-			setupError: func(comp *ErrorInjectingComponent) {
-				comp.InjectInitializeError(fmt.Errorf("injected initialize error"))
-			},
-			operation:   "initialize",
-			expectError: true,
-		},
-		{
-			name: "inject_start_error",
-			setupError: func(comp *ErrorInjectingComponent) {
-				comp.InjectStartError(fmt.Errorf("injected start error"))
-			},
-			operation:   "start",
-			expectError: true,
-		},
-		{
-			name: "inject_stop_error",
-			setupError: func(comp *ErrorInjectingComponent) {
-				comp.InjectStopError(fmt.Errorf("injected stop error"))
-			},
-			operation:   "stop",
-			expectError: true,
-		},
+		{"inject_initialize_error", "initialize", (*ErrorInjectingComponent).InjectInitializeError},
+		{"inject_start_error", "start", (*ErrorInjectingComponent).InjectStartError},
+		{"inject_stop_error", "stop", (*ErrorInjectingComponent).InjectStopError},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			baseComp := factory()
-			comp := NewErrorInjectingComponent(baseComp)
-			tt.setupError(comp)
-
-			var err error
+			owner := newLifecycleTestOwner(factory())
+			if owner == nil {
+				t.Fatal("component factory returned nil")
+			}
+			var workCtx context.Context
+			defer func() {
+				if err := owner.finish(workCtx, false); err != nil {
+					t.Errorf("%s base terminal cleanup: %v", tt.name, err)
+				}
+			}()
+			wrapped := NewErrorInjectingComponent(owner.component)
+			injected := errors.New("injected " + tt.operation + " error")
+			tt.inject(wrapped, injected)
+			var operationErr error
 			switch tt.operation {
 			case "initialize":
-				err = comp.Initialize()
+				operationErr = wrapped.Initialize()
 			case "start":
-				comp.Initialize() // Ensure component is initialized
-				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-				defer cancel()
-				err = comp.Start(ctx)
+				require.NoError(t, owner.component.Initialize(), "base Initialize prerequisite")
+				workCtx = owner.workContext(t.Context())
+				operationErr = wrapped.Start(workCtx)
 			case "stop":
-				comp.Initialize() // Ensure component is initialized
-				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-				comp.Start(ctx)
-				cancel()
-				err = comp.Stop(context.Background())
+				require.NoError(t, owner.component.Initialize(), "base Initialize prerequisite")
+				workCtx = owner.workContext(t.Context())
+				require.NoError(t, owner.component.Start(workCtx), "base Start prerequisite")
+				operationCtx, cancelOperation := context.WithTimeout(context.Background(), lifecycleTestBudget)
+				operationErr = wrapped.Stop(operationCtx)
+				if err := operationCtx.Err(); err != nil {
+					t.Errorf("injected Stop operation exceeded caller bound: %v", err)
+				}
+				cancelOperation()
 			}
-
-			if tt.expectError {
-				assert.Error(t, err, "Expected error for %s operation", tt.operation)
-			} else {
-				assert.NoError(t, err, "Expected no error for %s operation", tt.operation)
-			}
-
-			// Always try to clean up
-			comp.Stop(context.Background())
+			require.ErrorIs(t, operationErr, injected, "expected %s wrapper operation error", tt.operation)
 		})
 	}
 }
