@@ -21,7 +21,10 @@ const ruleConfigStopBudget = 30 * time.Second
 // componentsStandIn stands in for the component manager. At its own Start and
 // Stop it records the "rule-config" service's status: where the rule
 // ConfigManager sits in the manager's start and stop sequence. StartAll and
-// StopAll call it on the test goroutine.
+// StopAll call it on the test goroutine. It owns no runtime, so its Start and
+// Stop only record: the embedded BaseService supplies the rest of the Service
+// surface and is never started, which keeps this recorder out of the cleanup
+// root census as a lifecycle owner (scripts/check-cleanup-roots.sh).
 type componentsStandIn struct {
 	*service.BaseService
 	t       *testing.T
@@ -46,14 +49,14 @@ func (c *componentsStandIn) ruleConfigStatus() service.Status {
 	return svc.Status()
 }
 
-func (c *componentsStandIn) Start(ctx context.Context) error {
+func (c *componentsStandIn) Start(context.Context) error {
 	c.started <- c.ruleConfigStatus()
-	return c.BaseService.Start(ctx)
+	return nil
 }
 
-func (c *componentsStandIn) Stop(ctx context.Context) error {
+func (c *componentsStandIn) Stop(context.Context) error {
 	c.stopped <- c.ruleConfigStatus()
-	return c.BaseService.Stop(ctx)
+	return nil
 }
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
