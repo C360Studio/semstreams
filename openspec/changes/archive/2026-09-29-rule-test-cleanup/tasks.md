@@ -57,7 +57,7 @@
   native limitations and exact baseline diff. Fix concrete findings and rerun only affected checks.
 - [x] 5.2 Use semstreams-preflight and run `task check:push` with canonical runner/lock ownership before pushing.
   Green focused tests alone are not whole-repository gate evidence.
-- [ ] 5.3 Complete final OpenSpec archive/spec reconciliation as the last content commit; retain the justified absence
+- [x] 5.3 Complete final OpenSpec archive/spec reconciliation as the last content commit; retain the justified absence
   of normative spec delta and exact review/evidence identities. Update PR/ticket truth and implementation persona.
 - [x] 5.4 Record final verification handoff and the #1421 merge hold in the PR. Identify required hosted checks and
   the fix-or-explicit-PR-waiver condition without asserting a future hosted pass. The #1404 waiver does not transfer.

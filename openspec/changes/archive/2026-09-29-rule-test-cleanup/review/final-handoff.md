@@ -29,8 +29,11 @@ baseline hash still match after verification.
 
 ## Landing and remaining work
 
-The capability policy already states this contract. No normative spec delta is required; archive with validation
-enabled and `--skip-specs`, then obtain the narrow archive/spec review. Hosted checks must evaluate the final head.
+The capability policy already states this contract. The change was archived on 2026-09-29 with validation
+enabled and `--skip-specs`; no capability spec changed. Strict validation passed all 58 current specs, and the
+local OpenSpec queue is empty. The archive command warned about the historical proposal header and the one
+then-pending archive task; that task was checked only after archival succeeded. Narrow archive review must
+confirm the final content commit. Hosted checks must evaluate the final head.
 The live main-branch rules require `CI Status Check` and `e2e statistical`. The CI summary depends on Lint, Test,
 Build, Schema Validation and Tier 1 API Compatibility; the additional slow-consumer attribution E2E job is also
 reported. Local green does not substitute for those current-head hosted results.
