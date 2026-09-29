@@ -120,3 +120,76 @@ jobs:
 
       - name: Run e2e statistical tier
         run: task e2e:statistical
+
+  # gh#1117 MEASUREMENT ONLY — not the gate shape. Scope box 1 of #1117 asks for
+  # the default semantic variant's wall-clock on a CI runner, cold and warm,
+  # because the advertised figure (~90s, CLAUDE.md and taskfiles/e2e/semantic.yml)
+  # and the last measured one (11m35s, docs/proposals/prev1-program.md) disagree
+  # by an order of magnitude and the tier runs in no workflow. Every step prints
+  # a [MEASURE] line: registry pull, first tier run (images present, containers
+  # and models cold, semstreams-ml built), second tier run (everything warm).
+  # The job's shape (login, disk reclaim, timeout) is itself part of the
+  # measurement — whatever a real job would need is discovered here.
+  e2e-semantic-measure:
+    name: e2e semantic (measurement, gh#1117)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install task
+        run: GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.53.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Runner shape
+        run: |
+          echo "[MEASURE] nproc=$(nproc)"
+          free -h
+          df -h /
+          docker info --format '[MEASURE] docker={{.ServerVersion}} cpu={{.NCPU}} mem={{.MemTotal}}'
+
+      - name: Reserve e2e host ports against ephemeral allocation
+        run: scripts/e2e-reserve-ports.sh
+
+      - name: Pull semantic images (cold registry pull)
+        run: |
+          t0=$(date +%s)
+          docker compose -f docker/compose/tiered.yml --profile semantic pull --ignore-buildable
+          echo "[MEASURE] pull_seconds=$(( $(date +%s) - t0 ))"
+          docker images --format '[MEASURE] image {{.Repository}}:{{.Tag}} {{.Size}}'
+          df -h /
+
+      - name: Run e2e semantic tier — first run (images pulled; containers, models, app build cold)
+        run: |
+          t0=$(date +%s)
+          task e2e:semantic
+          echo "[MEASURE] first_run_seconds=$(( $(date +%s) - t0 ))"
+
+      - name: Run e2e semantic tier — second run (images, app build, Go cache warm)
+        run: |
+          t0=$(date +%s)
+          task e2e:semantic
+          echo "[MEASURE] second_run_seconds=$(( $(date +%s) - t0 ))"
+
+      - name: Upload semantic results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-semantic-results
+          path: cmd/e2e/test/e2e/results
+          if-no-files-found: warn
