@@ -73,7 +73,7 @@ func TestWarnOnlyStages_EmptyAnswerFails(t *testing.T) {
 			`{"data":{"globalSearch":{"entities":[],"count":0}}}`,
 			"NL temporal intent: 0/2 probes returned entities; first failure: temporal_last_hour: returned 0 entities"},
 		{"test-graphrag-global", func(s *TieredScenario) func(context.Context, *Result) error { return s.executeTestGraphRAGGlobal },
-			`{"data":{"globalSearch":{"entities":[],"communitySummaries":[],"count":0}}}`, "returned no community summaries"},
+			`{"data":{"globalSearch":{"entities":[],"community_summaries":[],"count":0}}}`, "returned no community summaries"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -116,7 +116,7 @@ func TestNLIntent_ProbesDeclineSummaries(t *testing.T) {
 
 func TestGraphRAGGlobal_EmptyAnswerBesideSummariesFails(t *testing.T) {
 	s := (&graphqlStub{}).serve(t, fixed(`{"data":{"globalSearch":{"entities":[],`+
-		`"communitySummaries":[{"communityId":"c1","summary":"s","member_count":2}],"count":0,"answer":""}}}`))
+		`"community_summaries":[{"community_id":"c1","summary":"s","member_count":2}],"count":0,"answer":""}}}`))
 	err := s.executeTestGraphRAGGlobal(context.Background(), newResult())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "answer field empty")
@@ -242,4 +242,15 @@ func TestValidateRules_AssertsActivityThresholds(t *testing.T) {
 	err = scenario(t, 3, 0).executeValidateRules(context.Background(), newResult())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "actions dispatched 0 < MinActionsDispatched 1")
+}
+
+// The handler answers community_summaries/community_id; a camelCase decoder read
+// zero summaries on every run (#1426, the D4(a) class).
+func TestGraphRAGGlobal_ReadsSnakeCaseSummaries(t *testing.T) {
+	s := (&graphqlStub{}).serve(t, fixed(`{"data":{"globalSearch":{"entities":[{"id":"a.b.c.d.e.f","type":"t"}],`+
+		`"community_summaries":[{"community_id":"c1","summary":"s1","member_count":2},{"community_id":"c2","summary":"s2","member_count":3}],`+
+		`"count":1,"answer":"Found 1 entities across 2 knowledge clusters."}}}`))
+	result := newResult()
+	require.NoError(t, s.executeTestGraphRAGGlobal(context.Background(), result))
+	require.Equal(t, 2, result.Metrics["graphrag_global_communities_found"])
 }

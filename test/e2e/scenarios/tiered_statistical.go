@@ -33,7 +33,10 @@ type graphRAGLocalResponse struct {
 	} `json:"errors"`
 }
 
-// graphRAGGlobalResponse represents the parsed GraphQL response for global search queries
+// graphRAGGlobalResponse represents the parsed GraphQL response for global search queries.
+// The handler answers snake_case (processor/graph-query GlobalSearchResponse,
+// CommunitySummary) and the gateway passes the body through, so the summary
+// tags read community_summaries/community_id (#1426, the D4(a) class).
 type graphRAGGlobalResponse struct {
 	Data struct {
 		GlobalSearch struct {
@@ -42,7 +45,7 @@ type graphRAGGlobalResponse struct {
 				Type string `json:"type"`
 			} `json:"entities"`
 			CommunitySummaries []struct {
-				CommunityID string   `json:"communityId"`
+				CommunityID string   `json:"community_id"`
 				Summary     string   `json:"summary"`
 				Keywords    []string `json:"keywords"`
 				Level       int      `json:"level"`
@@ -54,7 +57,7 @@ type graphRAGGlobalResponse struct {
 					Label     string  `json:"label"`
 					Relevance float64 `json:"relevance"`
 				} `json:"entities"`
-			} `json:"communitySummaries"`
+			} `json:"community_summaries"`
 			Count       int    `json:"count"`
 			Answer      string `json:"answer"`
 			AnswerModel string `json:"answer_model"`
