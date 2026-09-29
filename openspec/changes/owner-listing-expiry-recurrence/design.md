@@ -1,190 +1,168 @@
-# Bounded causal experiment: listing expiry and native Stop delay
+# Listing recurrence: first measurement pass
 
-Status: proposed experiment only. Production repair requires measured evidence and separate design review.
+Status: proposed diagnostic experiment only; supersedes the earlier four-case relay proposal.
 
-Accepted inventory: `3d769265f973f7dff967256b6d881b4053569441:openspec/changes/owner-listing-expiry-recurrence/inventory.md`, SHA256 `6f3479feb76d24d9768fe05abd815df2187b9baf6c89ea01e0fa15d1d2ecfc5a`. Preserve it unchanged.
+Preserve the accepted inventory unchanged: checkpoint `3d769265f973f7dff967256b6d881b4053569441`, SHA256
+`6f3479feb76d24d9768fe05abd815df2187b9baf6c89ea01e0fa15d1d2ecfc5a`.
 
-## Question and alternatives
+## Decision and scope
 
-The initial five-second operation expiry and the approximately five additional seconds may have different causes. The experiment must distinguish native construction, collection and synchronous Stop time, while identifying independent asynchronous deletion.
+Extend the retained native diagnostic with phase measurements and SDK request tracing. Execute one transparent control
+and one retained default-deadline collection schedule, then review the evidence before choosing another experiment or
+proposing a production repair.
 
-| Option | Evidence gained | Cost or limit |
-|---|---|---|
-| Do nothing | Preserves current uncertainty | Cannot support a repair |
-| Add phase/SDK tracing and run one unchanged control | Measures ordinary phase attribution | A healthy run cannot explain the recurrence |
-| Extend the retained native experiment with a bounded fault matrix | Separates construction expiry, collection expiry and native deletion delay | Adds private diagnostic instrumentation and controlled faults |
-| Change production listing or timeout behavior immediately | None establishing cause | Premature; rejected |
-
-Recommend the bounded diagnostic extension. It reuses the retained process, output, Stop-observer and finalizer design. It does not rerun a full suite or stress the owner-load harness.
-
-## Measured seams and limits
-
-The following seams already exist:
-
-| Evidence | Available seam |
+| Option | Result |
 |---|---|
-| `natsclient/kv.go:55–65` | NewKVStore accepts a real KeyValue or a private delegating decorator |
-| `natsclient/kv.go:537–595` | Unchanged production listing, five-second child context, partial-result rejection and deferred Stop |
-| `natsclient/client.go:205–209` | GetConnection exposes the existing native connection |
-| SDK `jetstream/jetstream_options.go:33–37` | WithClientTrace installs request/response callbacks |
-| SDK `jetstream/kv.go:887–898` | KV legacy management propagates those trace callbacks |
-| SDK `js.go:3543–3561` | Request trace executes synchronously before RequestWithContext; response trace runs only after successful response |
-| Retained diagnostic, `kvDiagnosticBucketDecorator` and `kvDiagnosticStopObserver` | Exact native construction and delegated Stop boundaries |
-| Retained diagnostic, `kvDiagnosticCaseOwner` | Lexical cancellation, gate release, bounded joins and connection cleanup |
-| `natsclient/client_close_integration_test.go:15–105` | Separate native drain/closed observations and actual callback-completion evidence |
+| Do nothing | Leaves construction, collection and Stop timing unresolved |
+| Measure the existing two schedules | Smallest useful evidence increment; recommended |
+| Add transport faults now | Additional fixture and ownership cost before existing phase measurements; deferred |
+| Change production behavior | Unsupported without further evidence |
 
-Trace does **not** report request error returns. Public KeyLister exposes neither its underlying watcher's initial marker nor a watcher join handle. A closed Keys channel, vanished stack, Stop return and connection closure remain distinct observations.
+No relay, SDK modification, production edit, public API, retry, timeout relaxation, owner-load workload change or
+recurring CI experiment is included.
 
-The SDK provides CustomDialer, but the measured framework surface has no `WithNATSOptions` symbol. The experiment will not add a production connection option or manually replace Client internals.
+## Existing seams
 
-## Allowed implementation
+Use the archived diagnostic source identified by SHA256
+`cbfd896bf49834ab5278c7c6a8c8fee50eb8fa6a2e301a975c906d7c134c7523`.
 
-Use one temporary, opt-in integration diagnostic under `natsclient/`, plus its focused proof and retained evidence. Reuse the archived diagnostic's corrected ownership behavior; copied or changed code requires current proof.
+Preserve its corrected child ownership, independent Stop observer, first-key witness, native blocked-stack gates and
+exact-set oracle. Record the source diff so existing proof applies only to unchanged code and assertions.
 
-Keep production source, SDK source, module selections, normal tests, graph-index workload and runner unchanged. Retain final diagnostic source as an archive artifact rather than silently installing recurring native coverage.
+Available measurement seams are:
 
-Each child uses production Client.Connect and Client.NewKVStore. Construct a traced native JetStream handle on `client.GetConnection()`, acquire the real bucket, and pass its private decorator to NewKVStore. Do not replace the connected client's own JetStream handle.
+- Private KeyValue decorator around the real `ListKeysFiltered`.
+- Private KeyLister observer around the real `Stop`.
+- `Client.GetConnection()` and SDK `jetstream.WithClientTrace`.
+- Existing framework-return, native-channel, Client.Close and child-containment observations.
 
-For controlled transport faults only, the child connects through a private, single-connection loopback byte relay to its owned NATS fixture. The relay:
+Construct a traced SDK JetStream handle on the existing production client connection and acquire the real bucket through
+it. Pass its decorator to production `Client.NewKVStore`; leave the client's own stored JetStream handle unchanged.
 
-- forwards outbound bytes unchanged;
-- can hold inbound bytes after an explicit gate is armed;
-- preserves byte order on release;
-- owns one listener, one connection pair and the two forwarding directions;
-- has immediate close/release cleanup and explicit completion signals.
+## Measurements
 
-This is a whole-inbound-stream fault, not selective NATS response loss. No protocol parser, subject rewrite, packet corruption, multiplexing, host-wide pause or reusable proxy framework is included. If implementation requires those additions, stop for design reconciliation.
+Record monotonic timestamps and results for:
 
-## Observation record
+1. Production operation entry and captured framework context deadline.
+2. Native lister-construction entry and return.
+3. Existing first-native-key and first-key-consumed witnesses.
+4. Framework context completion.
+5. Independently observed delegated Stop entry, return and error.
+6. Production operation return, returned key count and context error identity.
+7. Existing cleanup, native Keys closure and owned-child completion observations.
 
-Record monotonic times for operation entry, native construction entry/return, first real-key delivery, framework deadline observation, delegated Stop entry/return, framework return and cleanup completion.
+The framework's five-second deadline remains unchanged. Measurement must not replace its context, insert a timeout,
+delay Stop or intercept successful results.
 
-Every record carries child/case identity, filter/bucket, actual toolchain, SDK version/source hashes and server image/digest. CI used Go 1.26.8; prior local diagnostics used Go 1.26.4. New execution reports its actual version without equating environments.
+Use SDK trace callbacks to retain API subject, consumer identity where present, timestamp and bounded current-goroutine
+stack. Callbacks must not block on logging, gates or network I/O. Store records in a bounded synchronized buffer;
+overflow, truncation needed for attribution or concurrent access errors fail the diagnostic.
 
-The bucket decorator forwards the exact framework context and filter. It records the received deadline; it neither replaces nor extends it.
+Separate affirmative deletion-origin evidence for:
 
-The Stop observer records the native call and its error independently of the delivery facade. Stop errors remain observations; they are not substituted for the production wrapper's result.
+- Framework-delegated Stop.
+- Native lister forwarding goroutine's deferred Stop.
+- Context-completion unsubscribe.
+- Asynchronous ordered-consumer recovery.
 
-Trace callbacks capture API subject, consumer identity when present, monotonic time and bounded current-goroutine stack. They do no blocking logging, waiting or network I/O. Store records in a bounded buffer; overflow or truncated attribution evidence fails the diagnostic.
+Keep unmatched or ambiguous origins unknown. Request timing, subject equality or overlap with Stop is insufficient
+attribution. Trace reports request entry and successful responses; it does not expose every error return.
 
-Classify deletion origins only from affirmative stack evidence:
+## Two-case matrix
 
-1. Framework observer → native Stop → Unsubscribe.
-2. Native KeyLister forwarding goroutine's deferred watcher.Stop.
-3. Subscription context-completion unsubscriber.
-4. Asynchronous ordered-consumer recovery.
+Reuse the retained fixture: one pinned NATS container, 1,024 exact matching keys and one fresh child connection per case.
+This differs from the incident's 5,000-key file-backed workload and is explicitly mechanism measurement, not incident
+reproduction.
 
-Retain unmatched or ambiguous origins as unknown. An overlapping Stop interval or matching DELETE subject alone cannot establish ownership. Successful response callbacks can be correlated within a witnessed synchronous request call; absent callbacks do not by themselves prove timeout.
-
-In injected collection cases, distinguish native keys received, facade keys delivered and the existing first-key-consumed witness. Do not label Keys-call counts as exact framework collection counts.
-
-## Bounded matrix
-
-One parent-owned pinned NATS container, one static file-backed bucket, 5,000 distinct canonical keys matching the recurrence's predicate-forward filter. One fresh child connection and one measured listing per case; cases run sequentially.
-
-| Case | Controlled schedule | Required distinction |
+| Case | Schedule | Required result |
 |---|---|---|
-| Transparent control | Relay open; real native lister without delivery withholding | Exact complete seeded set, nil operation error, phase/Stop evidence and checked cleanup |
-| Construction expiry | Arm inbound gate at the traced consumer-create request, then keep it closed until the unchanged framework deadline is observed | Construction must return error without a usable lister; record zero admitted collector/Stop-observer calls |
-| Collection expiry | Reuse the retained first-key withholding schedule; require both native blocked-send witnesses while framework context remains live | Native construction succeeded; collector received a real key; default deadline returns errors.Is DeadlineExceeded with nil keys |
-| Synchronous deletion delay | Same witnessed active collection; arm inbound gating for an affirmatively framework-owned deletion request during delegated Stop | Separate initial expiry from additional synchronous delete/Stop time, including native Stop error |
+| Transparent control | Unmodified native delivery | Exact seeded set, nil operation error, complete phase evidence and checked cleanup |
+| Default-deadline collection | Retained withholding after a real key is consumed; require both native blocked-send witnesses while the framework context is live | `errors.Is(err, context.DeadlineExceeded)`, nil returned keys, observed Stop outcome and checked test-owned cleanup |
 
-A RequestSent callback may arm the relay gate but must return immediately. The relay emits a separate "bytes actually withheld" witness; arming alone is not a reached fault.
+Retain the existing causal gate; do not substitute elapsed time for witnessed native blockage. A failed control or unmet
+gate stops the pass. Do not repeat until the desired schedule appears.
 
-For the last case, native unsubscribe owners race. If another owner deletes first, record it and report `GATE_NOT_REACHED` for the synchronous framework-delete hypothesis. Do not rerun until the preferred interleaving appears. An asynchronously owned deletion cannot satisfy this case.
+Do not add construction expiry, transport interruption, ordered-recovery forcing or synchronous-delete-delay injection
+in this pass.
 
-Do not manufacture ten seconds by delaying a trace callback or facade.Stop. The additional interval must be observed inside the real native delegation with its independent request authority.
+## Ownership and budgets
 
-Release each transport gate after the relevant operation outcome or during failure cleanup. A missing outcome is contained by the child deadline, not a guessed readiness sleep.
+Reuse the corrected lexical owner and sole Cmd.Wait owner. Install finalizers immediately after acquisition. On every
+exit, release fixture gates, cancel continuing test work, join test-owned goroutines and report cleanup failure
+separately from the primary result.
 
-## Oracles and interpretation
+Each child creates no descendants. Parent observes events alongside EOF and unexpected exit, terminates an over-budget
+child and joins its existing Wait owner. Mutable output is inspected only after that join.
 
-Every expired operation must preserve errors.Is-compatible context failure and nil returned keys. No partial successful snapshot is acceptable. The five-second framework deadline remains unchanged and is checked against the captured child context.
-
-| Observation | Supported conclusion |
-|---|---|
-| Construction fails before lister acquisition | Controlled loss reached the construction branch |
-| Construction succeeds; witnessed collection stalls and expires | Controlled backpressure explains this experiment's initial expiry |
-| Framework-owned delete starts during Stop and its real request consumes the additional interval | Demonstrated synchronous return-path extension for this schedule |
-| Asynchronous recovery deletion occurs while framework Stop returns promptly | Recovery deletion is independent evidence, not an explanation of synchronous Stop delay |
-| Operation takes longer but Stop is prompt | Extra time lies elsewhere; five-plus-five Stop attribution is unsupported |
-| Gate, trace attribution or control fails | Inconclusive experiment; no repair authority |
-| Native work persists after framework return | Return differs from native completion; further ownership evidence is required |
-
-Synthetic faults identify reachable mechanisms. They do not establish which mechanism caused CI run 36641021599, or what initially delayed its operation.
-
-The experiment cannot expose the native initial-snapshot marker through public KeyLister. Exact-set success proves the control result; injected-case channel closure does not prove complete initial replay.
-
-## Ownership and completion
-
-Install finalization immediately after each acquired resource and before any assertion or spawned work.
-
-Each child owns its operation goroutine, relay directions, delivery facade when present, connection and trace state. Every test-owned goroutine has an explicit done signal and joins under one shared terminal allowance. Cleanup first releases gates, cancels continuing test work and closes blocked sockets when needed; it preserves the primary failure alongside cleanup failures.
-
-Observe separately:
-
-- framework operation return;
-- delegated Stop return/error;
-- native Keys closure;
-- witnessed native goroutine presence;
-- production Client.Close result and native CLOSED status;
-- test-owned goroutine joins;
-- child process exit and parent Wait completion.
-
-Native Keys closure shows the forwarding path reached its closing defer after deferred watcher.Stop. It does not provide a watcher-callback join handle. Stack disappearance is supporting observation, not joining. If native completion cannot be established, report that limit and use owned child exit as containment—not native join proof.
-
-Parent uses the same executable and one narrowly selected child entry point. One goroutine owns Cmd.Wait; finalization is installed immediately after Start. Observe events with unexpected exit/EOF. Read mutable captured output only after Wait joins. Children create no subprocess descendants.
-
-## Budgets and admission
-
-| Scope | Maximum |
+| Phase | Maximum |
 |---|---:|
-| Fixture setup and seeding | 20 seconds |
-| Child work | 14 seconds |
+| Parent fixture setup/seeding | 20 seconds |
+| Child process startup to entry event | 5 seconds |
+| Child work, including connection/acquisition | 18 seconds from child entry |
 | Child terminal cleanup | 8 seconds shared |
-| Parent kill trigger | 22 seconds after child start |
-| Reserved Wait join | 3 seconds |
-| Four children | 100 seconds total admission allowance |
+| Child final reporting/normal exit reserve | 2 seconds |
+| Parent kill trigger | 35 seconds after Start |
+| Reserved parent Wait join | 5 seconds |
+| Complete admission allowance per child | 40 seconds |
 | Canonical substrate teardown | Existing independent 15-second close and 15-second container bounds |
 | Parent test alarm | 180 seconds |
 
-The 14-second work allowance accommodates the hypothesized five-plus-five path plus four seconds for bounded acquisition/observation. It changes no operation deadline. Slow setup or missing gates produce explicit inconclusive failures.
+The child's startup, work, cleanup and reporting allowances total 33 seconds, leaving two seconds before the parent
+kill trigger and a separate five-second Wait reserve.
 
-Set the cooperative child-admission cutoff at 130 seconds after parent entry. Admit only when a complete 25-second child allowance fits. Reserve the remaining 50 seconds for substrate cleanup and reporting.
+Admit a child only if its entire 40-second allowance fits before a cooperative cutoff 120 seconds after parent entry.
+Reserve the final 60 seconds for substrate teardown and reporting. Stop admission on unresolved ownership.
 
-Stop admission after control failure, unmet causal gate, unexpected assertion, lost evidence or unresolved owned work. No retry loops, parallel matrix, repeated full suite or fresh CI run is part of this experiment.
+Run once through the canonical host-locked integration runner, with explicit opt-in, `-race`, a narrow test selection
+and `-timeout=180s`. Coordinate an available host slot first. No other resource-intensive experiment runs alongside it.
 
-Execute one matrix through the canonical host-locked runner with `-race`, explicit diagnostic opt-in, narrow `-run` and `-timeout=180s`. Serialize with other Docker-backed work. Native matrix plus selected proof/mutation/restoration work has a six-minute aggregate local execution ceiling; exceeding it stops execution for review.
+Allow at most five minutes of aggregate local execution for focused diagnostic checks and this single native pass.
+If setup, building or host availability prevents that budget, report the limitation instead of launching another pass.
 
-## Focused proof and sensitivity
+## Evidence and completion limits
 
-Before native execution, focused NATS-free checks must establish relay byte preservation, gate release/close on early failure, trace-overflow refusal, origin-unknown handling and bounded Wait ownership. Use channels and finite containment, never sleeps as readiness.
+Keep these outcomes separate:
 
-Named schedules and exact-set comparison cover this finite experiment; random PBT histories add no required input class.
+- Framework return.
+- Native Stop return and error.
+- Native Keys closure.
+- Witnessed native goroutine presence or disappearance.
+- Client.Close and native CLOSED status.
+- Test-owned goroutine joins.
+- Child exit and parent Wait completion.
 
-Required bounded mutations:
+Public KeyLister exposes neither the initial watcher marker nor a watcher join handle. Keys closure and stack
+disappearance do not establish that callback join. Report native completion as unproven wherever the available
+observations cannot establish it; child containment is not a substitute claim.
 
-1. Omit facade-to-independent-Stop-observer delegation. The invocation assertion must fail; SDK cancellation cannot satisfy it.
-2. Omit one relay completion join while a fixture-owned gate holds that direction. The completion assertion must fail, then independent fixture cleanup must release and join it.
+Capture actual Go toolchain, SDK hashes, server digest, source revision and commands. CI used Go 1.26.8; older local
+evidence used Go 1.26.4. Do not conflate them.
 
-Reuse unchanged prior evidence only where source and asserted behavior still match. Preserve `cp` backups and checksums; mutants must compile, reach the intended assertion and retain successful failure cleanup. Restore and rerun only the affected focused checks. No second full native matrix solely to obtain green.
+## Focused verification
 
-## Spec applicability and handoff
+Run the retained focused ownership/gate checks applicable to the copied source and small checks for the added recorder's
+bounded storage and origin-unknown handling. Preserve the independent Stop invocation oracle.
 
-Existing graph-index deadline/error and nonpartial-snapshot requirements remain authoritative. Existing testing-policy context, causal synchronization, failure visibility and subprocess ownership rules govern the fixture.
+Existing mutation evidence may be cited only where the observer, asserted behavior and cleanup mechanism remain
+unchanged. If those parts change, select one focused sensitivity experiment, preserve `cp` backup/checksum restoration
+and prove fixture cleanup after its intended failure. Do not repeat a full native matrix merely to obtain another green
+result.
 
-No normative production spec delta is proposed for a diagnostic. Retain this accepted experiment, exact source, commands, identities, outcomes and limitations in the change evidence. Any subsequent production repair or new permanent test surface requires its own evidence-based design and applicable delta.
+Named schedules and the exact-set oracle suffice; no randomized PBT generator or new testing framework is required.
 
-Stop after matrix and sensitivity evidence review. Do not infer historical cause, close #1421, or hand a speculative production repair to implementation.
+## Decision after this pass
 
-## Additional seam queries
+| Observation | What it informs |
+|---|---|
+| Construction is prompt; collection reaches the deadline; Stop is prompt | This retained schedule does not explain the extra interval |
+| Framework-owned Stop consumes substantial time with corresponding native request evidence | Supports a narrower next question about synchronous deletion/return timing |
+| Only asynchronous deletion is observed | Does not attribute synchronous Stop delay |
+| Construction consumes the operation window | Directs the next investigation toward acquisition |
+| Trace ownership is ambiguous or a required gate fails | Measurement remains inconclusive; no repair authority |
+| Native work remains after framework return | Requires explicit ownership investigation, distinct from initial expiry |
 
-```text
-gopls workspace_symbol -matcher=fuzzy WithClientTrace
-gopls workspace_symbol -matcher=fuzzy 'Client.GetConnection'
-gopls workspace_symbol -matcher=fuzzy CustomDialer
-gopls workspace_symbol -matcher=fuzzy WithNATSOptions
-gopls workspace_symbol -matcher=fuzzy ClientTrace
-```
+Neither a healthy control nor synthetic backpressure explains the incident's initial five-second expiry. This pass may
+narrow the next experiment; it cannot promise historical root cause or authorize closing #1421.
 
-The WithNATSOptions query returned zero matches; this is bounded spelling evidence, not a repository-wide absence claim. The other queries resolved the source locations above. No tests, source edits or Git mutations were performed by the architect.
+No production spec delta is proposed. Existing graph-index typed-deadline/nonpartial-result requirements and
+testing-policy ownership rules remain authoritative. Stop after the single pass and independent evidence review.
