@@ -24,6 +24,7 @@
       run 36641734740). The #1117 path-only semantic run is sequenced after this PR by the owner ruling on #1117
       (2026-09-29, verbatim "the warn-only slice #1426 (beta.163) lands first"): its first measurement is PR #1425's
       rebased run, and its reds are filed there.
-- [ ] 2.3 Review through the project reviewer contract; owner acceptance on #1426.
+- [x] 2.3 Review through the project reviewer contract (rounds 1–3 APPROVE, on PR #1427); owner acceptance on #1426
+      (2026-09-30, transcribed comment on the issue).
 
 Landing tasks (archive, spec sync, ticks) live on the PR checklist per the #1230 ruling, not here.
