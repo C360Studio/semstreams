@@ -659,3 +659,52 @@ M4: delivered, `docs/contributing/02-e2e-tests.md` § Assertion Strategy, one se
 | #1222: no parallel assertion accounting; `AssertionsRun` untouched | `git diff 6127d0be -- test/ \| grep -c AssertionsRun` → 0; `cmd/e2e/main.go` unchanged | yes |
 | Simple over edge-case; no new mechanism (owner, 2026-09-22) | round 1 adds two unexported helpers: `awaitRuleThresholds` (the wait Q1 rules) and `searchQualityVerdict` (the stage's error return, split out); `ExtractRuleMetrics` changed in place, no new surface. `MetricsClient.WaitForMetric` (`test/e2e/client/metrics.go:573`) was considered for the Q1 wait and not used (round 2 M-d): it waits on one series per call with its own `Timeout`, so two counters under one bound need a shared deadline the API does not take; its first read comes only after one ticker tick; and it returns no value, so the caller would still read once more to assert and record. `awaitRuleThresholds` is that one loop, returning the last read. | yes, with those two named |
 | Proposal boundary: no 10 s deadline changes without a measurement | `tiered_statistical.go:290` keeps 10 s as the helper's default | yes |
+
+## 6. Review round 2 (2026-09-30; verdict APPROVE at `af3bbd40`, four mediums, four nits; fixes in `81667ba5`)
+
+| Finding | Disposition | Where |
+|---|---|---|
+| M-a task 2.1 overstates (four arms revert without a red) | doc-sentence option: the four arms join the inspection-only list, plus the new outgoing-read arm below | `tasks.md` 2.1 |
+| M-b H3 row comment claims routing and 2/2 | reworded: the stage fails only when neither probe returns entities; 2/2 is a measurement; line count kept so § 5.6 pins hold | `tiered.go:348-349` |
+| M-c baseline read warns and substitutes zero | fails the stage, same shape as `wait-for-rule-stabilization` (`validate_infra.go:750`); unit test at the metrics seam (first scrape 500, later scrapes meet the thresholds); mutation check below | `validate_infra.go:476-480`; `tiered_warn_only_round1_test.go` `TestValidateRules_FailedBaselineReadFails` |
+| M-d `awaitRuleThresholds` vs `WaitForMetric` | one sentence recorded in § 5.6 (one series per call, own `Timeout`, first read after one tick, returns no value) | § 5.6 "Simple over edge-case" row |
+| Nit `validate_search.go:66` raw `s.config.Variant` | both reads (`:25` executor, `:66` verdict) go through `effectiveVariant`; the verdict helper takes the variant; subtest with `Variant: ""` and `result.Metrics["variant"]="statistical"`; mutation check below | `validate_search.go`; `TestVerifySearchQuality/missed_known_answer_fails_under_auto-detected_statistical` |
+| Nit hand-typed minted ID in the pattern test | left as recorded: deriving it would import `examples/processors/document` into the scenario tests; the tier run (`known_answer_tests_passed:7`) is the evidence | `tiered_warn_only_round1_test.go:200` |
+| Nit `tiered_semantic.go:1306` discards the outgoing-read error | returns the error (design § 10b row: a failed read is A); no failing-read fixture, so it is listed inspection-only in task 2.1 | `tiered_semantic.go:1306` |
+| Nit inventory omits the no-keywords warn | named in § Swept and left with the base-pinned line | `inventory.md` § Swept and left |
+
+Swept one path over: the other raw `s.config.Variant` reads (`validate_infra.go:32`, `:73`; `validate_entity.go:169`;
+`tiered_semantic.go:1449`; `validate_search.go:474`, `:508`, `:515`, `:517`; `tiered.go:578` is the detector) predate
+this change and are outside the round-2 finding; none is touched here. No per-PR invocation omits `--variant`.
+
+### 6.1 Gates at `81667ba5`
+```
+$ go test -race -count=1 ./test/e2e/scenarios/
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	4.511s
+$ task lint   -> exit 0 (lint:request-guard: ok ./test/natsclient 0.542s)
+```
+
+### 6.2 Mutation checks (each file restored from its `cp` backup; mutant = the file at `af3bbd40`)
+```
+===== MUTANT: test/e2e/scenarios/validate_infra.go <- af3bbd40 (M-c warn-and-zero arm restored); fixed sha 0c8f95bd7e524aaa537db8a8daba03a9cfa1b7e1e4534138bde83612deebf1db
+394443bfdcccba2f920bd2d66444e7c5387395cc473a76a1eadac6acafdbe007  test/e2e/scenarios/validate_infra.go
+--- FAIL: TestValidateRules_FailedBaselineReadFails (0.00s)
+        	Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1426-warn-only-stages/test/e2e/scenarios/tiered_warn_only_round1_test.go:358
+        	Error:      	An error is expected but got nil.
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	0.366s
+FAIL
+restored from backup: 0c8f95bd7e524aaa537db8a8daba03a9cfa1b7e1e4534138bde83612deebf1db MATCH
+===== MUTANT: test/e2e/scenarios/validate_search.go <- af3bbd40 (raw s.config.Variant reads restored); fixed sha 4508eab1edff7e848ba14969541cc0f0b7891395999c96ee73f355d2ddf56ab0
+0087a5810117d07f14cb8dd5fe88038454b678af0aa1a429df78169f69743112  test/e2e/scenarios/validate_search.go
+--- FAIL: TestVerifySearchQuality (0.01s)
+    --- FAIL: TestVerifySearchQuality/missed_known_answer_fails_under_auto-detected_statistical (0.00s)
+            	Error Trace:	/Users/coby/Code/c360/semstreams-wt/claude/gh1426-warn-only-stages/test/e2e/scenarios/tiered_warn_only_round1_test.go:199
+            	Error:      	"search failed for 8/8 queries: \"What documents mention forklift safety?\": returned no hits; \"Are there safety observations related to temperature?\": returned no hits; \"What maintenance was done on cold storage equipment?\": returned no hits; \"Find all sensors in zone-a\": returned no hits; \"forklift operation inspection equipment maintenance\": returned no hits; \"cold storage temperature monitoring refrigeration\": returned no hits; \"hydraulic fluid maintenance equipment repair\": returned no hits; \"warehouse safety guidelines emergency evacuation fire\": returned no hits" does not contain "known-answer search failed under BM25 (6/7 passed)"
+FAIL
+FAIL	github.com/c360studio/semstreams/test/e2e/scenarios	0.363s
+restored from backup: 4508eab1edff7e848ba14969541cc0f0b7891395999c96ee73f355d2ddf56ab0 MATCH
+===== RESTORED
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	4.421s
+git status --porcelain entries: 0
+```
