@@ -3,8 +3,9 @@
 ## Why
 
 Issue #1421 records a framework KV deadline failure in the graph-index owner-filter load harness, followed by a
-15-second NATS drain failure. This work repairs the measured cause while preserving meaningful regression failures
-and prompt, owned cleanup. The owner selected this issue as the next test-reliability repair after #1428.
+15-second NATS drain failure. This work investigates that incident and repairs demonstrated harness failure paths
+while preserving meaningful regression failures and prompt, owned cleanup. The owner selected this issue as the
+next test-reliability repair after #1428. The historical deadline-and-drain cause remains unresolved.
 
 ## What Changes
 
@@ -29,5 +30,14 @@ The source-pinned inventory passed independent review at SHA-256
 `d0872671356ee5505087160054d890384c13ceb19d4364d7fc2745a3b01fd3a1`; all 164 pins verified.
 Original CI run 36567709902 / job 109403662339 and related issue/ruling snapshots are retained in the evidence
 bundle. Historical attribution remains unproven. The bounded diagnostic design passed independent review and was accepted at SHA-256
-`5dae252d611467eaba43f83b747f321e9c8ae4ca5cabca164ba76b88dbff0da6`. Implementation of that diagnostic is next;
-no diagnostic execution, production correction or new test pass is claimed. No spec delta exists before the target behavior is accepted.
+`5dae252d611467eaba43f83b747f321e9c8ae4ca5cabca164ba76b88dbff0da6`. Its successful executions and independent
+Stop-invocation mutation were verified, but implementation review requested corrections to parent containment,
+early-exit joins and witness-gate validity. That corrective round is in progress. The experiment did not reproduce
+the historical drain timeout and does not justify a production listing/drain change.
+
+A bounded harness-hardening design is being prepared against the accepted inventory: seed first-error handling,
+worker ownership on every exit, bounded consumer-baseline observation and failure-time diagnostics. It preserves
+the five-second deadline, workload and latency budgets. The harness design passed independent review at SHA-256
+`20b701ec51d5e8c32b6084eba93eed9911e1ca75985a4a7896f74ec7c4dd10e7` and was accepted within the user-authorized repair. No
+claim of historical cause repair or issue completion is made. The temporary native diagnostic will be retained
+as reproducible experiment evidence rather than permanent default or opt-in package test coverage.
