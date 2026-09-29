@@ -23,20 +23,20 @@ checkpoint. No new gopls sweep, tests, Docker run, mutation experiment or cleanu
 
 The public factory and three suite entry signatures remain present. New private support owns a returned instance,
 rejects nil and typed nil before method dispatch, and records cancellation plus concrete terminal-attempt/results.
-The five-second constant currently supplies accepted work and terminal contexts. Work contexts derive from caller
+Accepted work and ordinary terminal cleanup retain five-second budgets; benchmark terminal cleanup retains one second. Work contexts derive from caller
 contexts; terminal Stop receives a fresh finite Background child. No operation context is stored on this owner.
 
 - `component/lifecycle_test_suite.go:21` — `type LifecycleFactory func() LifecycleComponent`
 - `component/lifecycle_test_suite.go:23` — `const lifecycleTestBudget = 5 * time.Second`
-- `component/lifecycle_test_suite.go:28` — `type lifecycleTestOwner struct {`
-- `component/lifecycle_test_suite.go:43` — `if value.IsNil() {`
-- `component/lifecycle_test_suite.go:51` — `ctx, cancel := context.WithTimeout(parent, lifecycleTestBudget)`
-- `component/lifecycle_test_suite.go:57` — `stopCtx, cancelStop := context.WithTimeout(context.Background(), lifecycleTestBudget)`
-- `component/lifecycle_test_suite.go:63` — `o.attempted = true // A returned error or panic does not authorize an implicit retry.`
-- `component/lifecycle_test_suite.go:64` — `o.concreteStopErr = o.component.Stop(stopCtx)`
-- `component/lifecycle_test_suite.go:68` — `result = errors.Join(result, fmt.Errorf("terminal context ended: %w", o.stopBoundErr))`
-- `component/lifecycle_test_suite.go:85` — `defer o.cancelStart() // Stop completes before accepted Start authority ends.`
-- `component/lifecycle_test_suite.go:87` — `if o.attempted {`
+- `component/lifecycle_test_suite.go:29` — `type lifecycleTestOwner struct {`
+- `component/lifecycle_test_suite.go:45` — `if value.IsNil() {`
+- `component/lifecycle_test_suite.go:53` — `ctx, cancel := context.WithTimeout(parent, lifecycleTestBudget)`
+- `component/lifecycle_test_suite.go:59` — `stopCtx, cancelStop := context.WithTimeout(context.Background(), o.stopBudget)`
+- `component/lifecycle_test_suite.go:65` — `o.attempted = true // A returned error or panic does not authorize an implicit retry.`
+- `component/lifecycle_test_suite.go:66` — `o.concreteStopErr = o.component.Stop(stopCtx)`
+- `component/lifecycle_test_suite.go:70` — `result = errors.Join(result, fmt.Errorf("terminal context ended: %w", o.stopBoundErr))`
+- `component/lifecycle_test_suite.go:87` — `defer o.cancelStart() // Stop completes before accepted Start authority ends.`
+- `component/lifecycle_test_suite.go:89` — `if o.attempted {`
 
 Normal portable cases now install lexical finish before invoking the case. Rejected-Start cases do likewise.
 Initialize and nil-context contract probes remain separate. CompletedRepeatedStop explicitly invokes the second
@@ -44,14 +44,14 @@ concrete Stop after the first success. Explicit abort validates the component's 
 from the owner's joined diagnostic. A returned concrete error suppresses implicit repetition; this is an attempt
 record, not a claim that every runtime resource joined.
 
-- `component/lifecycle_test_suite.go:96` — `func StandardLifecycleTests(t *testing.T, factory LifecycleFactory) {`
-- `component/lifecycle_test_suite.go:124` — `defer func() {`
-- `component/lifecycle_test_suite.go:129` — `workCtx = owner.workContext(t.Context())`
-- `component/lifecycle_test_suite.go:153` — `require.NoError(t, owner.abortContractError(), "abort Stop must preserve its exact caller-context cause")`
-- `component/lifecycle_test_suite.go:165` — `require.NoError(t, owner.component.Stop(secondCtx), "completed repeated Stop should be a no-op")`
-- `component/lifecycle_test_suite.go:175` — `assert.Error(t, owner.component.Stop(nil), "Stop must reject a nil context")`
-- `component/lifecycle_test_suite.go:204` — `defer func() {`
-- `component/lifecycle_test_suite.go:214` — `require.NoError(t, owner.stop(workCtx, false), "pre-action Start rejection must leave Stop safe")`
+- `component/lifecycle_test_suite.go:98` — `func StandardLifecycleTests(t *testing.T, factory LifecycleFactory) {`
+- `component/lifecycle_test_suite.go:126` — `defer func() {`
+- `component/lifecycle_test_suite.go:131` — `workCtx = owner.workContext(t.Context())`
+- `component/lifecycle_test_suite.go:155` — `require.NoError(t, owner.abortContractError(), "abort Stop must preserve its exact caller-context cause")`
+- `component/lifecycle_test_suite.go:167` — `require.NoError(t, owner.component.Stop(secondCtx), "completed repeated Stop should be a no-op")`
+- `component/lifecycle_test_suite.go:177` — `assert.Error(t, owner.component.Stop(nil), "Stop must reject a nil context")`
+- `component/lifecycle_test_suite.go:199` — `defer func() {`
+- `component/lifecycle_test_suite.go:219` — `require.NoError(t, owner.stop(workCtx, false), "pre-action Start rejection must leave Stop safe")`
 
 ## Error paths, worker admission, injection and benchmarks
 
@@ -61,29 +61,29 @@ only after their WaitGroup returns. This is a concurrent admission check, not gl
 work already passing the check remains owned. NoLeaks returns after the failing cycle finalizes; aggregate memory
 and goroutine observations remain supplementary. Benchmarks check each iteration's result before Fatal.
 
-- `component/lifecycle_test_suite.go:224` — `defer func() {`
-- `component/lifecycle_test_suite.go:226` — `resultErr = errors.Join(resultErr, fmt.Errorf("%s cleanup: %w", label, err))`
-- `component/lifecycle_test_suite.go:262` — `if failed.Load() {`
-- `component/lifecycle_test_suite.go:267` — `failed.Store(true)`
-- `component/lifecycle_test_suite.go:277` — `workers.Wait()`
-- `component/lifecycle_test_suite.go:282` — `report(err) // Caller reports while workers finish already-owned instances.`
-- `component/lifecycle_test_suite.go:298` — `if err := runLifecycleCycle(t.Context(), factory, fmt.Sprintf("NoLeaks iteration %d", iteration)); err != nil {`
-- `component/lifecycle_test_suite.go:300` — `return // The current lexical owner has already finalized.`
-- `component/lifecycle_test_suite.go:330` — `if err := benchmarkLifecycleIteration(b, factory, mode); err != nil {`
-- `component/lifecycle_test_suite.go:350` — `if err := owner.finish(workCtx, false); err != nil {`
+- `component/lifecycle_test_suite.go:229` — `defer func() {`
+- `component/lifecycle_test_suite.go:231` — `resultErr = errors.Join(resultErr, fmt.Errorf("%s cleanup: %w", label, err))`
+- `component/lifecycle_test_suite.go:267` — `if failed.Load() {`
+- `component/lifecycle_test_suite.go:272` — `failed.Store(true)`
+- `component/lifecycle_test_suite.go:282` — `workers.Wait()`
+- `component/lifecycle_test_suite.go:287` — `report(err) // Caller reports while workers finish already-owned instances.`
+- `component/lifecycle_test_suite.go:303` — `if err := runLifecycleCycle(t.Context(), factory, fmt.Sprintf("NoLeaks iteration %d", iteration)); err != nil {`
+- `component/lifecycle_test_suite.go:305` — `return // The current lexical owner has already finalized.`
+- `component/lifecycle_test_suite.go:335` — `if err := benchmarkLifecycleIteration(b, factory, mode); err != nil {`
+- `component/lifecycle_test_suite.go:356` — `if err := owner.finish(workCtx, false); err != nil {`
 
 Error injection retains the wrapper's early configured-error return. The suite owns its base separately, finishes
 that base through the owner, checks Initialize/Start prerequisites and sends a finite context to the injected Stop
 operation. The wrapper error therefore no longer substitutes for a base terminal attempt in the inspected source.
 
-- `component/lifecycle_test_suite.go:437` — `func (e *ErrorInjectingComponent) Stop(ctx context.Context) error {`
-- `component/lifecycle_test_suite.go:439` — `return e.stopError`
-- `component/lifecycle_test_suite.go:464` — `if err := owner.finish(workCtx, false); err != nil {`
-- `component/lifecycle_test_suite.go:468` — `wrapped := NewErrorInjectingComponent(owner.component)`
-- `component/lifecycle_test_suite.go:480` — `require.NoError(t, owner.component.Initialize(), "base Initialize prerequisite")`
-- `component/lifecycle_test_suite.go:482` — `require.NoError(t, owner.component.Start(workCtx), "base Start prerequisite")`
-- `component/lifecycle_test_suite.go:483` — `operationCtx, cancelOperation := context.WithTimeout(context.Background(), lifecycleTestBudget)`
-- `component/lifecycle_test_suite.go:490` — `require.ErrorIs(t, operationErr, injected, "expected %s wrapper operation error", tt.operation)`
+- `component/lifecycle_test_suite.go:443` — `func (e *ErrorInjectingComponent) Stop(ctx context.Context) error {`
+- `component/lifecycle_test_suite.go:445` — `return e.stopError`
+- `component/lifecycle_test_suite.go:470` — `if err := owner.finish(workCtx, false); err != nil {`
+- `component/lifecycle_test_suite.go:474` — `wrapped := NewErrorInjectingComponent(owner.component)`
+- `component/lifecycle_test_suite.go:486` — `require.NoError(t, owner.component.Initialize(), "base Initialize prerequisite")`
+- `component/lifecycle_test_suite.go:488` — `require.NoError(t, owner.component.Start(workCtx), "base Start prerequisite")`
+- `component/lifecycle_test_suite.go:489` — `operationCtx, cancelOperation := context.WithTimeout(context.Background(), lifecycleTestBudget)`
+- `component/lifecycle_test_suite.go:496` — `require.ErrorIs(t, operationErr, injected, "expected %s wrapper operation error", tt.operation)`
 
 ## Current proof surface and measurement limits
 
@@ -104,7 +104,7 @@ owner; no nested build or shell is present. Final source review accepted this ch
 - `component/lifecycle_test_support_test.go:263` — `<-stopCtx.Done() // Cooperative fake; no wall-clock containment is inferred.`
 - `component/lifecycle_test_support_test.go:304` — `func TestSharedLifecycleParallelReportedFailureKeepsLivePeerOwned(t *testing.T) {`
 - `component/lifecycle_test_support_test.go:403` — `func TestSharedLifecycleOperationAndCleanupErrorsRemainDistinct(t *testing.T) {`
-- `component/lifecycle_test_support_test.go:429` — `func TestSharedLifecycleBenchmarkChecksOperationAndFinalizer(t *testing.T) {`
+- `component/lifecycle_test_support_test.go:450` — `func TestSharedLifecycleBenchmarkChecksOperationAndFinalizer(t *testing.T) {`
 
 The existing fatal child fails Initialize, before accepting Start. Its source alone must not be promoted into proof
 of fatal exit after an accepted live Start. Separate transition, mixed-live-peer and error-retention cases, plus the exact after-Start/before-Stop mutation,
@@ -171,10 +171,29 @@ records the exact approval and baseline identity. No analyzer semantic or scan-d
 
 ## Source byte checkpoints
 
-`component/lifecycle_test_suite.go` SHA256 `ec7c53826c9cb8409778346fcd2619a85d31677f85bb93234998d69a86f48ac3`.
-`component/lifecycle_test_support_test.go` SHA256 `b822f4b634747142ad70ba85fa05ab4670738a59208a215c5eb6f414d7c2f824`.
+`component/lifecycle_test_suite.go` SHA256 `6d1c84672111de2828ef1d2042ad39d52aad40c257c64b464beeb2871685745c`.
+`component/lifecycle_test_support_test.go` SHA256 `11074b40566779d8979539cc5266d2cb8f8f4481d7b345991823a10e71d91bb6`.
 `processor/rule/lifecycle_integration_test.go` SHA256 `0d6dced7a2d32c98350d80a782850b153afbe9b5c2285af773c30b23c4d413d6`.
 `docs/contributing/01-testing.md` SHA256 `6079498e2850cf530f4a6d952088cf72c88408b6d1879087aca9a720b074e163`.
 
 Coordinator refresh: updated 2 moved coordinates against the restored final Go source and recorded its
 byte hashes. The accepted pre-change inventory and its review remain available at the immutable checkpoint above.
+
+Contract-gate correction: the rejected-Start table retains only a case name and expected error. Context construction
+is lexical in each subtest, so the non-test-file struct owns no context provider. The suite checkpoint above includes
+this correction; old execution snapshots remain identified in the evidence record. Exact dependency re-review and
+full preflight results are recorded separately.
+
+## Retained benchmark budget correction
+
+Final review resolved the design conflict by preserving benchmark cleanup at one second. The private owner still
+provides the same finalizer, cancellation order and checked concrete attempt. Benchmark setup selects its budget
+before installing finalization; ordinary owners retain five seconds. Causal child controls observe actual supplied
+deadlines and retain a concrete Stop error without retry. Final focused race measured 19 top-level cases, maximum
+1.06s; this corrects the earlier 0.06s figure for the older proof population.
+
+- `component/lifecycle_test_suite.go:24` — `const benchmarkTerminalBudget = time.Second`
+- `component/lifecycle_test_suite.go:49` — `return &lifecycleTestOwner{component: component, stopBudget: lifecycleTestBudget}`
+- `component/lifecycle_test_suite.go:352` — `owner.stopBudget = benchmarkTerminalBudget`
+- `component/lifecycle_test_support_test.go:417` — `func TestSharedLifecycleOrdinaryTerminalRetainsFiveSecondBudget(t *testing.T) {`
+- `component/lifecycle_test_support_test.go:490` — `func TestSharedLifecycleBenchmarkExplicitStopBudget(t *testing.T) {`

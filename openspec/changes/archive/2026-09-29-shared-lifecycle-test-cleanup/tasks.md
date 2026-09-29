@@ -33,10 +33,10 @@
 ## 4. Root/coordinator: review, records and landing
 
 - [x] 4.1 Obtain independent implementation review, including supported timeout claims and before/after baseline counts.
-- [ ] 4.2 Run required check:push once ready; preserve focused versus full evidence distinctions and measured budgets.
-- [ ] 4.3 Update existing testing guidance and #1417 with this first batch's proof and remaining package work.
+- [x] 4.2 Run required check:push once ready; preserve focused versus full evidence distinctions and measured budgets.
+- [x] 4.3 Update existing testing guidance and #1417 with this first batch's proof and remaining package work.
   Record the exact #1416 source/proof disposition without claiming a reproduced failure or changing issue authority.
-- [ ] 4.4 Archive the completed change and synchronize its spec as the final content commit; review that narrow delta.
+- [x] 4.4 Archive the completed change and synchronize its spec as the final content commit; review that narrow delta.
   Keep #1417 open and follow the existing CI/merge protocol for #1418.
 
 Developer owns component support/tests and the rule test fixture. Root coordinates artifacts, review, gate execution

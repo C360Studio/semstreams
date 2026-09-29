@@ -1,0 +1,2 @@
+task: [spec:properties] scripts/spec-properties.sh 
+spec-properties: 445/445 citations resolve.

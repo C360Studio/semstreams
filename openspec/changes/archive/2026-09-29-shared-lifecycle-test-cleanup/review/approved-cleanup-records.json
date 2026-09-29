@@ -47,18 +47,18 @@
     "classification": "non-lifecycle-stop",
     "question": "function-valued selector target unresolved on cleanup path",
     "reason": "The private cancelStart field is assigned only the cancel returned by context.WithTimeout in workContext. finish invokes that verified cancel after the concrete terminal attempt; it does not invoke another lifecycle Stop.",
-    "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; candidate 20ddeb17716e170afd8f230ce20371225059f3163eefb740ee67af1745e397d4; implementation-review.md",
+    "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; budget candidate 687959ee4baabae38bcf14b3a59db6bed0be74a84f061f8ba9bf3aea9fc9dd3f; implementation-review.md",
     "owner_issue": "#1418",
     "dependencies": [
       {
         "path": "component/lifecycle_test_suite.go",
         "declaration": "lifecycleTestOwner",
-        "fingerprint": "c3ff3516c9cff3e49adf41b7ec71226c9ece443cfb6f3f57f005f9d6dc8cebaa"
+        "fingerprint": "55208e881cd5ab08e690dac034c13a861781c897bce32a4d0de9a4f87f65b205"
       },
       {
         "path": "component/lifecycle_test_suite.go",
         "declaration": "newLifecycleTestOwner",
-        "fingerprint": "0c97a26c0114d4db2b9bcaf456d33a341de259bab5ea6575fb462dd65ff2a1e7"
+        "fingerprint": "4508a2bfb54a2ff0a4e45068a288b14001da98af0799aee031237700a759e9f2"
       },
       {
         "path": "component/lifecycle_test_suite.go",
@@ -73,7 +73,7 @@
       {
         "path": "component/lifecycle_test_suite.go",
         "declaration": "lifecycleTestOwner.stop",
-        "fingerprint": "5d93a4a89bccea838e8c0278f8b053ae418185164e22b11e668458fc3f16d52d"
+        "fingerprint": "cd20c17b7f149a3021b36e8e274d762bcbb54e007ddff3aa2f031ae962f9fa75"
       }
     ]
   },
@@ -82,19 +82,24 @@
     "site_fingerprint": "4da2ddce1608c9f0243776020c244a4c53d81268e8300c590e5bda536ad9051d",
     "classification": "bounded-cleanup",
     "question": "cleanup helper traversal exceeds bounded depth",
-    "reason": "The exact stop helper constructs a finite timeout from Background and passes it to stopWithContext, which makes one concrete LifecycleComponent.Stop call; this proves supplied finiteness, not a wall-clock return or complete join.",
-    "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; candidate 20ddeb17716e170afd8f230ce20371225059f3163eefb740ee67af1745e397d4; implementation-review.md",
+    "reason": "The exact stop helper derives a finite timeout from Background using its private owner budget. The constructor initializes that budget and benchmarkLifecycleIteration selects its own budget; both pass the resulting context to stopWithContext for one concrete LifecycleComponent.Stop. This proves supplied finiteness, not wall-clock return or complete joining.",
+    "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; budget candidate 687959ee4baabae38bcf14b3a59db6bed0be74a84f061f8ba9bf3aea9fc9dd3f; implementation-review.md",
     "owner_issue": "#1418",
     "dependencies": [
       {
         "path": "component/lifecycle_test_suite.go",
         "declaration": "lifecycleTestOwner",
-        "fingerprint": "c3ff3516c9cff3e49adf41b7ec71226c9ece443cfb6f3f57f005f9d6dc8cebaa"
+        "fingerprint": "55208e881cd5ab08e690dac034c13a861781c897bce32a4d0de9a4f87f65b205"
+      },
+      {
+        "path": "component/lifecycle_test_suite.go",
+        "declaration": "newLifecycleTestOwner",
+        "fingerprint": "4508a2bfb54a2ff0a4e45068a288b14001da98af0799aee031237700a759e9f2"
       },
       {
         "path": "component/lifecycle_test_suite.go",
         "declaration": "lifecycleTestOwner.stop",
-        "fingerprint": "5d93a4a89bccea838e8c0278f8b053ae418185164e22b11e668458fc3f16d52d"
+        "fingerprint": "cd20c17b7f149a3021b36e8e274d762bcbb54e007ddff3aa2f031ae962f9fa75"
       },
       {
         "path": "component/lifecycle_test_suite.go",
@@ -110,6 +115,11 @@
         "path": "component/lifecycle.go",
         "declaration": "LifecycleComponent",
         "fingerprint": "c774a7da33b173323d61833523a6adc4409875223be8c5ba9aa6bd18e6b31779"
+      },
+      {
+        "path": "component/lifecycle_test_suite.go",
+        "declaration": "benchmarkLifecycleIteration",
+        "fingerprint": "fe470df9f43e016e576fca635edb78aad93f4482b81338027b7a660db73204a0"
       }
     ]
   },
@@ -154,14 +164,14 @@
     "site_fingerprint": "d867375d80f2af5eda09b25aae9b19efde3c9fd1a7e8f90886104ec2d569047f",
     "classification": "non-lifecycle-stop",
     "question": "deferred or cleanup callback variable target unresolved",
-    "reason": "Both exact table constructors return a context.CancelFunc from WithCancel or WithDeadline, and cancelInput only cancels that rejected Start input. The owned component finalizer is separate.",
-    "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; candidate 20ddeb17716e170afd8f230ce20371225059f3163eefb740ee67af1745e397d4; implementation-review.md",
+    "reason": "Each exact switch branch directly constructs its rejected Start input with context.WithCancel or context.WithDeadline. cancelInput only cancels that input; the owned component finalizer is separate.",
+    "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; context-table candidate 136914470b71cce8902a457fbe16659ac1d081da985aac659efd503a2c9ea8c7; implementation-review.md",
     "owner_issue": "#1418",
     "dependencies": [
       {
         "path": "component/lifecycle_test_suite.go",
         "declaration": "testPortableErrorPaths",
-        "fingerprint": "9cf102e94f59fda9614df48eaca9201f51a61bb96e2580d54f05d2babe8088f0"
+        "fingerprint": "29b84f71baeecdaed457e1a6f99292aeb45be944a165119d0b39618000bdf6fd"
       },
       {
         "path": "component/lifecycle_test_suite.go",
@@ -227,7 +237,7 @@
     "classification": "bounded-cleanup",
     "question": "context provenance unresolved",
     "reason": "The observer forwards the finite nonnil Stop context supplied by the shared owner to the real rule processor and records return. The explicit completed-repeat probe supplies its separate finite second context. The suite invokes that wrapper for each returned factory instance; this proves finite caller authority and observed return, not complete internal joining after abort.",
-    "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; candidate 20ddeb17716e170afd8f230ce20371225059f3163eefb740ee67af1745e397d4; implementation-review.md",
+    "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; budget candidate 687959ee4baabae38bcf14b3a59db6bed0be74a84f061f8ba9bf3aea9fc9dd3f; implementation-review.md",
     "owner_issue": "#1418",
     "dependencies": [
       {
@@ -247,8 +257,13 @@
       },
       {
         "path": "component/lifecycle_test_suite.go",
+        "declaration": "newLifecycleTestOwner",
+        "fingerprint": "4508a2bfb54a2ff0a4e45068a288b14001da98af0799aee031237700a759e9f2"
+      },
+      {
+        "path": "component/lifecycle_test_suite.go",
         "declaration": "lifecycleTestOwner.stop",
-        "fingerprint": "5d93a4a89bccea838e8c0278f8b053ae418185164e22b11e668458fc3f16d52d"
+        "fingerprint": "cd20c17b7f149a3021b36e8e274d762bcbb54e007ddff3aa2f031ae962f9fa75"
       },
       {
         "path": "component/lifecycle_test_suite.go",

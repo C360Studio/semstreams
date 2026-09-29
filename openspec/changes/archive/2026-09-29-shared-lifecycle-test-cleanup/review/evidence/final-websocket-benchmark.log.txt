@@ -1,0 +1,10 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/c360studio/semstreams/output/websocket
+cpu: Apple M3 Pro
+BenchmarkWebSocketOutput_Lifecycle/Initialize-12         	       1	     18708 ns/op
+BenchmarkWebSocketOutput_Lifecycle/Start-12              	       1	    371042 ns/op
+BenchmarkWebSocketOutput_Lifecycle/Stop-12               	       1	    142875 ns/op
+BenchmarkWebSocketOutput_Lifecycle/FullLifecycle-12      	       1	    651625 ns/op
+PASS
+ok  	github.com/c360studio/semstreams/output/websocket	1.327s

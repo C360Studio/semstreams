@@ -65,10 +65,10 @@ context/provider on a production struct and no exported cancellation handle.
    finalizes any still-owned component and then cancels the owned Start context. A nested defer cancels even if Stop
    panics. This executes on normal return and testing FailNow/Goexit, before the testing runner cancels t.Context()
    and before substrate t.Cleanup callbacks. Do not pair a deferred Start cancel with a later t.Cleanup Stop.
-3. Create accepted work contexts at this test composition boundary from the current t.Context() (b.Context() in benchmarks), with an explicit
-   finite work budget. Keep each alive through its controlled Stop. Retain the existing five-second terminal budget
-   and use a five-second per-instance work budget initially; measure focused normal/race/integration costs before
-   accepting those defaults. Deliberately nil, pre-canceled, pre-expired and explicit abort inputs remain test inputs.
+3. Create accepted work contexts at this test composition boundary from the current t.Context() (b.Context() in
+   benchmarks), with an explicit finite work budget. Keep each alive through its controlled Stop. Retain the ordinary
+   suite five-second terminal budget and benchmark one-second terminal budget; use a five-second per-instance work
+   budget initially. Measure focused normal/race/integration costs before accepting those defaults. Deliberately nil, pre-canceled, pre-expired and explicit abort inputs remain test inputs.
 4. Ordinary explicit Stop checks and fallback cleanup use the same private terminal-attempt bookkeeping. Pass a
    fresh finite Background child for terminal invocation, cancel it after return, and preserve both the returned
    error and an expired caller context. Record attempted before invoking concrete Stop, so panic or nonnil return
@@ -177,8 +177,8 @@ and discards cleanup errors independently. Each must fail a targeted causal asse
 process timeout. Use cp backups and before/after checksums; restore immediately and rerun the relevant green proof.
 
 Measure focused race top-level tests against the policy's one-second target/five-second ceiling; split distinct
-proofs rather than hide a long Cartesian subprocess matrix. Retain the existing five-second terminal budget for
-real operations; private proof inputs may supply an already-expired context or causally gated cooperative deadline
+proofs rather than hide a long Cartesian subprocess matrix. Retain the existing ordinary-suite five-second and
+benchmark one-second terminal budgets for real operations; private proof inputs may supply an already-expired context or causally gated cooperative deadline
 without sleeping for five seconds. Bound a failing child with reserved cleanup time inside the top-level ceiling.
 No budget increases or generic containment claims are authorized. Report observed cold/warm test and child costs,
 real rule run duration, container count and cleanup outcome. One real rule container remains the allowed count.
@@ -201,3 +201,8 @@ If new evidence shows an actual breaking behavior/API change, stop and select it
 
 No new binding policy decision was requested. The mechanics and measured budget fit the existing scope;
 independent design review and coordinator acceptance preceded implementation (`review/design-review.md`).
+
+Final review reconciled the original budget wording before landing: the shared ownership mechanism preserves
+each existing caller budget (ordinary suite five seconds, benchmarks one second). The original design's broad
+shared-five-second wording conflicted with its explicit no-increase requirement. Healthy benchmark timings did
+not justify greater failure latency; the implementation must preserve the prior one-second benchmark bound.
