@@ -1,0 +1,8 @@
+{
+  "run": 36641021599,
+  "commit": "41d6236a84a8443b284785372126a092331096f6",
+  "command": "gh run view 36641021599 --log-failed",
+  "member": "gh1432-main-failure.log",
+  "sha256": "2dbec44c3ae4f8e78d56eefaa6ecade93433af4bff0278cd3670b0736b75ae9b",
+  "bytes": 635745
+}
