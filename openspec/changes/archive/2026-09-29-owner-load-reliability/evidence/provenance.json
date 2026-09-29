@@ -1,0 +1,37 @@
+{
+  "incident_run": "https://github.com/C360Studio/semstreams/actions/runs/36567709902",
+  "incident_job": "https://github.com/C360Studio/semstreams/actions/runs/36567709902/job/109403662339",
+  "source": "gh run view --job --log and gh issue view --json snapshots; historical evidence, not new test execution",
+  "files": {
+    "gh1421-incident-job.log": {
+      "bytes": 644363,
+      "sha256": "8ac79b8a8359e1d441248dd87f3c12a1cd19aa7bf5728b81ba4b6d33dd553daa"
+    },
+    "issue-1421.json": {
+      "bytes": 6169,
+      "sha256": "abea0f51de2fb0779b7bb8af4b89ed24920c8adb988d9a9890ad70de8c1e83c2"
+    },
+    "issue-1284.json": {
+      "bytes": 21759,
+      "sha256": "1988f5f1b5991acf11ea536c0464965496b8e0d1205f238c28873689b9850b71"
+    },
+    "issue-1287.json": {
+      "bytes": 6942,
+      "sha256": "1db47e786a8e7ab7e6816a39ca7cce02bcdb23e63f2b451cf3fe8c9c87556e09"
+    },
+    "issue-1054.json": {
+      "bytes": 10165,
+      "sha256": "70a30b63f445c9f886e0d1a0da335807394684e5d8d03fc388929bd00d4402c8"
+    },
+    "issue-1293.json": {
+      "bytes": 22902,
+      "sha256": "8690a5157387395d4a793c7fe0bb31d1f7822ec7ff2d3f626db18b7273565ddc"
+    },
+    "issue-1417.json": {
+      "bytes": 21056,
+      "sha256": "f9ad9005d6905d2eff9d6d7c850987ae8cdba180e000cbec98f140470e5053b0"
+    }
+  },
+  "prepared_at": "2026-09-29T19:42:58.219920+00:00",
+  "snapshot_capture_date": "2026-09-29"
+}

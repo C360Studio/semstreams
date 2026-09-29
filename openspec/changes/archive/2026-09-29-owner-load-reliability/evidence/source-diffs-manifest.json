@@ -1,0 +1,10 @@
+{
+  "diagnostic-final-mutant.diff": "59603b237675bbf4125373223a52a5c4029c7e90a3dc392f7557c8dbbf2cc743",
+  "diagnostic-final-tiny-correction.diff": "b96eaaa8dffca2c72e25c7a79598da55d8f4ad4d1f214fae5e91d4b34afd3aa3",
+  "diagnostic-finalizer-mutant.diff": "dbe269d9f154bf86fdc0d01b1191e1c389f4744b260fa8132b2694f35d86d0b4",
+  "diagnostic-review-stop-mutant.diff": "dc2c418d5fc4d0d6b65dcc4daeec934022a6c170e7d41a836fae30d4ece3e669",
+  "diagnostic-stop-mutant.diff": "aa6de58c6dbbfb575522352daf70f5a8ff556d380b5d90a2158b9437ff1736d8",
+  "harness-review-round-1.patch": "4e684d8c1893d504ce1195efc79b74e833e2fce97058c43db22cbd184a3ba7a0",
+  "owner-load-final-omitted-join.diff": "404769b018f9870a5b29abb6955981dbf5fc323cc765720168e5192b6567ca2f",
+  "owner-load-omitted-join.diff": "1b993c56f037999729ac2f867b702998f49d96558819f2ece6b3bbe0095d8c7b"
+}
