@@ -41,10 +41,15 @@
 - [ ] 4.3 Run focused `-race` rule unit checks and canonical focused rule integration through the existing runner and
   host lock. Include readiness/#1062, owner-lane/#1283, bounded Stop/#1404, both graph-ingest harness families, cron
   restart, hardening and external-package wiring. Record actual executed/skipped tests and named completion signals.
-- [ ] 4.4 Remove only the repaired exact 24 baseline identities. Verify expected 297-to-273 debt change and unchanged
-  90 resolutions against the accepted baseline; do not regenerate unrelated fingerprints or waive new uncertainty.
-- [ ] 4.5 Run the actual cleanup guard and applicable contract checks; reconcile new/changed/stale/unresolved findings
-  without weakening admission. Preserve accepted inventory checkpoint; record current source-to-case mapping separately.
+- [ ] 4.4 Remove only the repaired exact 24 baseline identities. Verify expected 297-to-273 debt change while
+  preserving all 90 existing reviewed resolutions, approvals and dependency fingerprints unchanged. Preserve unrelated
+  debt; do not regenerate the baseline or add new unbounded cleanup approvals.
+- [ ] 4.5 Run the actual cleanup guard and applicable contract checks. If stored native cancelStart callbacks require
+  manual classification, add only exact independently reviewed non-lifecycle cancellation resolutions with finite,
+  explicit source/dependency proof and fingerprints under the existing policy. Keep other uncertainty explicit; do
+  not change the guard or ownership shape to bypass it. Measure and report the final resolution total after guard
+  reconciliation, with no assumed count. Preserve the accepted inventory checkpoint and record current source-to-case
+  mapping separately.
 
 ## 5. Review, final gates and handoff
 

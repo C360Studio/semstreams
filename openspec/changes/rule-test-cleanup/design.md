@@ -218,11 +218,23 @@ A timeout cannot substitute for the intended ordering/error assertion.
 ## Baseline reconciliation, verification and gates
 
 Remove only the repaired 24 semantic identities enumerated in `review/baseline-exposure.json`, after their source and
-proof reconciliation. Starting from the accepted snapshot, expected residual debt is 273 and reviewed resolutions
-remain 90. Preserve all remaining entries and resolution dependency fingerprints byte-for-byte unless a separately
-measured change requires exact review. Do not regenerate the baseline, weaken the guard or add broad exceptions.
-The five exposed resolutions remain unchanged; the new owner support must remain statically analysable. Any new
-uncertain cleanup binding is fixed at the concrete test seam rather than concealed by an invented approval.
+proof reconciliation. Starting from the accepted snapshot, expected residual debt is 273. Preserve all 90 existing
+reviewed resolutions, their approvals and dependency fingerprints unchanged, including the five exposed resolutions.
+Preserve every unrelated debt entry. Do not regenerate the baseline, change the guard or add broad exceptions.
+
+The chosen private cancelStart field can leave its deferred invocation uncertain at a function-valued selector edge.
+This is an existing analyzer limit: the graph-ingest and shared owners already carry exact non-lifecycle cancellation
+resolutions in `test/testinfra/cleanup_baseline.json:3651` and `:2333` at the frozen source. Concrete native Stop calls
+remain type-resolved; do not invent a different runtime/ownership shape merely to appease that callback edge.
+
+Run the real guard before determining the final resolution count. If it requires a resolution for a new private
+native cancellation callback, admit only that exact semantic site after independent review of a finite, explicit
+source/dependency proof tracing the stored function to the native context cancellation function. Record the actual
+classification question, reason, reviewer, owner and source/dependency fingerprints under the existing policy. This
+permits no new unbounded cleanup approval, generic Stop exemption or claim of native completion. Other unresolved
+bindings remain unresolved until supported by their own evidence; they cannot inherit this narrow disposition.
+Measure and report the final reviewed-resolution total after guard reconciliation rather than assuming it remains
+90 or guessing how many new callback sites need resolution.
 
 Run focused race unit checks and the canonical focused integration runner for rule. Keep #1062 readiness ordering,
 #1283 owner-lane/deadline/cache/watcher proof, and #1404 bounded-stop evidence intact. Record executed/skipped coverage,
