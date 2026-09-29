@@ -665,7 +665,7 @@ M4: delivered, `docs/contributing/02-e2e-tests.md` § Assertion Strategy, one se
 | Finding | Disposition | Where |
 |---|---|---|
 | M-a task 2.1 overstates (four arms revert without a red) | doc-sentence option: the four arms join the inspection-only list, plus the new outgoing-read arm below | `tasks.md` 2.1 |
-| M-b H3 row comment claims routing and 2/2 | reworded: the stage fails only when neither probe returns entities; 2/2 is a measurement; line count kept so § 5.6 pins hold | `tiered.go:348-349` |
+| M-b H3 row comment claims routing and 2/2 | reworded: the stage fails only when neither probe returns entities; 2/2 is a measurement; `tiered.go` line count kept (765) so its § 5.6 pins hold. The M-c, variant and `:1306` fixes moved three § 5.6 pins by three lines at `263b60e2`: `validate_search.go:53` → `:56`, `tiered_semantic.go:1338` → `:1341`, `:1454` → `:1457` (round 3 nit) | `tiered.go:348-349` |
 | M-c baseline read warns and substitutes zero | fails the stage, same shape as `wait-for-rule-stabilization` (`validate_infra.go:750`); unit test at the metrics seam (first scrape 500, later scrapes meet the thresholds); mutation check below | `validate_infra.go:476-480`; `tiered_warn_only_round1_test.go` `TestValidateRules_FailedBaselineReadFails` |
 | M-d `awaitRuleThresholds` vs `WaitForMetric` | one sentence recorded in § 5.6 (one series per call, own `Timeout`, first read after one tick, returns no value) | § 5.6 "Simple over edge-case" row |
 | Nit `validate_search.go:66` raw `s.config.Variant` | both reads (`:25` executor, `:66` verdict) go through `effectiveVariant`; the verdict helper takes the variant; subtest with `Variant: ""` and `result.Metrics["variant"]="statistical"`; mutation check below | `validate_search.go`; `TestVerifySearchQuality/missed_known_answer_fails_under_auto-detected_statistical` |
@@ -673,7 +673,7 @@ M4: delivered, `docs/contributing/02-e2e-tests.md` § Assertion Strategy, one se
 | Nit `tiered_semantic.go:1306` discards the outgoing-read error | returns the error (design § 10b row: a failed read is A); no failing-read fixture, so it is listed inspection-only in task 2.1 | `tiered_semantic.go:1306` |
 | Nit inventory omits the no-keywords warn | named in § Swept and left with the base-pinned line | `inventory.md` § Swept and left |
 
-Swept one path over: the other raw `s.config.Variant` reads (`validate_infra.go:32`, `:73`; `validate_entity.go:169`;
+Swept one path over (pins at `af3bbd40`): the other raw `s.config.Variant` reads (`validate_infra.go:32`, `:73`; `validate_entity.go:169`;
 `tiered_semantic.go:1449`; `validate_search.go:474`, `:508`, `:515`, `:517`; `tiered.go:578` is the detector) predate
 this change and are outside the round-2 finding; none is touched here. No per-PR invocation omits `--variant`.
 
@@ -708,3 +708,32 @@ restored from backup: 4508eab1edff7e848ba14969541cc0f0b7891395999c96ee73f355d2dd
 ok  	github.com/c360studio/semstreams/test/e2e/scenarios	4.421s
 git status --porcelain entries: 0
 ```
+
+## 7. Review round 3 (2026-09-30; narrow re-review of `af3bbd40..263b60e2`; verdict APPROVE, one medium, two nits)
+
+All eight round-2 findings verified fixed or honestly recorded at `263b60e2`; § 6.2's two mutation checks re-derived
+in a `git archive` copy with matching SHAs, and the `validate_search.go` mutant split per arm (executor `:28`, verdict
+`:69`), each alone red on `TestVerifySearchQuality/missed_known_answer_fails_under_auto-detected_statistical`.
+
+| Finding | Disposition | Where |
+|---|---|---|
+| Medium: task 2.1's exception list closed the four sampled arms, not the class (seven sibling arms from `587881b3` revert green) | the list names the class: the NATS read-error and empty-ID arms of the four NATS-seam stages and entity-structure's sample read-error arm | `tasks.md` 2.1 |
+| Nit: three § 5.6 pins moved by three lines; the § 6 sweep list is pinned at `af3bbd40` without saying so | both qualified in § 6 | § 6 M-b row; § 6 sweep line |
+| Nit: stage names split across line wraps in `tasks.md` | each name on one line | `tasks.md` 2.1 |
+
+Reviewer's class sweep (each arm replaced by `_ = err; return nil` in the archive copy, restored with a matching SHA):
+```
+tiered_semantic.go:1154 -> ok   restore=MATCH
+tiered_semantic.go:1157 -> ok   restore=MATCH
+tiered_semantic.go:1185 -> ok   restore=MATCH   (pre-PR, af3cc844; excluded)
+tiered_semantic.go:1267 -> ok   restore=MATCH
+tiered_semantic.go:1294 -> ok   restore=MATCH
+tiered_semantic.go:1359 -> ok   restore=MATCH
+tiered_semantic.go:1362 -> ok   restore=MATCH
+tiered_semantic.go:1402 -> ok   restore=MATCH
+validate_entity.go:399  -> FAIL (TestEntityStructure_EmptySampleFails)  restore=MATCH
+```
+Class answer at `263b60e2`: no per-PR stage passes on its detected outcome without being a declared recorder; the
+medium is task-truth coverage, not a stage passing wrongly. The "no per-PR invocation omits `--variant`" claim was
+verified against `Taskfile.yml:207`, `taskfiles/e2e/semantic.yml`, `e2e-ladder.yml:122`, and `cmd/e2e/main.go:617-619`.
+Gates at head: `go test -race -count=1 ./test/e2e/scenarios/` ok 4.477s; `task lint` exit 0.

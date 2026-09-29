@@ -15,11 +15,11 @@
       except these inspection-only arms: `validate-virtual-edges`' count-read and mismatch arms (the one the design
       allowed); `validate-llm-enhancement`'s wait-error and post-wait re-fetch arms; the failed COMMUNITY_SUMMARIES read
       in `validate-llm-enhancement` and `validate-community-structure` (H2); `validate-incoming-index-predicates`'
-      entries-without-predicates arm (unreachable through the reader, which drops empty predicates); and the
-      read-error and empty-ID arms review round 2 reverted one at a time without a red (M-a): `validate-hierarchy-
-      inference`'s `GetAllEntityIDs` error arm, `validate-bidirectional-traversal`'s `len(allIDs)==0` and
-      outgoing-read error arms, `validate-inverse-edges-materialized`'s outgoing-read error arm, and
-      `validate-entity-structure`'s `GetEntitySample` error arm.
+      entries-without-predicates arm (unreachable through the reader, which drops empty predicates); and, as a class
+      (review rounds 2 and 3: eleven such arms revert to `return nil` without a red, evidence § 6 and § 7), the NATS
+      read-error and empty-ID arms of the four NATS-seam stages
+      (`validate-hierarchy-inference`, `validate-incoming-index-predicates`, `validate-bidirectional-traversal`,
+      `validate-inverse-edges-materialized`) and `validate-entity-structure`'s sample read-error arm.
 - [ ] 2.2 `task e2e:statistical` green on the branch; the #1117 path-only semantic run green or its reds filed
       with causes.
 - [ ] 2.3 Review through the project reviewer contract; owner acceptance on #1426.
