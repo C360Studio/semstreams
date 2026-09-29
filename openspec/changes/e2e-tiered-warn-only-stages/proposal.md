@@ -12,11 +12,14 @@ https://github.com/C360Studio/semstreams/issues/1426#issuecomment-5894112756.
 
 ## What Changes
 
-- Each of the six stages (`test-nl-path-intent`, `test-nl-temporal-intent`, `test-graphrag-local`,
-  `test-graphrag-global`, `validate-anomaly-detection` ground truth, `validate-community-structure` ground
-  truth; plus `validate-virtual-edges` and the zero-enhanced arm of `validate-llm-enhancement`) either returns an
-  error on the outcome it exists to detect, or leaves the per-PR variants' stage table with the reason recorded
-  in the table comment.
+- Each of the fourteen warn-only paths the inventory pins (`test-nl-path-intent`, `test-nl-temporal-intent`,
+  `test-graphrag-local`, `test-graphrag-global`, `validate-anomaly-detection` ground truth,
+  `validate-community-structure` ground truth, `validate-virtual-edges`, the zero-enhanced arm of
+  `validate-llm-enhancement`, and the six the inventory sweep found in `tiered_structural.go`:
+  `validate-rule-transitions`, `test-spatial-query`, `test-temporal-query`, `test-zone-relationships`,
+  `test-predicate-list`, `test-predicate-stats`) either returns an error on the outcome it exists to detect, or
+  leaves the per-PR variants' stage table with the reason recorded in the table comment. The owner absorbed the
+  six on 2026-09-29 ("agree on 1 - let's fix the class while we are in here").
 - Where a probe's failure is a deadline, the assertion distinguishes "timed out" from "returned nothing"; a
   deadline the CI runner cannot meet is filed with its measurement, never warned past.
 - The per-PR variants (statistical; the #1117 path-only semantic run) are green on main after the change, or

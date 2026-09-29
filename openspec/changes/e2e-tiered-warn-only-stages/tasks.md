@@ -2,7 +2,7 @@
 
 ## 1. Inventory and design
 
-- [x] 1.1 Line-pinned inventory of the eight warn paths (six stages plus virtual-edges and the zero-enhanced
+- [x] 1.1 Line-pinned inventory of the warn paths (eight named plus six sweep-found; fourteen total, plus the zero-enhanced
       arm), the variants each runs in, the client deadlines they hit, and every reader of the metrics they set.
 - [ ] 1.2 Per stage: assert, or leave the per-PR variants, with the reason; timeout distinguished from empty.
 - [ ] 1.3 Seed the tiered-scenario capability spec (lazily, this change is its first toucher) with the delta:
