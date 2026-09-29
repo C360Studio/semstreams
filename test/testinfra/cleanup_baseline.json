@@ -2701,14 +2701,14 @@
       "site_fingerprint": "d867375d80f2af5eda09b25aae9b19efde3c9fd1a7e8f90886104ec2d569047f",
       "classification": "non-lifecycle-stop",
       "question": "deferred or cleanup callback variable target unresolved",
-      "reason": "Both exact table constructors return a context.CancelFunc from WithCancel or WithDeadline, and cancelInput only cancels that rejected Start input. The owned component finalizer is separate.",
-      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; candidate 20ddeb17716e170afd8f230ce20371225059f3163eefb740ee67af1745e397d4; implementation-review.md",
+      "reason": "Each exact switch branch directly constructs its rejected Start input with context.WithCancel or context.WithDeadline. cancelInput only cancels that input; the owned component finalizer is separate.",
+      "reviewer": "semstreams-reviewer (test_reliability_review), 2026-09-29; context-table candidate 136914470b71cce8902a457fbe16659ac1d081da985aac659efd503a2c9ea8c7; implementation-review.md",
       "owner_issue": "#1418",
       "dependencies": [
         {
           "path": "component/lifecycle_test_suite.go",
           "declaration": "testPortableErrorPaths",
-          "fingerprint": "9cf102e94f59fda9614df48eaca9201f51a61bb96e2580d54f05d2babe8088f0"
+          "fingerprint": "29b84f71baeecdaed457e1a6f99292aeb45be944a165119d0b39618000bdf6fd"
         },
         {
           "path": "component/lifecycle_test_suite.go",

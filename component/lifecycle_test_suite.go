@@ -182,17 +182,10 @@ func testStopBeforeStart(workCtx context.Context, t *testing.T, owner *lifecycle
 func testPortableErrorPaths(t *testing.T, factory LifecycleFactory) {
 	tests := []struct {
 		name    string
-		start   func() (context.Context, context.CancelFunc)
 		wantErr error
 	}{
-		{"PreCanceledStart", func() (context.Context, context.CancelFunc) {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-			return ctx, cancel
-		}, context.Canceled},
-		{"PreExpiredStart", func() (context.Context, context.CancelFunc) {
-			return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
-		}, context.DeadlineExceeded},
+		{"PreCanceledStart", context.Canceled},
+		{"PreExpiredStart", context.DeadlineExceeded},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -208,7 +201,17 @@ func testPortableErrorPaths(t *testing.T, factory LifecycleFactory) {
 			}()
 			workCtx = owner.workContext(t.Context())
 			require.NoError(t, owner.component.Initialize())
-			startCtx, cancelInput := tt.start()
+			var startCtx context.Context
+			var cancelInput context.CancelFunc
+			switch tt.name {
+			case "PreCanceledStart":
+				startCtx, cancelInput = context.WithCancel(context.Background())
+				cancelInput()
+			case "PreExpiredStart":
+				startCtx, cancelInput = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			default:
+				t.Fatalf("unsupported rejected-Start case %q", tt.name)
+			}
 			defer cancelInput()
 			require.ErrorIs(t, owner.component.Start(startCtx), tt.wantErr)
 			require.NoError(t, owner.stop(workCtx, false), "pre-action Start rejection must leave Stop safe")
