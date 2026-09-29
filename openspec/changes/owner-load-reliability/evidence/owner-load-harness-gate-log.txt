@@ -1,0 +1,28 @@
+Command: GRAPH_INDEX_OWNER_FILTER_FULL=0 ./scripts/run-integration-tests.sh ./processor/graph-index -run '^TestIntegration_OwnerFilterLoadHarness$'
+Exit: 0 (pre-correction predecessor source; full source snapshot not retained)
+[INTEGRATION] docker info latency: 0ms (integer-second clock fallback)
+[INTEGRATION] using cached nats:2.14-alpine (registry pull skipped)
+[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)
+ok  	github.com/c360studio/semstreams/processor/graph-index	5.839s
+[INTEGRATION] recorded latency distributions (submission order):
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=predicate-owner reps=5 p50=749.375µs p95=756.916µs p99=756.916µs max=760.041µs submitted=756.916µs,760.041µs,723.458µs,749.375µs,722.25µs
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=predicate-forward reps=5 p50=58.494666ms p95=58.904959ms p99=58.904959ms max=59.096333ms submitted=59.096333ms,58.904959ms,58.494666ms,57.128167ms,58.076583ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=name-owner reps=5 p50=786.291µs p95=1.059833ms p99=1.059833ms max=1.374958ms submitted=1.374958ms,1.059833ms,786.291µs,716.208µs,752.75µs
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=name-forward reps=5 p50=71.314375ms p95=71.426416ms p99=71.426416ms max=73.409041ms submitted=67.863458ms,69.753042ms,71.314375ms,73.409041ms,71.426416ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=incoming-owner reps=5 p50=832.083µs p95=914.625µs p99=914.625µs max=7.204041ms submitted=7.204041ms,832.083µs,914.625µs,785.542µs,831.25µs
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=incoming-forward reps=5 p50=66.758084ms p95=67.2535ms p99=67.2535ms max=68.783833ms submitted=65.291ms,68.783833ms,66.187209ms,66.758084ms,67.2535ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=predicate reps=5 p50=1.483042ms p95=1.519125ms p99=1.519125ms max=2.460291ms submitted=2.460291ms,1.428833ms,1.519125ms,1.294583ms,1.483042ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=name reps=5 p50=1.859417ms p95=2.03ms p99=2.03ms max=2.379792ms submitted=1.859417ms,1.789708ms,1.827541ms,2.03ms,2.379792ms
+test=TestIntegration_OwnerFilterLoadHarness/workers-4 phase=latency filter=incoming reps=5 p50=1.391125ms p95=2.467084ms p99=2.467084ms max=2.51775ms submitted=2.51775ms,2.467084ms,1.321625ms,1.391125ms,1.174875ms
+[INTEGRATION] tests complete
+
+Final source NATS-free proof command: go test -race ./processor/graph-index -run '^TestOwnerLoad(SeedQueuedFailureJoins|ConcurrentFailureJoinsActiveOwners|ConcurrentMissingResultAndHealthyOrder|ConvergeCancellationRetainsObservation|ConcurrentAdmissionCancellation|ConcurrentTerminalExpiryRetainsPrimary)$' -count=1
+Exit: 0
+ok  	github.com/c360studio/semstreams/processor/graph-index	1.541s
+
+Selected valid mutant command: go test -race ./processor/graph-index -run '^TestOwnerLoadConcurrentFailureJoinsActiveOwners$' -count=1
+Exit: 1 (expected explicit assertion)
+--- FAIL: TestOwnerLoadConcurrentFailureJoinsActiveOwners (0.00s)
+    owner_filter_load_helpers_unit_test.go:133: returned before sampler joined: list fixture=0 serial=0: designated listing failure
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/graph-index	0.448s
