@@ -115,13 +115,15 @@ Selected dependency: **github.com/nats-io/nats.go v1.52.0**. Paths below are rel
 | `jetstream/kv.go:1206–1210` | Watcher.Stop calls Subscription.Unsubscribe |
 | `nats.go:5181–5203` | Unsubscribe can synchronously delete a library-created consumer |
 | `js.go:1452–1467` | Subscription deletion invokes legacy DeleteConsumer without a supplied context option |
+| `jetstream/kv.go:1305` | KV WatchFiltered selects OrderedConsumer |
+| `js.go:2279` | resetOrderedConsumer launches asynchronous DeleteConsumer during recovery |
 | `jsm.go:606–615` | DeleteConsumer obtains context options and issues its API request |
 | `jsm.go:1781–1786` | With no operation context, it uses the default wait and creates a fresh Background timeout |
 | `js.go:3550` | API request calls `RequestWithContext` |
 
 This establishes a **reachable five-second listing expiry followed by an independently bounded five-second synchronous deletion request**. It is a source-supported explanation for approximately ten seconds, not proof that this execution selected that path.
 
-Other native Stop callers exist concurrently: the SDK forwarding goroutine defers watcher.Stop, and subscription setup installs a goroutine that calls Unsubscribe after context completion. The current observation does not identify which caller owned deletion.
+Other native Stop callers exist concurrently: the SDK forwarding goroutine defers watcher.Stop, and subscription setup installs a goroutine that calls Unsubscribe after context completion. A fourth native deletion origin is ordered-consumer recovery: resetOrderedConsumer launches `go js.DeleteConsumer(jsi.stream, jsi.consumer)` without waiting for its response. KV WatchFiltered explicitly selects OrderedConsumer, so this is a reachable same-class owner. This asynchronous deletion is not itself evidence of a synchronous return-path five-second wait. A deletion request alone cannot identify Stop as its owner; the current observation identifies no deletion owner.
 
 SDK SHA256s:
 
@@ -167,7 +169,7 @@ The current snapshot is not the native experiment's blocked-producer witness. Si
 
 1. **Construction versus collection:** Did ListKeysFiltered return a usable lister before the deadline? The wrapper's error text does not answer.
 2. **Return-path time:** How much elapsed time occurred before collection completed versus inside deferred Stop? No phase timestamps or Stop result were captured.
-3. **Deletion ownership:** Did the framework, SDK forwarding goroutine, or context-triggered unsubscriber issue a deletion request? Was a response received or did its independent request deadline expire?
+3. **Deletion ownership:** Did the framework, SDK forwarding goroutine, context-triggered unsubscriber, or asynchronous ordered-consumer recovery issue a deletion request? Was that request part of synchronous return-path cleanup or independent recovery, and was a response received or did its request deadline expire?
 4. **Snapshot progress:** If collection began, how many keys arrived, and did the native initial-snapshot marker arrive? The current result intentionally discards partial keys and records no progress count.
 5. **Earlier native blockage:** Were either native producer, a lock, consumer creation, delivery, flow control or ordered-consumer recovery stalled before the post-return snapshot? The snapshot cannot reconstruct that interval.
 6. **Server and transport cause:** No failure-time server/consumer state or request trace establishes CPU, storage, transport, consumer state or response loss as the trigger.
@@ -199,7 +201,7 @@ owner_filter_load_integration_test.go: 1–210, 250–323, 452–508
 owner_filter_load_helpers_test.go: full, then 1–55 and 18–36
 natsclient/kv.go: 20–80, 527–606
 SDK jetstream/kv.go: 501–575, 887–932, 1190–1360, 1420–1476, 1550–1583
-SDK js.go: 285–340, 1435–1478, 1770–1828, 1900–2070, 3533–3665
+SDK js.go: 285–340, 1435–1478, 1770–1828, 1900–2070, 2263–2284, 3533–3665
 SDK jsm.go: 590–635, 1762–1816
 SDK nats.go: 3578–3658, 5160–5220
 ```
@@ -207,3 +209,10 @@ SDK nats.go: 3578–3658, 5160–5220
 The `js.go:3568–3665` read was not the intended native delivery-loop file; the subsequent `nats.go:3578–3658` read supplied that evidence. No absence inference used the wrong range.
 
 Log reads covered 3380–3423 and 3420–3633. Mechanical Python inspection counted goroutine headers, checked the truncation marker and named SDK frames, and computed source/log SHA256s. No repository source, baseline, spec or task file was edited.
+
+## Independent review correction
+
+Round-one review identified the omitted ordered-consumer recovery deletion origin using the existing
+DeleteConsumer call-hierarchy query. The coordinator read SDK jetstream/kv.go:1305 and js.go:2263–2284 and
+materialized the narrow correction above. SDK hashes and repository source remain unchanged. No design or
+causal attribution was added.
