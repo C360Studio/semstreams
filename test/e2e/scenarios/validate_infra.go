@@ -493,6 +493,12 @@ func (s *TieredScenario) executeValidateRules(ctx context.Context, result *Resul
 	if finalMetrics.Evaluations <= 0 {
 		return fmt.Errorf("rule engine performed no evaluations")
 	}
+	if firings := int(finalMetrics.Firings); firings < s.config.MinRuleFirings {
+		return fmt.Errorf("rule firings %d < MinRuleFirings %d", firings, s.config.MinRuleFirings)
+	}
+	if actions := int(finalMetrics.ActionsDispatched); actions < s.config.MinActionsDispatched {
+		return fmt.Errorf("actions dispatched %d < MinActionsDispatched %d", actions, s.config.MinActionsDispatched)
+	}
 
 	return nil
 }

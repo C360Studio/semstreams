@@ -229,54 +229,6 @@ func (s *TieredScenario) validateTierMustNotRun(
 	return nil
 }
 
-// executeValidateRuleTransitions validates reactive workflow rule firings and actions (structural tier)
-func (s *TieredScenario) executeValidateRuleTransitions(ctx context.Context, result *Result) error {
-	// Get reactive workflow metrics using MetricsClient
-	ruleMetrics, err := s.metrics.ExtractRuleMetrics(ctx)
-	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to extract rule metrics: %v", err))
-		return nil
-	}
-
-	firings := int(ruleMetrics.Firings)
-	actionsDispatched := int(ruleMetrics.ActionsDispatched)
-	evaluations := int(ruleMetrics.Evaluations)
-
-	result.Metrics["rule_firings"] = firings
-	result.Metrics["actions_dispatched"] = actionsDispatched
-	result.Metrics["rule_evaluations"] = evaluations
-
-	// Validate minimum rule activity
-	violations := []string{}
-	if firings < s.config.MinRuleFirings {
-		violations = append(violations,
-			fmt.Sprintf("Rule firings: %d < %d (expected)", firings, s.config.MinRuleFirings))
-	}
-	if actionsDispatched < s.config.MinActionsDispatched {
-		violations = append(violations,
-			fmt.Sprintf("Actions dispatched: %d < %d (expected)", actionsDispatched, s.config.MinActionsDispatched))
-	}
-
-	result.Details["rule_transitions_validation"] = map[string]any{
-		"rule_firings":       firings,
-		"actions_dispatched": actionsDispatched,
-		"evaluations":        evaluations,
-		"min_firings":        s.config.MinRuleFirings,
-		"min_actions":        s.config.MinActionsDispatched,
-		"violations":         violations,
-		"validation_passed":  len(violations) == 0,
-		"reactive_behavior":  firings > 0 || actionsDispatched > 0,
-		"message":            fmt.Sprintf("Reactive workflow: %d firings, %d actions dispatched, %d evaluations", firings, actionsDispatched, evaluations),
-	}
-
-	if len(violations) > 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Reactive workflow validation issues: %v", violations))
-	}
-
-	return nil
-}
-
 // executeValidateEntityTriples validates that sensor entities have the expected triples
 // This helps diagnose rule trigger issues by showing exactly what triples are in ENTITY_STATES
 func (s *TieredScenario) executeValidateEntityTriples(ctx context.Context, result *Result) error {

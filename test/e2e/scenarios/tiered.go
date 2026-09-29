@@ -350,7 +350,6 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// These verify structural tier has NO ML inference
 		{"validate-zero-embeddings", s.executeValidateZeroEmbeddings, []string{"structural"}},
 		{"validate-zero-clusters", s.executeValidateZeroClusters, []string{"structural"}},
-		{"validate-rule-transitions", s.executeValidateRuleTransitions, []string{"structural"}},
 		{"validate-entity-triples", s.executeValidateEntityTriples, []string{"structural"}},
 		// === Tier 1+: Statistical capabilities (statistical + semantic) ===
 		{"verify-search-quality", s.executeVerifySearchQuality, []string{"statistical", "semantic"}},
@@ -404,7 +403,13 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// queryable and the semantic index ranks. The fusion.Fuse envelope third is
 		// re-homed to gh#391 (unreachable — no fusion route in configs/semantic.json).
 		{"validate-batch-read-reconciliation", s.executeValidateBatchReadReconciliation, []string{"semantic"}},
-		{"validate-anomaly-detection", s.executeValidateAnomalyDetection, []string{"statistical", "semantic"}},
+		// validate-anomaly-detection left the table (#1426, ruling D2): the anomaly
+		// engine is enable_anomaly_detection:false in every tier config since #237,
+		// so the stage graded a disabled engine. Its code stays until #620 decides
+		// the engine; re-enabling it means re-adding this row and asserting.
+		// With the anomaly engine off, zero virtual edges and zero auto-applied
+		// anomalies is the configured outcome (a print, not a failure); a failed
+		// read or auto-applied anomalies without edges fails (#1426).
 		{"validate-virtual-edges", s.executeValidateVirtualEdges, []string{"semantic"}},
 
 		// Wait for rule evaluations to stabilize before validating
@@ -412,6 +417,9 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		{"wait-for-rule-stabilization", s.executeWaitForRuleStabilization, nil},
 
 		// === Common validation stages (all tiers) ===
+		// validate-rules is the one home of the rule-activity thresholds
+		// (MinRuleFirings, MinActionsDispatched); its structural-only duplicate
+		// validate-rule-transitions was removed (#1426, ruling D3).
 		{"validate-rules", s.executeValidateRules, nil},
 		{"validate-metrics", s.executeValidateMetrics, nil},
 		{"verify-outputs", s.executeVerifyOutputs, nil},
