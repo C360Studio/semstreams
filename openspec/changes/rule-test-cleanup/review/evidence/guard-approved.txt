@@ -1,0 +1,5 @@
+=== RUN   TestCleanupRootGuard
+    cleanup_guard_test.go:191: cleanup root guard: 2360 sources, 2357 typed, 1361 sites, 976 exclusions
+--- PASS: TestCleanupRootGuard (7.32s)
+PASS
+ok  	github.com/c360studio/semstreams/test/testinfra	7.622s

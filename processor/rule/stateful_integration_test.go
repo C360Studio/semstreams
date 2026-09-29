@@ -16,17 +16,21 @@ import (
 // TestStatefulEvaluator_Integration tests the full integration with NATS KV
 func TestStatefulEvaluator_Integration(t *testing.T) {
 	// This test requires a running NATS server with JetStream enabled
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	// Create NATS test client with JetStream and KV enabled
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
-	defer testClient.Terminate()
 
 	// Create processor with default config
 	config := mustTestConfig(t, "rule-test-pack")
 	config.PackID = "stateful-integration-test"
 	processor, err := NewProcessor(testClient.Client, &config)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(ctx, t)
+	}
 	if err != nil {
 		t.Fatalf("Failed to create processor: %v", err)
 	}
@@ -38,10 +42,9 @@ func TestStatefulEvaluator_Integration(t *testing.T) {
 	}
 
 	// Start processor - this should initialize StateTracker
-	if err := processor.Start(ctx); err != nil {
+	if err := processor.Start(owner.startContext(ctx)); err != nil {
 		t.Fatalf("Failed to start processor: %v", err)
 	}
-	defer processor.Stop(context.Background())
 
 	// Verify StateTracker was initialized
 	if processor.stateTracker == nil {

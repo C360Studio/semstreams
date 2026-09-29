@@ -1,0 +1,13 @@
+{
+  "command": [
+    "task",
+    "check:push"
+  ],
+  "cwd": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams",
+  "pid": 94518,
+  "started_epoch": 1790708630.8823192,
+  "state": "completed",
+  "log": "/private/tmp/gh1428-check-push-final.log",
+  "exit_code": 0,
+  "elapsed_seconds": 858.046
+}

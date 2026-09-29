@@ -31,10 +31,12 @@ func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, testClient.Terminate())
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate watcher hardening test client: %v", err)
+		}
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	js, err := testClient.Client.JetStream()
 	require.NoError(t, err)
@@ -53,6 +55,11 @@ func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 		},
 	}
 	processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(ctx, t)
+	}
 	require.NoError(t, err)
 	processor.SetPlatform(component.PlatformMeta{Org: "c360", Platform: "platform1"})
 	require.NoError(t, processor.Initialize())
@@ -68,13 +75,7 @@ func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 	}
 	processor.mu.Unlock()
 
-	require.NoError(t, processor.Start(ctx))
-	stopped := false
-	t.Cleanup(func() {
-		if !stopped {
-			_ = processor.Stop(context.Background())
-		}
-	})
+	require.NoError(t, processor.Start(owner.startContext(ctx)))
 
 	require.Eventually(t, func() bool {
 		return counter.evaluated.Load() == 1
@@ -115,8 +116,7 @@ func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 		return counter.evaluated.Load() > 3
 	}, 350*time.Millisecond, 10*time.Millisecond, "retired generations must not evaluate")
 
-	require.NoError(t, processor.Stop(context.Background()))
-	stopped = true
+	require.NoError(t, owner.stop(ctx))
 	active, idle := processor.entityEvaluationFence.counts()
 	require.Zero(t, active)
 	require.Zero(t, idle)
