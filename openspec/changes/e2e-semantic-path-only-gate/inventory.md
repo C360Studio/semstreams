@@ -525,9 +525,10 @@ first_run_seconds=682, second_run_seconds=677.
 
 **Surprise: `test-http-gateway` dropped from ~56s to ~18-27s and `test-nl-path-intent` from ~30s to ~0.09s between
 the two runs** — both are pre-existing-vs-post-#1427 comparisons (PR #1427/#1426 changed which requests these stages
-send), not a measurement artifact; see Adjacent claims. The three named quality stages did **not** drop: they
-account for 9m39s-9m44s of the ~11m22s-11m17s total scenario wall clock in the newer run (`taskfiles/e2e/semantic.yml`
-desc already says "9.6 min of that its three quality stages").
+send), not a measurement artifact; see Adjacent claims. The three named quality stages did **not** drop: they account
+for 8m08s (cold) / 8m40s (warm) of the 9m25s / 8m57s scenario wall clock in the newer run (the 682 s / 677 s figures
+are whole `task e2e:semantic` times, compose up included; `taskfiles/e2e/semantic.yml:8`'s "9.6 min" is the older
+run's figure).
 
 ### D. Skip/shorten mechanisms per variant or env (item 4)
 
@@ -638,6 +639,19 @@ here beyond the pin):**
 - `docs/contributing/02-e2e-tests.md:354` — `PR; the per-PR gate is gh#1117, the nightly run gh#769.`
 
 ## Consumers
+
+Where a run's outcome is persisted (no config or `Details` reaches disk; the log is the observation surface):
+
+- `test/e2e/results/writer.go:32` — `type TestRunConfig struct {`
+- `test/e2e/scenarios/results.go:738` — `func SaveStructuredResults(tr *TieredResults, outputDir string) (string, error) {`
+- `cmd/e2e/main.go:546` — `	if flags.outputDir != "" - `cmd/e2e/main.go:545` — `	if flags.outputDir != "" && result.Structured != nil {`- `cmd/e2e/main.go:545` — `	if flags.outputDir != "" && result.Structured != nil {` result.Structured != nil {`
+
+`test-http-gateway`'s only assertion, and the zero-entity fallback it cannot see:
+
+- `test/e2e/scenarios/validate_infra.go:388` — `	hitCount := len(gqlResp.Data.GlobalSearch.Entities)`
+- `processor/graph-query/graphrag.go:924` — `		entities, loadErr := c.loadEntities(ctx, entityIDs)`
+- `processor/graph-query/graphrag.go:1391` — `			Strategy:   "graphrag",`
+- `processor/graph-query/graphrag.go:898` — `			labels, labelErr := c.resolveEntityLabels(ctx, entityIDs)`
 
 Readers of `getStagesForVariant` / the stage table / `TieredConfig.Variant` / the `--variant` CLI flag:
 

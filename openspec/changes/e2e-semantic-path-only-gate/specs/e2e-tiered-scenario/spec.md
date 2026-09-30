@@ -8,7 +8,7 @@ Every stage the tiered scenario runs in a per-PR variant MUST return a non-nil e
 to detect occurs, so that `Result.Success` is false and the e2e binary exits 1. A `Result.Warnings` entry SHALL NOT be
 a per-PR stage's only record of that outcome. A stage whose detected outcome is owned by a model's latency or answer
 quality, or by an engine the tier's configuration disables, SHALL leave the per-PR variant's stage table (by its
-`variants` list, by its row, or — for the semantic variant's path-only run — by its `quality` marker) with the reason
+`variants` list, by its row, or — for the semantic variant's path-only run — by the stage table's declared quality set) with the reason
 recorded in the stage-table comment, rather than warn.
 
 Recorder exception: a stage, or one arm of a stage, declared RECORDER in its stage-table comment records its
@@ -36,26 +36,30 @@ A recorder SHALL NOT be added without the declaration.
 
 ## ADDED Requirements
 
-### Requirement: The semantic path-only run skips its quality stages and records them as skipped
+### Requirement: The semantic path-only run skips its declared quality stages and logs them as skipped
 
-When `TieredConfig.PathOnly` is set (`--path-only`, or a non-empty `E2E_PATH_ONLY`), the tiered scenario MUST omit from
-the semantic variant's stage list every row marked `quality` in the stage table and no other row, record the omitted
-names in `Result.Details["path_only_skipped_stages"]` with the reason in `Result.Details["path_only_skip_reason"]`, and
-write no `<stage>_duration_ms` metric for an omitted stage. The marked rows SHALL be `validate-llm-enhancement`,
-`validate-thematic-answer-eval`, and `validate-globalsearch-known-answer`. With `PathOnly` unset the stage list SHALL be
-the variant's full list.
+When `TieredConfig.PathOnly` is set (`--path-only`, or a non-empty `E2E_PATH_ONLY`), the tiered scenario MUST omit from the stage list every row the stage table declares quality and no other row, print one `[PATH-ONLY] skipping N quality stages: <names>` line before the first stage runs, and write no `<stage>_duration_ms` metric for an omitted stage. The declared rows SHALL be `validate-llm-enhancement`, `validate-thematic-answer-eval`, and `validate-globalsearch-known-answer`, all semantic-only, so the structural and statistical lists are unchanged under `PathOnly`. With `PathOnly` unset the stage list SHALL be the variant's full list.
 
-#### Scenario: The path-only run skips exactly the marked stages
+#### Scenario: The path-only run skips exactly the declared stages
 - **GIVEN** `--variant semantic` with `PathOnly` set
 - **WHEN** the stage list is built
-- **THEN** it is the full semantic list minus the three marked rows, in the same order, and the run prints `[PATH-ONLY] skipping 3 quality stages` naming them.
+- **THEN** it is the full semantic list minus the three declared rows, in the same order, the run prints `[PATH-ONLY] skipping 3 quality stages` naming them, and the stage counter reads `[n/41]`.
 
 #### Scenario: A skipped stage is recorded as skipped, never as passed
 - **GIVEN** a path-only run that completes
-- **WHEN** the results JSON is read
-- **THEN** `details.path_only_skipped_stages` lists the three names, `config.path_only` is true, and no `validate-thematic-answer-eval_duration_ms` (or sibling) metric exists.
+- **WHEN** its log and metrics are read
+- **THEN** no `completed in` line and no `validate-thematic-answer-eval_duration_ms` (or sibling) metric exists for a skipped stage, and the `[PATH-ONLY]` line names it.
 
 #### Scenario: The flag unset is the full variant
-- **GIVEN** `--variant semantic` with `PathOnly` unset and `E2E_PATH_ONLY` empty
+- **GIVEN** any `--variant` with `PathOnly` unset and `E2E_PATH_ONLY` empty
 - **WHEN** the stage list is built
-- **THEN** it is byte-identical to the list before this change (44 rows), and `details.path_only_skipped_stages` is absent.
+- **THEN** it has the same names in the same order as before this change (44 rows for semantic), and no `[PATH-ONLY]` line is printed.
+
+### Requirement: The gateway path probe fails on a served but empty globalSearch
+
+`test-http-gateway` MUST send `includeSummaries: false` and `summarizeThreshold: 0`, and MUST return a non-nil error when the served response's `strategy` is not `graphrag` or its `entities` list is empty, because the community-text fallback answers `strategy: graphrag` with zero entities and a non-contract entity-load failure falls through to it.
+
+#### Scenario: The gateway serves zero entities
+- **GIVEN** a `globalSearch` response with `strategy: graphrag` and no entities
+- **WHEN** the stage evaluates it
+- **THEN** the stage returns an error stating the gateway returned no entities, and `Result.Error` names the stage.
