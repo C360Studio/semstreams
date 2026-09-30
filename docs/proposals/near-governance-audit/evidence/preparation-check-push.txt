@@ -1,0 +1,246 @@
+task: [build:default] go build -o bin/semstreams ./cmd/semstreams
+task: [build:default] echo "Built bin/semstreams"
+Built bin/semstreams
+task: [lint:default] go vet ./...
+task: [lint:default] go fmt ./...
+task: [lint:default] go tool revive -config revive.toml -formatter friendly ./...
+task: [lint:test-ports] echo "running fixed-port lint guard (scripts/lint-test-ports.sh)"
+running fixed-port lint guard (scripts/lint-test-ports.sh)
+task: [lint:test-ports] bash scripts/lint-test-ports.sh
+task: [lint:request-guard] go test ./test/natsclient/
+ok  	github.com/c360studio/semstreams/test/natsclient	0.636s
+task: [check:push] go vet -tags=integration ./...
+task: [check:push] go vet -tags=live_llm ./...
+task: [check:push] go vet -tags=e2e_process_barrier ./cmd/semstreams ./test/e2e/...
+task: [schema:generate] mkdir -p schemas specs
+task: [schema:generate] go run ./cmd/openapi-generator -graph-research -otel -out ./schemas -openapi ./specs/openapi.v3.yaml
+2026/09/24 11:52:44 OpenAPI Generator
+2026/09/24 11:52:44   Registry: ./componentregistry
+2026/09/24 11:52:44   Output dir: ./schemas
+2026/09/24 11:52:44   OpenAPI spec: ./specs/openapi.v3.yaml
+2026/09/24 11:52:44 Found 33 component types
+2026/09/24 11:52:44 ⚠️  Meta-schema not found, skipping validation: meta-schema not found in any of: [./specs/component-schema-meta.json ../specs/component-schema-meta.json ../../specs/component-schema-meta.json]
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/graph-index-temporal.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/graph-embedding.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/json_map.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/websocket_input.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/agentic-loop.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/file.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/json_filter.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/graph-index.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/http.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/graph-index-spatial.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/gated-dag.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/httppost.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/rule-processor.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/research-graph-classify.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/otel-exporter.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/objectstore.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/agentic-tools.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/lifecycle-gateway.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/graph-gateway.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/file_input.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/json_generic.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/websocket.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/research-graph-route.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/agentic-governance.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/research-graph-execute.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/graph-ingest.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/graph-query.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/research-graph-assess.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/research-graph-synthesize.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/graph-clustering.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/agentic-dispatch.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/agentic-model.v1.json
+2026/09/24 11:52:44   ✓ Generated component schema: schemas/udp.v1.json
+2026/09/24 11:52:44 Found 5 service OpenAPI specs
+2026/09/24 11:52:44   ✓ Generated OpenAPI spec: ./specs/openapi.v3.yaml
+2026/09/24 11:52:44 ✅ OpenAPI generation complete!
+task: [schema:generate] echo "Schemas and OpenAPI spec generated"
+Schemas and OpenAPI spec generated
+task: [schema:check-changes] git diff --exit-code schemas/ specs/openapi.v3.yaml || (echo "Schema/OpenAPI files changed! Run 'task schema:generate' and commit."; exit 1)
+task: [check:push] go test ./test/contract/...
+ok  	github.com/c360studio/semstreams/test/contract	4.482s
+task: [check:push] go test -race ./...
+?   	github.com/c360studio/semstreams	[no test files]
+ok  	github.com/c360studio/semstreams/agentic	7.908s
+ok  	github.com/c360studio/semstreams/agentic/agentrun	(cached)
+ok  	github.com/c360studio/semstreams/agentic/identity	(cached)
+ok  	github.com/c360studio/semstreams/agentic/research	(cached)
+ok  	github.com/c360studio/semstreams/cmd/detonate-injections	(cached)
+ok  	github.com/c360studio/semstreams/cmd/e2e	(cached)
+ok  	github.com/c360studio/semstreams/cmd/e2e-semstreams	(cached)
+ok  	github.com/c360studio/semstreams/cmd/e2e-semstreams/fixtures	(cached)
+ok  	github.com/c360studio/semstreams/cmd/e2e-semstreams/mission	(cached)
+?   	github.com/c360studio/semstreams/cmd/entity-id-audit	[no test files]
+?   	github.com/c360studio/semstreams/cmd/measure-injection-classifier	[no test files]
+ok  	github.com/c360studio/semstreams/cmd/openapi-generator	(cached)
+?   	github.com/c360studio/semstreams/cmd/predicate-audit	[no test files]
+?   	github.com/c360studio/semstreams/cmd/predicate-test-audit	[no test files]
+ok  	github.com/c360studio/semstreams/cmd/semstreams	(cached)
+ok  	github.com/c360studio/semstreams/component	(cached)
+ok  	github.com/c360studio/semstreams/component/flowgraph	(cached)
+ok  	github.com/c360studio/semstreams/componentregistry	(cached)
+ok  	github.com/c360studio/semstreams/composition	(cached)
+ok  	github.com/c360studio/semstreams/composition/cli	(cached)
+ok  	github.com/c360studio/semstreams/config	(cached)
+ok  	github.com/c360studio/semstreams/examples/processors/document	(cached)
+ok  	github.com/c360studio/semstreams/examples/processors/iot_sensor	(cached)
+ok  	github.com/c360studio/semstreams/examples/processors/weather_station	(cached)
+?   	github.com/c360studio/semstreams/frameworkadapters/otel	[no test files]
+ok  	github.com/c360studio/semstreams/frameworkcapabilities/graphresearch	(cached)
+ok  	github.com/c360studio/semstreams/frameworkcapabilities/rulepacks	(cached)
+ok  	github.com/c360studio/semstreams/gateway	(cached)
+ok  	github.com/c360studio/semstreams/gateway/graph-gateway	1.859s
+ok  	github.com/c360studio/semstreams/gateway/http	(cached)
+ok  	github.com/c360studio/semstreams/gateway/lifecycle-gateway	(cached)
+ok  	github.com/c360studio/semstreams/governance	(cached)
+ok  	github.com/c360studio/semstreams/graph	(cached)
+ok  	github.com/c360studio/semstreams/graph/clustering	(cached)
+ok  	github.com/c360studio/semstreams/graph/embedding	(cached)
+ok  	github.com/c360studio/semstreams/graph/geo/geojson	(cached)
+ok  	github.com/c360studio/semstreams/graph/inference	(cached)
+ok  	github.com/c360studio/semstreams/graph/llm	(cached)
+ok  	github.com/c360studio/semstreams/graph/query	(cached)
+ok  	github.com/c360studio/semstreams/graph/readiness	(cached)
+ok  	github.com/c360studio/semstreams/graph/structural	(cached)
+ok  	github.com/c360studio/semstreams/health	(cached)
+ok  	github.com/c360studio/semstreams/input/file	(cached)
+ok  	github.com/c360studio/semstreams/input/http	(cached)
+ok  	github.com/c360studio/semstreams/input/udp	(cached)
+ok  	github.com/c360studio/semstreams/input/websocket	(cached)
+ok  	github.com/c360studio/semstreams/internal/agentprofiles	(cached)
+ok  	github.com/c360studio/semstreams/internal/agentterminal	(cached)
+ok  	github.com/c360studio/semstreams/internal/bootstrapobservability	(cached)
+?   	github.com/c360studio/semstreams/internal/componentadmission	[no test files]
+ok  	github.com/c360studio/semstreams/internal/deliverylane	(cached)
+?   	github.com/c360studio/semstreams/internal/e2eslowconsumer	[no test files]
+ok  	github.com/c360studio/semstreams/internal/entityidaudit	21.750s
+ok  	github.com/c360studio/semstreams/internal/graphmutation	(cached)
+ok  	github.com/c360studio/semstreams/internal/lifecyclecleanup	(cached)
+ok  	github.com/c360studio/semstreams/internal/logforwarderpolicy	(cached)
+?   	github.com/c360studio/semstreams/internal/looptoken	[no test files]
+ok  	github.com/c360studio/semstreams/internal/maxdelivery	(cached)
+ok  	github.com/c360studio/semstreams/internal/modelresolveaudit	7.044s
+ok  	github.com/c360studio/semstreams/internal/portgrammarcontrol	10.816s
+ok  	github.com/c360studio/semstreams/internal/predicateaudit	(cached)
+ok  	github.com/c360studio/semstreams/internal/semantictest	(cached)
+ok  	github.com/c360studio/semstreams/message	(cached)
+ok  	github.com/c360studio/semstreams/metric	(cached)
+ok  	github.com/c360studio/semstreams/model	(cached)
+ok  	github.com/c360studio/semstreams/model/wire	(cached)
+ok  	github.com/c360studio/semstreams/model/wire/responses	(cached)
+ok  	github.com/c360studio/semstreams/natsclient	29.253s
+ok  	github.com/c360studio/semstreams/output/file	(cached)
+ok  	github.com/c360studio/semstreams/output/httppost	(cached)
+ok  	github.com/c360studio/semstreams/output/otel	(cached)
+ok  	github.com/c360studio/semstreams/output/websocket	(cached)
+ok  	github.com/c360studio/semstreams/payloadbuiltins	(cached)
+ok  	github.com/c360studio/semstreams/payloadregistry	(cached)
+ok  	github.com/c360studio/semstreams/persona	(cached)
+ok  	github.com/c360studio/semstreams/pkg/acme	(cached)
+ok  	github.com/c360studio/semstreams/pkg/buffer	(cached)
+ok  	github.com/c360studio/semstreams/pkg/cache	(cached)
+ok  	github.com/c360studio/semstreams/pkg/context	(cached)
+ok  	github.com/c360studio/semstreams/pkg/dispatch	(cached)
+ok  	github.com/c360studio/semstreams/pkg/errs	(cached)
+ok  	github.com/c360studio/semstreams/pkg/fusion	(cached)
+ok  	github.com/c360studio/semstreams/pkg/fusion/fusionnats	(cached)
+ok  	github.com/c360studio/semstreams/pkg/fusion/fusionvocab	(cached)
+ok  	github.com/c360studio/semstreams/pkg/fusion/lensregistry	(cached)
+ok  	github.com/c360studio/semstreams/pkg/gateddag	(cached)
+ok  	github.com/c360studio/semstreams/pkg/graphview	(cached)
+ok  	github.com/c360studio/semstreams/pkg/lifecycle	(cached)
+ok  	github.com/c360studio/semstreams/pkg/logging	(cached)
+?   	github.com/c360studio/semstreams/pkg/platform	[no test files]
+ok  	github.com/c360studio/semstreams/pkg/projection	(cached)
+ok  	github.com/c360studio/semstreams/pkg/projection/contract	(cached)
+ok  	github.com/c360studio/semstreams/pkg/resource	(cached)
+ok  	github.com/c360studio/semstreams/pkg/retry	(cached)
+ok  	github.com/c360studio/semstreams/pkg/revlag	(cached)
+ok  	github.com/c360studio/semstreams/pkg/rulepack	(cached)
+?   	github.com/c360studio/semstreams/pkg/security	[no test files]
+ok  	github.com/c360studio/semstreams/pkg/text	(cached)
+ok  	github.com/c360studio/semstreams/pkg/timestamp	(cached)
+ok  	github.com/c360studio/semstreams/pkg/tlsutil	(cached)
+ok  	github.com/c360studio/semstreams/pkg/types	(cached)
+ok  	github.com/c360studio/semstreams/pkg/worker	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-detonator	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-dispatch	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-governance	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-governance/injection_corpus	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-loop	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/internal/loopbucket	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/lessonmatch	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-loop/prompt	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-model	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-tools	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-tools/executors	(cached)
+ok  	github.com/c360studio/semstreams/processor/agentic-tools/runner	(cached)
+ok  	github.com/c360studio/semstreams/processor/gated-dag	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-clustering	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-embedding	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-index	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-index-spatial	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-index-temporal	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-ingest	(cached)
+ok  	github.com/c360studio/semstreams/processor/graph-query	(cached)
+ok  	github.com/c360studio/semstreams/processor/json_filter	(cached)
+ok  	github.com/c360studio/semstreams/processor/json_generic	(cached)
+ok  	github.com/c360studio/semstreams/processor/json_map	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-assess	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-classify	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-execute	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-llmwrap	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-route	(cached)
+ok  	github.com/c360studio/semstreams/processor/research-graph-synthesize	(cached)
+ok  	github.com/c360studio/semstreams/processor/rule	7.850s
+ok  	github.com/c360studio/semstreams/processor/rule/expression	(cached)
+ok  	github.com/c360studio/semstreams/service	(cached)
+?   	github.com/c360studio/semstreams/storage	[no test files]
+ok  	github.com/c360studio/semstreams/storage/objectstore	(cached)
+ok  	github.com/c360studio/semstreams/storage/storeregistry	(cached)
+ok  	github.com/c360studio/semstreams/test	(cached)
+ok  	github.com/c360studio/semstreams/test/compat/semteams	(cached)
+ok  	github.com/c360studio/semstreams/test/contract	25.211s
+ok  	github.com/c360studio/semstreams/test/e2e/client	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/config	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/harness/lessoncuration	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/harness/milestoneprobe	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/harness/processbarrier	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/mock	(cached)
+?   	github.com/c360studio/semstreams/test/e2e/mock/cmd	[no test files]
+?   	github.com/c360studio/semstreams/test/e2e/results	[no test files]
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/agentic	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/anomaly	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/community	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools	(cached)
+?   	github.com/c360studio/semstreams/test/e2e/scenarios/deep-research	[no test files]
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/lessons	(cached)
+?   	github.com/c360studio/semstreams/test/e2e/scenarios/lifecycle	[no test files]
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/ops	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/research-graph	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/search	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/stages	(cached)
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios/throughput	(cached)
+?   	github.com/c360studio/semstreams/test/fixtures/corecomposition	[no test files]
+ok  	github.com/c360studio/semstreams/test/natsclient	8.281s
+ok  	github.com/c360studio/semstreams/test/release	(cached)
+ok  	github.com/c360studio/semstreams/test/testinfra	23.867s
+?   	github.com/c360studio/semstreams/testutil	[no test files]
+ok  	github.com/c360studio/semstreams/types	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary/agentic	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary/bfo	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary/builtins	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary/cco	(cached)
+?   	github.com/c360studio/semstreams/vocabulary/examples	[no test files]
+ok  	github.com/c360studio/semstreams/vocabulary/export	(cached)
+ok  	github.com/c360studio/semstreams/vocabulary/governance	(cached)
+?   	github.com/c360studio/semstreams/vocabulary/rulepacks	[no test files]
+task: [test:integration] scripts/run-integration-tests.sh
+[INTEGRATION] host lock is busy and no wait budget was requested: /tmp/semstreams-integration.lock
+[INTEGRATION] lock owner host=Cobys-MacBook-Pro.local pid=42141 elapsed=230s command=scripts/run-integration-tests.sh
+task: Failed to run task "check:push": task: Failed to run task "test:integration": exit status 1

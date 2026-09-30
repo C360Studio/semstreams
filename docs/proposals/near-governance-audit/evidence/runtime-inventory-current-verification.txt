@@ -1,0 +1,4 @@
+task: [inventory:verify] scripts/inventory-verify.sh /private/tmp/semstreams-human-governance-inventory.md
+changed since base (c4a79fd5..HEAD):
+  (none)
+pins=966 ok=966 moved=0 ambiguous=0 drift=0 malformed=0 unparsed=0
