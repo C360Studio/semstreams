@@ -19,9 +19,9 @@ depend on that branch, as the supplemental mutation demonstrates.
 | Existing cleanup classifications only | cleanup fingerprint record; all 273 entries unchanged, 96 resolutions |
 | Actual native delivery closure after five-second expiry | evidence/repair/verification/raw-logs.zip and native-result.md |
 
-The active task ledger owns remaining gates. The ordinary RED, preparation corrections, survived mutation, final
+The task ledger and evidence/repair/preflight.md record completed local gates and final reconciliation. The ordinary RED, preparation corrections, survived mutation, final
 mutants, exact restorations, source reviews and native result are retained under evidence/repair and review.
 Earlier source packets are historical checkpoints; the final-source packet identifies final Go bytes.
 
-The historical CI stall and fifteen-second client-drain failure remain unattributed. #1421 stays open and #1435 stays
-draft while remaining verification proceeds. The #1432 waiver does not transfer. No new issue is filed by this unit.
+The historical CI stall and fifteen-second client-drain failure remain unattributed. #1421 stays open; hosted checks and the unresolved-flake landing hold remain
+separate from completed local verification. The #1432 waiver does not transfer. No new issue is filed by this unit.

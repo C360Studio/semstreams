@@ -22,9 +22,12 @@
 - [x] Remove the production completion obligation in a controlled mutation; retain intended failure and exact restore.
 - [x] Obtain independent implementation review covering source, failure propagation and native validation ownership.
 - [x] Run and record one focused post-repair native validation with real time, through the canonical runner.
-- [ ] HOLD: complete applicable final gates and record actual durations and remaining evidence limits.
-- [ ] Complete final task/spec reconciliation, archive as final content commit and obtain narrow archive review.
+- [x] Complete applicable final gates and record actual durations and remaining evidence limits.
+- [x] Reconcile task/spec evidence and prepare the final archive/spec sync for narrow review.
 
 The completed diagnostic permits no second experimental pass. The post-repair native regression is a separate
 validation of changed production behavior. A failure stops progression to broad gates until its evidence is resolved.
 No task asserts hosted CI approval, issue closure or a transferable merge waiver.
+
+The final task records branch-checkable archive preparation. The narrow post-commit archive review and hosted
+checks remain external landing gates under the shared protocol, not claims of issue closure or merge authorization.

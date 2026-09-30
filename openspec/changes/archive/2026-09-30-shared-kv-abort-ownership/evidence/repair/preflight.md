@@ -26,3 +26,19 @@ only these two annotation coordinates differ in the current graph-ingest source.
 
 A new full gate remains required after independent correction review. This is a corrected deterministic failure,
 not a retry of the unresolved hosted flake.
+
+## Corrected full gate
+
+The full `task check:push` passed on clean `4d55ebf0861e4f48de34bcff06785f1876edb0c7` from 2026-09-30T04:53:05.200465+00:00 through
+2026-09-30T05:07:48.183741+00:00, exit 0, in 882.953 seconds. All eight recorded source hashes were unchanged.
+Exact output and active process-monitor snapshots are in verification/final-gate-logs.zip; metadata and SHA-256
+manifest are adjacent. The command ran lint/build/tagged vet/schema drift/contract checks, the ordinary race lane
+and the canonical additive integration lane. Ordinary cached results remain labeled cached in the raw log.
+
+The integration lane passed natsclient in 94.174 seconds, graph-index in 42.359 seconds, graph-ingest in 51.127 seconds,
+and graph-query in 12.836 seconds. These are package durations, not individual regression timings. The separate
+focused native run retains its exact 12.220-second result. No local E2E run or historical-cause attribution is claimed.
+
+The earlier deterministic gate failure remains retained. The completed gate supports this revision's verification;
+it does not waive the known unresolved hosted failure or close #1421. Final archive/spec reconciliation and its
+narrow independent review follow this successful gate.

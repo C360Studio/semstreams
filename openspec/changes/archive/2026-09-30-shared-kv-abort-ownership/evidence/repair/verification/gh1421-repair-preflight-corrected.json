@@ -1,0 +1,37 @@
+{
+  "label": "gh1421-repair-preflight-corrected",
+  "command": [
+    "task",
+    "check:push"
+  ],
+  "cwd": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams",
+  "started_utc": "2026-09-30T04:53:05.200465+00:00",
+  "ended_utc": "2026-09-30T05:07:48.183741+00:00",
+  "duration_seconds": 882.953,
+  "exit_status": 0,
+  "source_sha256_before": {
+    "natsclient/kv.go": "99fdbb314007561c460698b91cc770a07d8590331f50bdf3a3e2864582b88ace",
+    "natsclient/kv_watcher_ownership_test.go": "5c86c18d3b39d587a01534caa099d05d39ec064777adc33fc301367e0826b37a",
+    "natsclient/kv_watcher_ownership_integration_test.go": "e1a81df39edc53b78a2b733fdd6319ba30ac29799ac8bd675117fae1ceec0e9f",
+    "processor/graph-index/owner_filter_load_observer_test.go": "f70308a9839fd7933c60a636cec5ee1bb145c315693d5aa96140ec2355e822c7",
+    "processor/graph-index/owner_filter_load_integration_test.go": "640d291e86c0febd4505b544a270c426acf6cdf54f19322f25b1a6984b6ce9f0",
+    "processor/graph-index/component_test.go": "a748b4a665e772cc1b19fecd4c644f61f80978c996ae05ee76ab6b19ea04df57",
+    "processor/graph-ingest/component_test.go": "9f9fea7dfc27d5e891f4b44713cf0524c4530dafe5399e4d219fade344e58285",
+    "test/testinfra/cleanup_baseline.json": "83e50bdd44f8e5d909acc274898b66e3570342634f5d0a1003508384ebb165ed"
+  },
+  "source_sha256_after": {
+    "natsclient/kv.go": "99fdbb314007561c460698b91cc770a07d8590331f50bdf3a3e2864582b88ace",
+    "natsclient/kv_watcher_ownership_test.go": "5c86c18d3b39d587a01534caa099d05d39ec064777adc33fc301367e0826b37a",
+    "natsclient/kv_watcher_ownership_integration_test.go": "e1a81df39edc53b78a2b733fdd6319ba30ac29799ac8bd675117fae1ceec0e9f",
+    "processor/graph-index/owner_filter_load_observer_test.go": "f70308a9839fd7933c60a636cec5ee1bb145c315693d5aa96140ec2355e822c7",
+    "processor/graph-index/owner_filter_load_integration_test.go": "640d291e86c0febd4505b544a270c426acf6cdf54f19322f25b1a6984b6ce9f0",
+    "processor/graph-index/component_test.go": "a748b4a665e772cc1b19fecd4c644f61f80978c996ae05ee76ab6b19ea04df57",
+    "processor/graph-ingest/component_test.go": "9f9fea7dfc27d5e891f4b44713cf0524c4530dafe5399e4d219fade344e58285",
+    "test/testinfra/cleanup_baseline.json": "83e50bdd44f8e5d909acc274898b66e3570342634f5d0a1003508384ebb165ed"
+  },
+  "log_sha256": "5344d87e83a6048fa239d224aa2c56e540043f25809397aefb9cd14629356ff4",
+  "git_head": "4d55ebf0861e4f48de34bcff06785f1876edb0c7",
+  "git_branch": "codex/gh1421-listing-expiry-recurrence",
+  "git_status_porcelain": "",
+  "source_unchanged": true
+}
