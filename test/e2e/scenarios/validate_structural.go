@@ -13,8 +13,7 @@ import (
 // executeVerifyIndexPopulation validates that all 7 core indexes are populated
 func (s *TieredScenario) executeVerifyIndexPopulation(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping index population verification")
-		return nil
+		return fmt.Errorf("NATS client not available for index population verification")
 	}
 
 	// Core indexes that should be populated
@@ -79,9 +78,10 @@ func (s *TieredScenario) executeVerifyIndexPopulation(ctx context.Context, resul
 		"message":        fmt.Sprintf("Populated %d/%d indexes", populatedCount, len(indexes)),
 	}
 
+	// An empty (or unreadable) required index is the outcome this stage exists to
+	// detect (#1426); a count read error lands in emptyRequired and in the details.
 	if len(emptyRequired) > 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Required indexes empty: %v", emptyRequired))
+		return fmt.Errorf("required indexes empty or unreadable: %v", emptyRequired)
 	}
 
 	return nil
