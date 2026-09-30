@@ -180,8 +180,9 @@ func (e *LoopExecutionEntity) Schema() message.Type {
 }
 
 // Validate implements message.Payload and IS the spawn-identity writer's
-// contract — no stronger: identity, a non-nil spawning TaskMessage, and at
-// least one spawn-identity fact to emit. The writer never required a full
+// contract — no stronger: identity, a non-nil spawning TaskMessage, parent,
+// reply-to and run references that form entity IDs when present, and at least
+// one spawn-identity fact to emit. The writer never required a full
 // task request (Triples() emits role, task, parent, run, reply-to, workflow,
 // user, and description each only when present), so neither does the payload;
 // TaskMessage.Validate remains the contract of a task ARRIVING as a task
@@ -195,8 +196,9 @@ func (e *LoopExecutionEntity) Validate() error {
 	if e.Task == nil {
 		return errors.New("task is required (the spawning TaskMessage)")
 	}
-	// A malformed parent or reply-to reference is a writer-contract violation:
-	// refuse it loudly here rather than let Triples() omit it silently.
+	// A malformed parent, reply-to or run reference is a writer-contract
+	// violation: refuse it loudly here rather than let Triples() omit it
+	// silently.
 	if e.Task.ParentLoopID != "" {
 		if _, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.Task.ParentLoopID); err != nil {
 			return fmt.Errorf("parent_loop_id: %w", err)
@@ -205,6 +207,11 @@ func (e *LoopExecutionEntity) Validate() error {
 	if e.Task.InReplyTo != "" {
 		if _, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.Task.InReplyTo); err != nil {
 			return fmt.Errorf("in_reply_to: %w", err)
+		}
+	}
+	if e.Task.RunID != "" {
+		if _, err := TryChainExecutionEntityID(e.Org, e.Platform, e.Task.RunID); err != nil {
+			return fmt.Errorf("run_id: %w", err)
 		}
 	}
 	if len(e.Triples()) == 0 {

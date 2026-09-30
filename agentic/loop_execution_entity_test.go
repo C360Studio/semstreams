@@ -410,6 +410,13 @@ func TestLoopExecutionEntity_MalformedReferenceOmitsTriple(t *testing.T) {
 			task:    agentic.TaskMessage{TaskID: "t", Role: "r", ParentLoopID: "parent-loop", InReplyTo: "asking.loop"},
 			omitted: agvocab.LoopReplyTo,
 		},
+		{
+			name: "dotted run",
+			task: agentic.TaskMessage{
+				TaskID: "t", Role: "r", ParentLoopID: "parent-loop", InReplyTo: "asking-loop", RunID: "run.dotted",
+			},
+			omitted: agvocab.LoopRunEntityID,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -441,6 +448,7 @@ func TestLoopExecutionEntity_ValidateRefusesOnlyMalformedReference(t *testing.T)
 	for name, task := range map[string]agentic.TaskMessage{
 		"parent only":   {ParentLoopID: "parent.loop"},
 		"reply-to only": {InReplyTo: "asking.loop"},
+		"run only":      {RunID: "run.dotted"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := &agentic.LoopExecutionEntity{Org: "acme", Platform: "ops", LoopID: "loop-1", Task: &task}
