@@ -1,0 +1,150 @@
+{
+  "provenance": "Selected retained GitHub job metadata supplied by the sister assessment; example run 36607829846 independently re-read through gh run view.",
+  "source_sha256": "a50669bc3c2ac6a5ddf0be168fc9a773e4e707a29803071d4aaa07998063254e",
+  "runs": [
+    {
+      "run_id": 36607829846,
+      "url": "https://github.com/C360Studio/semstreams/actions/runs/36607829846",
+      "sha_prefix": "3f0aff4f",
+      "jobs": {
+        "Test": {
+          "id": 109541292280,
+          "name": "Test",
+          "result": "success",
+          "started": "2026-09-29T17:50:54Z",
+          "completed": "2026-09-29T18:10:21Z",
+          "failed_steps": []
+        },
+        "Lint": {
+          "id": 109541292312,
+          "name": "Lint",
+          "result": "failure",
+          "started": "2026-09-29T17:50:54Z",
+          "completed": "2026-09-29T17:53:24Z",
+          "failed_steps": [
+            "Validate OpenSpec changes and specs (strict)"
+          ]
+        }
+      },
+      "test_seconds": 1167,
+      "test_seconds_after_lint_failure": 1017
+    },
+    {
+      "run_id": 36604285317,
+      "url": "https://github.com/C360Studio/semstreams/actions/runs/36604285317",
+      "sha_prefix": "e052742a",
+      "jobs": {
+        "Test": {
+          "id": 109529211409,
+          "name": "Test",
+          "result": "success",
+          "started": "2026-09-29T17:20:57Z",
+          "completed": "2026-09-29T17:39:53Z",
+          "failed_steps": []
+        },
+        "Lint": {
+          "id": 109529211484,
+          "name": "Lint",
+          "result": "failure",
+          "started": "2026-09-29T17:20:59Z",
+          "completed": "2026-09-29T17:23:14Z",
+          "failed_steps": [
+            "Validate OpenSpec changes and specs (strict)"
+          ]
+        }
+      },
+      "test_seconds": 1136,
+      "test_seconds_after_lint_failure": 999
+    },
+    {
+      "run_id": 36602133472,
+      "url": "https://github.com/C360Studio/semstreams/actions/runs/36602133472",
+      "sha_prefix": "b88f7441",
+      "jobs": {
+        "Test": {
+          "id": 109521878018,
+          "name": "Test",
+          "result": "success",
+          "started": "2026-09-29T17:02:50Z",
+          "completed": "2026-09-29T17:21:35Z",
+          "failed_steps": []
+        },
+        "Lint": {
+          "id": 109521878356,
+          "name": "Lint",
+          "result": "failure",
+          "started": "2026-09-29T17:02:49Z",
+          "completed": "2026-09-29T17:05:33Z",
+          "failed_steps": [
+            "Validate OpenSpec changes and specs (strict)"
+          ]
+        }
+      },
+      "test_seconds": 1125,
+      "test_seconds_after_lint_failure": 962
+    },
+    {
+      "run_id": 36599131279,
+      "url": "https://github.com/C360Studio/semstreams/actions/runs/36599131279",
+      "sha_prefix": "aaddc292",
+      "jobs": {
+        "Test": {
+          "id": 109511646736,
+          "name": "Test",
+          "result": "success",
+          "started": "2026-09-29T16:37:59Z",
+          "completed": "2026-09-29T16:56:42Z",
+          "failed_steps": []
+        },
+        "Lint": {
+          "id": 109511646751,
+          "name": "Lint",
+          "result": "failure",
+          "started": "2026-09-29T16:37:59Z",
+          "completed": "2026-09-29T16:40:30Z",
+          "failed_steps": [
+            "Validate OpenSpec changes and specs (strict)"
+          ]
+        }
+      },
+      "test_seconds": 1123,
+      "test_seconds_after_lint_failure": 972
+    }
+  ],
+  "test_seconds_total": 4551,
+  "test_seconds_after_lint_failure_total": 3950,
+  "limits": "Aggregate job time, not one-run elapsed time or recoverable savings. Mixed branches do not establish a flake-rate change.",
+  "prior_openspec_steps": {
+    "run_id": 36704378258,
+    "url": "https://github.com/C360Studio/semstreams/actions/runs/36704378258/job/109851037715",
+    "source_sha256": "30f46366f9fa6ca7161a63d36b5d84744e70e69103c843da2d24fa2e73f4d6ba",
+    "steps": [
+      {
+        "completedAt": "2026-09-30T10:48:25Z",
+        "conclusion": "success",
+        "name": "Set up Node (OpenSpec CLI)",
+        "number": 17,
+        "startedAt": "2026-09-30T10:48:22Z",
+        "status": "completed"
+      },
+      {
+        "completedAt": "2026-09-30T10:48:29Z",
+        "conclusion": "success",
+        "name": "Install OpenSpec CLI (pinned)",
+        "number": 18,
+        "startedAt": "2026-09-30T10:48:25Z",
+        "status": "completed"
+      },
+      {
+        "completedAt": "2026-09-30T10:48:30Z",
+        "conclusion": "success",
+        "name": "Validate OpenSpec changes and specs (strict)",
+        "number": 19,
+        "startedAt": "2026-09-30T10:48:29Z",
+        "status": "completed"
+      }
+    ],
+    "combined_step_seconds": 8,
+    "limits": "Existing steps inside Lint; excludes a new job checkout, queue delay and any cold-cache difference."
+  }
+}

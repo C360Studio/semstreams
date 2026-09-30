@@ -1,0 +1,49 @@
+{
+  "label": "gh1438-check-push-76b41e7f",
+  "command": [
+    "task",
+    "check:push"
+  ],
+  "cwd": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams",
+  "started_utc": "2026-09-30T12:06:37.766245+00:00",
+  "ended_utc": "2026-09-30T12:22:13.407794+00:00",
+  "duration_seconds": 935.639,
+  "exit_status": 0,
+  "source_sha256_before": {
+    ".agents/contracts/semstreams-developer.md": "f9be80682b6208dda2998f2702a4584b469c32e2b2b7f3ddee7b43f87a3e1b39",
+    ".agents/contracts/semstreams-reviewer.md": "e95e05dacc603c6d205441906843b6dd074621e15688a39ed8ce676bee6a31bd",
+    ".agents/protocol.md": "48b33489458b2a26b8452447df0ebfa416eeee9ed4fdaf4351fa0f24283eff06",
+    ".github/workflows/ci.yml": "f0d61130bee76d8b70bccabfadea318d0d2333895b274be356d535ed37ded59c",
+    "Taskfile.yml": "c59de23d40db92637dc18e187f053611d7fd751a10976f3dbe9de199f30a8658",
+    "docs/contributing/01-testing.md": "831ad9759aa6d6d57f209e834c53c5960dd825d090ef6ce7fb06b6d93f5b7603",
+    "openspec/changes/early-ci-validation/.openspec.yaml": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+    "openspec/changes/early-ci-validation/design.md": "c91893aa771b662d98d509b1e11c5ee30d55cb29296b00f71eaf74109f14b4f0",
+    "openspec/changes/early-ci-validation/proposal.md": "bfa3815bd30dab4fe257878cabec3eba9f42b548b4d040a32934731baba4734a",
+    "openspec/changes/early-ci-validation/specs/verification-admission/spec.md": "c22f84442bdc4df4afdad0ed23c817e18dcc051819000cf8d3cb0233b2ac5ed8",
+    "openspec/changes/early-ci-validation/tasks.md": "bb42552b08854787d7b38baffef45f8c45397aea715e68d80408309b91f55a53",
+    "taskfiles/openspec.yml": "de63a2def8995dd50278c2ff381415a21a0049d310a110953655409179d95f1f",
+    "test/testinfra/cleanup_admission_test.go": "8ff1c963d36692da13544f8eec718251cbcfe845c8acb119a71b301554339827",
+    "test/testinfra/early_ci_validation_test.go": "eba056e70c0cf80ace1b3663315be83b87f3339905ac99ec4d0b7c3cb8dba8e8"
+  },
+  "source_sha256_after": {
+    ".agents/contracts/semstreams-developer.md": "f9be80682b6208dda2998f2702a4584b469c32e2b2b7f3ddee7b43f87a3e1b39",
+    ".agents/contracts/semstreams-reviewer.md": "e95e05dacc603c6d205441906843b6dd074621e15688a39ed8ce676bee6a31bd",
+    ".agents/protocol.md": "48b33489458b2a26b8452447df0ebfa416eeee9ed4fdaf4351fa0f24283eff06",
+    ".github/workflows/ci.yml": "f0d61130bee76d8b70bccabfadea318d0d2333895b274be356d535ed37ded59c",
+    "Taskfile.yml": "c59de23d40db92637dc18e187f053611d7fd751a10976f3dbe9de199f30a8658",
+    "docs/contributing/01-testing.md": "831ad9759aa6d6d57f209e834c53c5960dd825d090ef6ce7fb06b6d93f5b7603",
+    "openspec/changes/early-ci-validation/.openspec.yaml": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+    "openspec/changes/early-ci-validation/design.md": "c91893aa771b662d98d509b1e11c5ee30d55cb29296b00f71eaf74109f14b4f0",
+    "openspec/changes/early-ci-validation/proposal.md": "bfa3815bd30dab4fe257878cabec3eba9f42b548b4d040a32934731baba4734a",
+    "openspec/changes/early-ci-validation/specs/verification-admission/spec.md": "c22f84442bdc4df4afdad0ed23c817e18dcc051819000cf8d3cb0233b2ac5ed8",
+    "openspec/changes/early-ci-validation/tasks.md": "bb42552b08854787d7b38baffef45f8c45397aea715e68d80408309b91f55a53",
+    "taskfiles/openspec.yml": "de63a2def8995dd50278c2ff381415a21a0049d310a110953655409179d95f1f",
+    "test/testinfra/cleanup_admission_test.go": "8ff1c963d36692da13544f8eec718251cbcfe845c8acb119a71b301554339827",
+    "test/testinfra/early_ci_validation_test.go": "74769df79ee176462cff173b0783e18daa355bc8b1170438cd858c683c53efa2"
+  },
+  "log_sha256": "0e5365d4338eb6f6d74d4a94940b3426f3fb690c647ccbdc350dfa91201ef92c",
+  "git_head": "76b41e7f935797b01cb910fc9a9f099f188c547b",
+  "git_branch": "codex/gh1438-early-ci-validation",
+  "git_status_porcelain": "?? openspec/changes/early-ci-validation/evidence/\n",
+  "source_unchanged": false
+}
