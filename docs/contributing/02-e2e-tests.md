@@ -100,6 +100,8 @@ Neural embeddings + LLM. Full ML stack validation.
 
 **Key insight**: Anomaly worker can run at structural tier with LLM, but we only assert on *index state* (flag exists), not LLM reasoning. LLM output assertions wait until semantic tier.
 
+A probe that hits its client deadline fails with the transport error verbatim; an empty result fails with the stage's own sentence; the two never share a message.
+
 ## Test Selection Guide
 
 ### During Development

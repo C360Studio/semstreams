@@ -1,0 +1,42 @@
+{
+  "graph-index-race.log": {
+    "sha256": "7b7c3b94f99377a08cb80c6f1f7714e82296558ecda16f24d1bf78367bb7666c",
+    "bytes": 1243,
+    "source": "/private/tmp/gh1421-graph-index-final-race-escalated.log"
+  },
+  "graph-index-cache-setup-failure.log": {
+    "sha256": "db4f5c678c65e78e7507e176a676ce2e66e48aba2939db9ad728e02d43a04478",
+    "bytes": 1386,
+    "source": "/private/tmp/gh1421-graph-index-final-race.log"
+  },
+  "graph-index-guard-capture-setup-failure.log": {
+    "sha256": "9128b891b3d01c490e71f6fd5476f2a6aa0ea40d10975839b7c651a8f0275ab0",
+    "bytes": 592,
+    "source": "/private/tmp/gh1421-graph-index-cleanup.log"
+  },
+  "cleanup-fingerprint-refresh.json": {
+    "sha256": "7fed54c31bcd72c703c10941a8a973124f9725ffc485a30f98a8f61ade937841",
+    "bytes": 6914,
+    "source": "/tmp/gh1421-repair-cleanup-refresh.json"
+  },
+  "cleanup-fingerprint-helper.go.txt": {
+    "sha256": "bca9d706de72554554e63b3f446e9e7cd12ab6d9317b763f7f3452a2d29e70c9",
+    "bytes": 1850,
+    "source": "/tmp/gh1421-cleanup-fingerprint.go"
+  },
+  "graph-index-observer.go.txt": {
+    "sha256": "f70308a9839fd7933c60a636cec5ee1bb145c315693d5aa96140ec2355e822c7",
+    "bytes": 31311,
+    "source": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-index/owner_filter_load_observer_test.go"
+  },
+  "graph-index-integration.go.txt": {
+    "sha256": "640d291e86c0febd4505b544a270c426acf6cdf54f19322f25b1a6984b6ce9f0",
+    "bytes": 35577,
+    "source": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-index/owner_filter_load_integration_test.go"
+  },
+  "graph-index-mock.go.txt": {
+    "sha256": "a748b4a665e772cc1b19fecd4c644f61f80978c996ae05ee76ab6b19ea04df57",
+    "bytes": 38943,
+    "source": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams/processor/graph-index/component_test.go"
+  }
+}

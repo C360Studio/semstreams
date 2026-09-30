@@ -1,0 +1,42 @@
+{
+  "drain-bypass-mutant.go.txt": {
+    "sha256": "c7d329dcdea93d1b00c89eaf2af07c50c7aa46429a15b86475030a3cf8989a9a",
+    "bytes": 25268
+  },
+  "final-graph-ingest-mock.go.txt": {
+    "sha256": "4f8214323da1c8a2ae4782295fd7360e06b2b7440ea00fd6558f68c7e45387c8",
+    "bytes": 31190
+  },
+  "final-kv.go.txt": {
+    "sha256": "30cfcf2bff1c795611657369d5923c8e70a6054c0f15a2d3d2c9097e7d335610",
+    "bytes": 25227
+  },
+  "final-native-test.go.txt": {
+    "sha256": "5582655e7cc5bfdc81d5eaa1da531acb08713a508d80aa40c3066d3c80892613",
+    "bytes": 4496
+  },
+  "final-ordinary-test.go.txt": {
+    "sha256": "5d1bc418ecbc50a4b5b93c097b7842c8721b251bd04679eb7c605a860438a31b",
+    "bytes": 14437
+  },
+  "implementation-status.md": {
+    "sha256": "24bbde9a25acc8cc41a6adedd6e037eceaff3f26d574e629320506db892e2f10",
+    "bytes": 7109
+  },
+  "preproduction-kv.go.txt": {
+    "sha256": "9b9b4c40aa6f65b66bdcb68a7db881e0fdfb4bb8d46f8b2af4d42d86d1696725",
+    "bytes": 23355
+  },
+  "public-red-test.go.txt": {
+    "sha256": "24a1a17f0dd85136099dfc2fbd86b4b92d59a536fa0b32edd42c2e09fad02bf9",
+    "bytes": 4683
+  },
+  "raw-logs.zip": {
+    "sha256": "cf75d947fba6f86c834e1b23bbb10427878b7c33558ea47fd2b9fed5a44bc782",
+    "bytes": 5653
+  },
+  "sha256-manifest.txt": {
+    "sha256": "6efa8fa21dad8befeb549d873344ae04d225e66cf06f5373402058c22d1f7ea5",
+    "bytes": 1976
+  }
+}

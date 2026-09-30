@@ -1,0 +1,28 @@
+--- native-pass-observer.go
++++ post-native-deadline-proof.go
+@@ -409,7 +409,9 @@
+ 	caller := t.Context()
+ 	require.NoError(t, observer.begin(0, "diag.>", time.Now()))
+ 	store := (&natsclient.Client{}).NewKVStore(decorator)
++	beforeCall := time.Now()
+ 	keys, err := store.KeysByFilter(caller, "diag.>")
++	afterCall := time.Now()
+ 	observer.operationReturned(time.Now(), keys, err)
+ 	require.NoError(t, observer.finish(caller))
+ 	require.NoError(t, err)
+@@ -419,11 +421,14 @@
+ 	require.NotSame(t, caller, raw.gotCtx)
+ 	deadline, ok := raw.gotCtx.Deadline()
+ 	require.True(t, ok)
+-	require.WithinDuration(t, time.Now().Add(natsclient.DefaultKVOptions().Timeout), deadline, time.Second)
++	timeout := natsclient.DefaultKVOptions().Timeout
++	require.False(t, deadline.Before(beforeCall.Add(timeout)), "forwarded deadline preceded call")
++	require.False(t, deadline.After(afterCall.Add(timeout)), "forwarded deadline followed return")
+ 	require.Equal(t, 1, native.stops)
+ 	records, integrity := observer.snapshot()
+ 	require.NoError(t, integrity)
+ 	require.Len(t, records, 1)
++	require.Equal(t, deadline, records[0].childDeadline)
+ 	require.ErrorIs(t, records[0].stopErr, stopErr)
+ 	require.Equal(t, "returned", records[0].constructionState())
+ 	require.Equal(t, "returned", records[0].stopState())

@@ -737,23 +737,25 @@ type RuleMetrics struct {
 // ExtractRuleMetrics gets all rule engine metrics in a single call.
 // This enables consistent rule validation across E2E scenarios.
 func (c *MetricsClient) ExtractRuleMetrics(ctx context.Context) (*RuleMetrics, error) {
-	metrics := &RuleMetrics{}
-
-	// Rule processor metrics (semstreams_rule_*)
-	evaluations, err := c.SumMetricsByName(ctx, "semstreams_rule_evaluations_total")
-	if err == nil {
-		metrics.Evaluations = evaluations
+	// One scrape. A failed scrape is an error, never a zero reading (#1426 M1);
+	// a series the exposition does not carry yet (a counter that has not fired)
+	// is a legitimate zero.
+	snapshot, err := c.FetchSnapshot(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("scrape rule metrics: %w", err)
 	}
-
-	firings, err := c.SumMetricsByName(ctx, "semstreams_rule_triggers_total")
-	if err == nil {
-		metrics.Firings = firings
+	sum := func(name string) float64 {
+		var total float64
+		for _, m := range snapshot.Metrics {
+			if m.Name == name {
+				total += m.Value
+			}
+		}
+		return total
 	}
-
-	actions, err := c.SumMetricsByName(ctx, "semstreams_rule_events_published_total")
-	if err == nil {
-		metrics.ActionsDispatched = actions
-	}
-
-	return metrics, nil
+	return &RuleMetrics{
+		Evaluations:       sum("semstreams_rule_evaluations_total"),
+		Firings:           sum("semstreams_rule_triggers_total"),
+		ActionsDispatched: sum("semstreams_rule_events_published_total"),
+	}, nil
 }

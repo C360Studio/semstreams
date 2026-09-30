@@ -93,12 +93,15 @@ func DefaultQueries() []Query {
 		// The semantic tier will rank these better with neural embeddings
 		{
 			Text:            "warehouse safety guidelines emergency evacuation fire",
-			ExpectedPattern: "document.safety", // Matches both doc-safety-001 and doc-emergency-001
+			ExpectedPattern: "content.safety", // Matches both doc-safety-001 and doc-emergency-001
 			Description:     "Safety policy query should return safety documents",
 			MinScore:        0.1,
 			MinHits:         1,
-			// At least one safety document should appear in results
-			MustInclude: []string{"document.safety"},
+			// At least one safety document should appear in results. The minted ID is
+			// <authority>.document.content.safety.doc-safety-001; the earlier
+			// "document.safety" pattern predated the content segment and matched
+			// nothing, so this known answer failed on every run (#1426).
+			MustInclude: []string{"content.safety"},
 		},
 	}
 }

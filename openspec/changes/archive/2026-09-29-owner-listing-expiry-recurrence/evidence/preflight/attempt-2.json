@@ -1,0 +1,12 @@
+{
+  "head": "023a6edb",
+  "command": "PATH=/private/tmp/gh1064-task-tools:$PATH task check:push",
+  "times": [
+    "start=2026-09-30T01:57:49Z",
+    "finish=2026-09-30T01:58:01Z",
+    "exit=201"
+  ],
+  "log_sha256": "5252ebb3aaf4aa7b211b0e55c1176c3e5765b27f05151b82a9b5574da043da9e",
+  "archive_sha256": "b1198e8a24a3fbcd294e061b8a9a174236c1b248a7acf09c7b361b346870c8b4",
+  "outcome": "Cleanup guard passed with exact resolution metadata. Revive rejected private ownerLoadAttemptScope context argument order; all later gates unrun."
+}

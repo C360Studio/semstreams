@@ -1,0 +1,187 @@
+package natsclient
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// ownershipBucket models the SDK's cancellable KeyLister forwarder and its
+// separate native Updates sender. A canceled forwarder cannot complete that
+// sender; only consuming Updates can.
+type ownershipBucket struct {
+	jetstream.KeyValue
+	entered   chan struct{}
+	attempted chan struct{}
+	release   chan struct{}
+	watcher   *ownershipWatcher
+}
+
+type ownershipWatcher struct {
+	updates chan jetstream.KeyValueEntry
+	stopped chan struct{}
+	done    chan struct{}
+	once    sync.Once
+	calls   atomic.Int32
+}
+
+func newOwnershipBucket() *ownershipBucket {
+	return &ownershipBucket{
+		entered:   make(chan struct{}),
+		attempted: make(chan struct{}),
+		release:   make(chan struct{}),
+		watcher: &ownershipWatcher{
+			updates: make(chan jetstream.KeyValueEntry),
+			stopped: make(chan struct{}),
+			done:    make(chan struct{}),
+		},
+	}
+}
+
+func (b *ownershipBucket) WatchFiltered(_ context.Context, _ []string, _ ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	close(b.entered)
+	go func() {
+		defer close(b.watcher.done)
+		close(b.attempted)
+		b.watcher.updates <- ownershipEntry{key: "diag.one"}
+		<-b.watcher.stopped
+		close(b.watcher.updates)
+	}()
+	<-b.release
+	return b.watcher, nil
+}
+
+func (b *ownershipBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+	watcher, err := b.WatchFiltered(ctx, filters, jetstream.IgnoreDeletes(), jetstream.MetaOnly())
+	if err != nil {
+		return nil, err
+	}
+	keys := make(chan string)
+	go func() {
+		defer close(keys)
+		defer watcher.Stop()
+		// This is the native forwarder's cancellation branch: it may close
+		// Keys without consuming a pending Updates send.
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case entry := <-watcher.Updates():
+			if entry != nil {
+				keys <- entry.Key()
+			}
+		case <-ctx.Done():
+		}
+	}()
+	return ownershipLister{keys: keys, watcher: watcher}, nil
+}
+
+type ownershipLister struct {
+	keys    <-chan string
+	watcher jetstream.KeyWatcher
+}
+
+func (l ownershipLister) Keys() <-chan string { return l.keys }
+func (l ownershipLister) Stop() error         { return l.watcher.Stop() }
+
+func (w *ownershipWatcher) Updates() <-chan jetstream.KeyValueEntry { return w.updates }
+func (w *ownershipWatcher) Stop() error {
+	w.calls.Add(1)
+	w.once.Do(func() { close(w.stopped) })
+	return nil
+}
+
+type ownershipEntry struct {
+	jetstream.KeyValueEntry
+	key string
+}
+
+func (e ownershipEntry) Key() string { return e.key }
+
+func TestKVStoreFilteredCancellationFinishesNativeDelivery(t *testing.T) {
+	bucket := newOwnershipBucket()
+	ctx, cancel := context.WithCancel(context.Background())
+	callDone := make(chan struct{})
+	result := make(chan struct {
+		keys []string
+		err  error
+	}, 1)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(bucket.release) }) }
+	defer func() {
+		// Recovery is test-owned and occurs only after a terminal assertion or
+		// failure; it cannot make the production result pass.
+		cancel()
+		release()
+		_ = bucket.watcher.Stop()
+		select {
+		case <-bucket.watcher.done:
+		default:
+			rescueDone := make(chan struct{})
+			go func() {
+				for range bucket.watcher.Updates() {
+				}
+				close(rescueDone)
+			}()
+			select {
+			case <-rescueDone:
+			case <-time.After(2 * time.Second):
+				t.Error("test-owned Updates rescue did not finish")
+			}
+		}
+		select {
+		case <-bucket.watcher.done:
+		case <-time.After(2 * time.Second):
+			t.Error("test-owned producer did not join")
+		}
+		select {
+		case <-callDone:
+		case <-time.After(2 * time.Second):
+			t.Error("public listing task did not join")
+		}
+	}()
+
+	go func() {
+		defer close(callDone)
+		keys, err := (&Client{}).NewKVStore(bucket).KeysByFilter(ctx, "diag.>")
+		result <- struct {
+			keys []string
+			err  error
+		}{keys, err}
+	}()
+	select {
+	case <-bucket.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("filtered constructor was not entered")
+	}
+	select {
+	case <-bucket.attempted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("native Updates send was not attempted")
+	}
+	cancel()
+	release()
+	var got struct {
+		keys []string
+		err  error
+	}
+	select {
+	case got = <-result:
+	case <-time.After(2 * time.Second):
+		t.Fatal("public listing did not return after cancellation")
+	}
+	require.ErrorIs(t, got.err, context.Canceled)
+	assert.Nil(t, got.keys)
+	select {
+	case <-bucket.watcher.done:
+		// Required: caller observes no unfinished native delivery at return.
+	default:
+		t.Error("public listing returned while native Updates delivery remained blocked")
+	}
+}

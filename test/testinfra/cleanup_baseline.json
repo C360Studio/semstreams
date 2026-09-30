@@ -5471,6 +5471,125 @@
           "fingerprint": "262c320570a8dd57b9c9db1876593ec1671a1dc4d63fa9bbfc1139c46886a0f9"
         }
       ]
+    },
+    {
+      "identity": "processor/graph-index/owner_filter_load_observer_test.go|ownerLoadAttemptScope|defer|reportCleanup|unresolved callback|unknown|1",
+      "site_fingerprint": "576bff4dd18158637c55b57817a84256e6e9644f84ab935dd8330c37ab43523c",
+      "classification": "non-lifecycle-stop",
+      "question": "Can the deferred reportCleanup parameter invoke a lifecycle Stop through any concrete caller?",
+      "reason": "Complete current caller set binds reportCleanup only to a testify CollectT Errorf reporter or a testing.T Errorf reporter. The separate o.finish(parent) call is the bounded observer owner cleanup and is not resolved by this disposition.",
+      "reviewer": "semstreams-reviewer (gh1421_inventory_review), 2026-09-30",
+      "owner_issue": "#1421",
+      "dependencies": [
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadAttemptScope",
+          "fingerprint": "90182d58d1d1460828ab97a1dc151a60111ff045cee572b2813762f49f42d69a"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "TestOwnerLoadObserverFailNowRetainsPriorAndFailed",
+          "fingerprint": "aad9a669caf2751c790aae83abdc57c0ef3b55e0cdc4e2de00bfbd09db81a54d"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_integration_test.go",
+          "declaration": "measureOwnerLoadFilter",
+          "fingerprint": "100f67234126c187e64c3931c7360f813f4da98e67f4e4cea9156a7cc7601d83"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadObserver.finish",
+          "fingerprint": "49b644810a3838b658f94d566c2e43394bd0aa37b48a1e22778d263bcfee91ef"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadObserver.finishWithTerminal",
+          "fingerprint": "8895a17f8e45564a716293572462162301a0971e47be91dbb0e01c9eea3d7225"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadObserver.finishOwned",
+          "fingerprint": "b508c609fee39a9490a220a6fb04fc3555ea0a1e53fa7d3222792464a6f2f5c8"
+        },
+        {
+          "fingerprint": "5d40ce19aacf55d0dd8552b1f59fccccb394a536b63a9c51c7abad8f974e181d",
+          "symbol": "assert.CollectT.Errorf",
+          "module": "github.com/stretchr/testify",
+          "version": "v1.11.1"
+        }
+      ]
+    },
+    {
+      "identity": "processor/graph-index/owner_filter_load_observer_test.go|ownerLoadObservationScope|defer|publish|unresolved callback|unknown|1",
+      "site_fingerprint": "d853fe931e69b01c445a598a413da9b3c646b9454b171a6bb3dc4f2ac9ef978e",
+      "classification": "non-lifecycle-stop",
+      "question": "Can the deferred publish parameter invoke a lifecycle Stop through any concrete caller?",
+      "reason": "Complete current caller set binds publish only to record reporting through testing.T Logf/Errorf or testify CollectT Errorf plus a buffered-channel send. It does not invoke Stop or release an owner resource.",
+      "reviewer": "semstreams-reviewer (gh1421_inventory_review), 2026-09-30",
+      "owner_issue": "#1421",
+      "dependencies": [
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadObservationScope",
+          "fingerprint": "06be88fb9b7104057e8b319834ad46ad8b694ac13ff9bedad69e988a923d159a"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "TestOwnerLoadObserverFailNowRetainsPriorAndFailed",
+          "fingerprint": "aad9a669caf2751c790aae83abdc57c0ef3b55e0cdc4e2de00bfbd09db81a54d"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_integration_test.go",
+          "declaration": "measureOwnerLoadFilter",
+          "fingerprint": "100f67234126c187e64c3931c7360f813f4da98e67f4e4cea9156a7cc7601d83"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "formatOwnerLoadAttempt",
+          "fingerprint": "d72ab0159a1a1293d8a6f500838830c3a8fbd44ee12b51570139c231b59dcf36"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadObservationOffset",
+          "fingerprint": "484a21acfdae6f135bed65291b181d85bba7305bf86f0ea78620c56e8a3c922f"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadObservationTimestamp",
+          "fingerprint": "3f9cc81325b553a0bd5fe0aa224b93b91bbf5500ed930ae67f5f1a2c4be5847a"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadObserver.snapshot",
+          "fingerprint": "973f413eeb2d22d57bc8aa7197ee327c03773bcd6b60dc72d02dc0c4f6b3baa9"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadAttempt.phase",
+          "fingerprint": "f80c2805fc4f8b296f59940ff6a5c67ece5adb6697061c2df5d0741a0b244f66"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadAttempt.snapshotOrder",
+          "fingerprint": "1759a5adb4c71ea3f431a333d1f295b24f0e861b47e71132e2155646c1c07fc0"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadAttempt.constructionState",
+          "fingerprint": "ce8040ef804d108c7a8376ad0896c1b5f56032d05701c225016595d279d65979"
+        },
+        {
+          "path": "processor/graph-index/owner_filter_load_observer_test.go",
+          "declaration": "ownerLoadAttempt.stopState",
+          "fingerprint": "bf72859dfa4b2c9ef79b9c26162a007aa78ed32a9c19509752219f2d597279c3"
+        },
+        {
+          "fingerprint": "5d40ce19aacf55d0dd8552b1f59fccccb394a536b63a9c51c7abad8f974e181d",
+          "symbol": "assert.CollectT.Errorf",
+          "module": "github.com/stretchr/testify",
+          "version": "v1.11.1"
+        }
+      ]
     }
   ]
 }
