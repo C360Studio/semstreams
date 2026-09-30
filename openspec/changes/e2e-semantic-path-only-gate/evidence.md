@@ -166,3 +166,16 @@ $ ! git grep -q 'does not yet run the' -- docs/contributing/02-e2e-tests.md; ech
 "~5 min" is the stated prediction; task 2.6 replaces it with the PR's measured wall-clock.
 Outside D8's sites and left unedited: three stale `~90s` semantic figures, `README.md:189`, `test/e2e/README.md:17`,
 `cmd/e2e/main.go:230` (the `--list` text).
+
+## § 8 Pre-push gates (at `916e9d95`, tree clean)
+
+```
+gofmt -l .                                              → (no output)
+go vet ./test/e2e/... ./cmd/e2e/...                     → ok
+go test -race -count=1 ./test/e2e/... ./cmd/e2e/...     → ok github.com/c360studio/semstreams/cmd/e2e 2.384s (every package ok), exit 0
+task lint                                               → exit 0 (last line: ok github.com/c360studio/semstreams/test/natsclient 0.581s)
+go test -count=1 ./internal/agentprofiles/              → ok github.com/c360studio/semstreams/internal/agentprofiles 0.180s
+openspec validate e2e-semantic-path-only-gate --strict  → Change 'e2e-semantic-path-only-gate' is valid
+task spec:properties                                    → spec-properties: 464/464 citations resolve.
+task check:push                                         → exit 0 (last line: [INTEGRATION] tests complete; 0 FAIL lines; tree clean after schema:generate)
+```
