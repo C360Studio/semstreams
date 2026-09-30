@@ -341,3 +341,122 @@ func TestLoopExecutionMessageType_KeyFormat(t *testing.T) {
 		t.Errorf("MessageType.Key() = %q, want %q", key, want)
 	}
 }
+
+// --- Decoded-input identity failures (#1112) ---
+//
+// LoopExecutionEntity is a registered Graphable: graph-ingest decodes it from
+// the wire and calls EntityID, Triples and Validate on producer content. None
+// of them may panic on a malformed identity (payload-registry: "A registered
+// Graphable MUST NOT panic on decoded input").
+
+// mustNotPanic runs f and fails the test, instead of crashing the binary, when
+// f panics.
+func mustNotPanic(t *testing.T, name string, f func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("%s panicked on decoded input: %v", name, r)
+		}
+	}()
+	f()
+}
+
+func TestLoopExecutionEntity_MalformedIdentityReturnsSentinel(t *testing.T) {
+	tests := []struct {
+		name                  string
+		org, platform, loopID string
+	}{
+		{name: "empty org", org: "", platform: "ops", loopID: "loop-1"},
+		{name: "dotted org", org: "ac.me", platform: "ops", loopID: "loop-1"},
+		{name: "empty platform", org: "acme", platform: "", loopID: "loop-1"},
+		{name: "dotted platform", org: "acme", platform: "o.ps", loopID: "loop-1"},
+		{name: "empty loop id", org: "acme", platform: "ops", loopID: ""},
+		{name: "dotted loop id", org: "acme", platform: "ops", loopID: "loop.1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &agentic.LoopExecutionEntity{
+				Org: tt.org, Platform: tt.platform, LoopID: tt.loopID,
+				Task: &agentic.TaskMessage{TaskID: "t", Role: "r"},
+			}
+			var id string
+			mustNotPanic(t, "EntityID", func() { id = e.EntityID() })
+			if id != "" {
+				t.Errorf("EntityID() = %q, want the empty sentinel", id)
+			}
+			mustNotPanic(t, "Triples", func() { _ = e.Triples() })
+			var err error
+			mustNotPanic(t, "Validate", func() { err = e.Validate() })
+			if err == nil {
+				t.Error("Validate() = nil, want an identity error")
+			}
+		})
+	}
+}
+
+func TestLoopExecutionEntity_MalformedReferenceOmitsTriple(t *testing.T) {
+	tests := []struct {
+		name    string
+		task    agentic.TaskMessage
+		omitted string
+	}{
+		{
+			name:    "dotted parent",
+			task:    agentic.TaskMessage{TaskID: "t", Role: "r", ParentLoopID: "parent.loop", InReplyTo: "asking-loop"},
+			omitted: agvocab.LoopParent,
+		},
+		{
+			name:    "dotted reply-to",
+			task:    agentic.TaskMessage{TaskID: "t", Role: "r", ParentLoopID: "parent-loop", InReplyTo: "asking.loop"},
+			omitted: agvocab.LoopReplyTo,
+		},
+		{
+			name: "dotted run",
+			task: agentic.TaskMessage{
+				TaskID: "t", Role: "r", ParentLoopID: "parent-loop", InReplyTo: "asking-loop", RunID: "run.dotted",
+			},
+			omitted: agvocab.LoopRunEntityID,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := tt.task
+			e := &agentic.LoopExecutionEntity{Org: "acme", Platform: "ops", LoopID: "loop-1", Task: &task}
+			var ts []message.Triple
+			mustNotPanic(t, "Triples", func() { ts = e.Triples() })
+			got := predSet(ts)
+			if got[tt.omitted] {
+				t.Errorf("%s triple present for a malformed reference; want it omitted", tt.omitted)
+			}
+			for _, want := range []string{agvocab.LoopRole, agvocab.LoopTask, agvocab.LoopParent, agvocab.LoopReplyTo} {
+				if want != tt.omitted && !got[want] {
+					t.Errorf("%s triple missing; only the malformed reference may be omitted", want)
+				}
+			}
+			var err error
+			mustNotPanic(t, "Validate", func() { err = e.Validate() })
+			if err == nil {
+				t.Error("Validate() = nil, want an error: a malformed reference violates the writer contract")
+			}
+		})
+	}
+}
+
+// A task whose only spawn-identity fact is a malformed reference is refused
+// too, whatever else it carries.
+func TestLoopExecutionEntity_ValidateRefusesOnlyMalformedReference(t *testing.T) {
+	for name, task := range map[string]agentic.TaskMessage{
+		"parent only":   {ParentLoopID: "parent.loop"},
+		"reply-to only": {InReplyTo: "asking.loop"},
+		"run only":      {RunID: "run.dotted"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := &agentic.LoopExecutionEntity{Org: "acme", Platform: "ops", LoopID: "loop-1", Task: &task}
+			var err error
+			mustNotPanic(t, "Validate", func() { err = e.Validate() })
+			if err == nil {
+				t.Error("Validate() = nil, want an error: a malformed reference violates the writer contract")
+			}
+		})
+	}
+}

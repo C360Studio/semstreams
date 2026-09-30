@@ -3,6 +3,7 @@ package agentic
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 	"unicode/utf8"
 
@@ -83,9 +84,16 @@ type LoopExecutionEntity struct {
 	Task     *TaskMessage `json:"task,omitempty"`
 }
 
-// EntityID returns the canonical 6-part entity ID for this loop execution.
+// EntityID returns the canonical 6-part entity ID for this loop execution, or
+// "" when the identity fields cannot form one (graph-ingest rejects an empty
+// ID; a decoded payload must never panic the consumer).
 func (e *LoopExecutionEntity) EntityID() string {
-	return LoopExecutionEntityID(e.Org, e.Platform, e.LoopID)
+	id, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.LoopID)
+	if err != nil {
+		// entity-id-audit:classify intentional-sentinel "" line=94 column=10 surface=go-return:EntityID entity_id_invalid:empty documented loop-execution failure return; graph-ingest rejects an empty ID and a decoded payload must not panic
+		return ""
+	}
+	return id
 }
 
 // Triples returns the spawn-identity origin triples for this loop execution.
@@ -126,9 +134,13 @@ func (e *LoopExecutionEntity) Triples() []message.Triple {
 	if e.Task.TaskID != "" {
 		triples = append(triples, triple(agvocab.LoopTask, e.Task.TaskID))
 	}
+	// Parent and reply-to are omitted when their ID cannot be constructed, the
+	// way the run branch below already does: this payload is decoded from the
+	// wire, and a malformed reference must never panic the consumer (#1112).
 	if e.Task.ParentLoopID != "" {
-		parentEntityID := LoopExecutionEntityID(e.Org, e.Platform, e.Task.ParentLoopID)
-		triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
+		if parentEntityID, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.Task.ParentLoopID); err == nil {
+			triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
+		}
 	}
 	// Stamp the run anchor when the loop belongs to a run (ADR-053 D7).
 	// Two triples: agent.loop.run = bare RunID; agent.run.entity-id = the full
@@ -141,8 +153,9 @@ func (e *LoopExecutionEntity) Triples() []message.Triple {
 	}
 	// Stamp the reply pointer when this loop is a reply (gh#256).
 	if e.Task.InReplyTo != "" {
-		replyEntityID := LoopExecutionEntityID(e.Org, e.Platform, e.Task.InReplyTo)
-		triples = append(triples, triple(agvocab.LoopReplyTo, replyEntityID))
+		if replyEntityID, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.Task.InReplyTo); err == nil {
+			triples = append(triples, triple(agvocab.LoopReplyTo, replyEntityID))
+		}
 	}
 	if e.Task.WorkflowSlug != "" {
 		triples = append(triples, triple(agvocab.LoopWorkflow, e.Task.WorkflowSlug))
@@ -167,8 +180,9 @@ func (e *LoopExecutionEntity) Schema() message.Type {
 }
 
 // Validate implements message.Payload and IS the spawn-identity writer's
-// contract — no stronger: identity, a non-nil spawning TaskMessage, and at
-// least one spawn-identity fact to emit. The writer never required a full
+// contract — no stronger: identity, a non-nil spawning TaskMessage, parent,
+// reply-to and run references that form entity IDs when present, and at least
+// one spawn-identity fact to emit. The writer never required a full
 // task request (Triples() emits role, task, parent, run, reply-to, workflow,
 // user, and description each only when present), so neither does the payload;
 // TaskMessage.Validate remains the contract of a task ARRIVING as a task
@@ -181,6 +195,24 @@ func (e *LoopExecutionEntity) Validate() error {
 	}
 	if e.Task == nil {
 		return errors.New("task is required (the spawning TaskMessage)")
+	}
+	// A malformed parent, reply-to or run reference is a writer-contract
+	// violation: refuse it loudly here rather than let Triples() omit it
+	// silently.
+	if e.Task.ParentLoopID != "" {
+		if _, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.Task.ParentLoopID); err != nil {
+			return fmt.Errorf("parent_loop_id: %w", err)
+		}
+	}
+	if e.Task.InReplyTo != "" {
+		if _, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.Task.InReplyTo); err != nil {
+			return fmt.Errorf("in_reply_to: %w", err)
+		}
+	}
+	if e.Task.RunID != "" {
+		if _, err := TryChainExecutionEntityID(e.Org, e.Platform, e.Task.RunID); err != nil {
+			return fmt.Errorf("run_id: %w", err)
+		}
 	}
 	if len(e.Triples()) == 0 {
 		return errors.New("task carries no spawn-identity facts (role, task, parent, run, reply-to, workflow, user, and description are all empty)")

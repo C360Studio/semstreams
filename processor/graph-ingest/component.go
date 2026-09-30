@@ -1668,15 +1668,40 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 }
 
 // decodeEntity decodes a message's bytes into an EntityState: unmarshal the
-// BaseMessage envelope, then extract the Graphable payload's entity. Shared by
-// the consume closure (decode-once, then submit to the keyed pool) and
-// handleMessage (the synchronous test/compat path).
-func (c *Component) decodeEntity(subject string, data []byte) (*graph.EntityState, error) {
+// BaseMessage envelope, validate it, then extract the Graphable payload's
+// entity. Shared by the consume closure (decode-once, then submit to the keyed
+// pool) and handleMessage (the synchronous test/compat path); every error it
+// returns is a poison message on both (count, WARN, ack-drop).
+//
+// Validate is the consumer half of BaseMessage.MarshalJSON: what a producer's
+// envelope refuses to emit, the lane refuses to ingest, before any identity
+// method runs. One fence covers the whole entry because every step runs
+// producer-registered payload code on wire content — the type's UnmarshalJSON
+// inside Decode, its Validate, and its EntityID/Triples/StorageRef/
+// IndexingProfile during extraction. A panic there becomes a classified error
+// on the poison path instead of escaping to the stream handler's Nak and an
+// endless redelivery (#1112).
+func (c *Component) decodeEntity(subject string, data []byte) (entity *graph.EntityState, err error) {
+	origin := "subject " + subject
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			entity = nil
+			err = errs.WrapInvalid(
+				fmt.Errorf("%s panicked on the Graphable lane: %v", origin, recovered),
+				"graph-ingest", "decodeEntity", "fence payload panic")
+		}
+	}()
+
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
 		return nil, fmt.Errorf("decode base message (subject %s): %w", subject, err)
 	}
-	entity, err := c.extractEntityFromMessage(baseMsg)
+	origin = fmt.Sprintf("payload %s (subject %s)", baseMsg.Type(), subject)
+	if err := baseMsg.Validate(); err != nil {
+		return nil, fmt.Errorf("validate base message (subject %s): %w", subject,
+			errs.WrapInvalid(err, "graph-ingest", "decodeEntity", "payload validation failed"))
+	}
+	entity, err = c.extractEntityFromMessage(baseMsg)
 	if err != nil {
 		return nil, fmt.Errorf("extract entity (subject %s): %w", subject, err)
 	}

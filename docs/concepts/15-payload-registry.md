@@ -279,6 +279,8 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 registration, rejects an `IndexingProfile` outside the vocabulary, and fills or checks each contract's
 `MessageType` — all as a returned `error`, not a panic. Aggregate multiple registrations in one package
 with `errors.Join` (see `agentic/payload_registry.go`) if you're adding more than one type.
+A registered Graphable's `EntityID()` and `Triples()` never panic on decoded input: return `""` or omit the
+triple whose identity cannot be constructed, and let graph-ingest reject it.
 
 In a unit test that only needs a key to pass graph-ingest's create seam (no wire form),
 `payloadregistry.RegisterTestType(t, reg, "test.widget.v1")` registers a schema-less stub with no floor.
