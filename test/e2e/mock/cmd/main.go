@@ -24,7 +24,7 @@ import (
 
 func main() {
 	port := flag.Int("port", 8080, "Port for OpenAI mock server")
-	scenario := flag.String("scenario", "default", "Which preset of role responses / tool-call scripts to apply (default, deep-research, crud-tools, ops, research-graph, research-graph-execute)")
+	scenario := flag.String("scenario", "default", "Which preset of role responses / tool-call scripts to apply (default, agentic, deep-research, crud-tools, ops, research-graph, research-graph-execute)")
 	flag.Parse()
 
 	openaiAddr := fmt.Sprintf(":%d", *port)
@@ -77,6 +77,14 @@ func main() {
 // e2e scenario is a new case plus a new taskfile/compose pair.
 func applyScenarioPreset(server *mock.OpenAIServer, scenario string) {
 	switch scenario {
+	case "agentic":
+		server.WithRoleToolCallSequence([]mock.RoleToolCall{{
+			Marker:                "inspect configured mock model endpoint",
+			ToolName:              "query_entity",
+			Args:                  map[string]any{"entity_id": mock.ObservedEntityIDPlaceholder},
+			ObserveEntityIDSuffix: "model-registry.agent.endpoint.mock",
+			OnlyBeforeToolResult:  true,
+		}})
 	case "deep-research":
 		applyDeepResearchPreset(server)
 	case "crud-tools":
@@ -88,9 +96,7 @@ func applyScenarioPreset(server *mock.OpenAIServer, scenario string) {
 	case "research-graph-execute":
 		applyResearchGraphExecutePreset(server)
 	default:
-		// "default" leaves the server's base configuration in place —
-		// agentic tier uses this path, plus any future scenario that just
-		// needs the completion-JSON default.
+		// "default" leaves the server's base configuration in place.
 	}
 }
 

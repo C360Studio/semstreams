@@ -174,6 +174,12 @@ type RoleToolCall struct {
 	// Args is serialised to JSON and placed on ToolCall.Function.Arguments.
 	// Must be non-nil for JSON marshal to produce "{}" at minimum.
 	Args map[string]any
+	// ObserveEntityIDSuffix resolves ObservedEntityIDPlaceholder in Args
+	// from a canonical ID carried by this request's system or user prompt.
+	ObserveEntityIDSuffix string
+	// OnlyBeforeToolResult limits this script to the initial tool turn.
+	// Other role scripts retain their existing multi-turn sequence behavior.
+	OnlyBeforeToolResult bool
 }
 
 // OpenAIServer is a mock OpenAI-compatible server for testing.
@@ -613,7 +619,7 @@ func (s *OpenAIServer) tryRoleToolCall(req ChatCompletionRequest) (ChatCompletio
 		idx = len(s.roleToolCalls) - 1 // sticky after exhaustion
 	}
 	entry := s.roleToolCalls[idx]
-	if entry.Marker == "" {
+	if entry.Marker == "" || (entry.OnlyBeforeToolResult && countToolResults(req.Messages) > 0) {
 		return ChatCompletionResponse{}, false
 	}
 
@@ -640,6 +646,7 @@ func (s *OpenAIServer) tryRoleToolCall(req ChatCompletionRequest) (ChatCompletio
 	if err != nil {
 		argsJSON = []byte("{}")
 	}
+	argsJSON = []byte(resolveObservedEntityID(string(argsJSON), entry.ObserveEntityIDSuffix, req.Messages))
 	// Advance only when we're actually about to return this entry —
 	// otherwise repeated failed matches would burn the cursor.
 	if s.roleToolCallIndex < len(s.roleToolCalls) {
@@ -794,27 +801,26 @@ func firstRoleMatch(resps []RoleResponse, messages []ChatMessage) (string, bool)
 				continue
 			}
 			if strings.Contains(msg.Content, r.Marker) {
-				return resolveObservedEntityID(r, messages), true
+				return resolveObservedEntityID(r.Content, r.ObserveEntityIDSuffix, messages), true
 			}
 		}
 	}
 	return "", false
 }
 
-// resolveObservedEntityID substitutes the entity ID the request actually
-// carries for the placeholder in a matched response body. See
-// RoleResponse.ObserveEntityIDSuffix for why a fixture must not spell one.
-func resolveObservedEntityID(r RoleResponse, messages []ChatMessage) string {
-	if r.ObserveEntityIDSuffix == "" || !strings.Contains(r.Content, ObservedEntityIDPlaceholder) {
-		return r.Content
+// resolveObservedEntityID substitutes the canonical entity ID the request
+// actually carries into a scripted response body or tool argument.
+func resolveObservedEntityID(content, suffix string, messages []ChatMessage) string {
+	if suffix == "" || !strings.Contains(content, ObservedEntityIDPlaceholder) {
+		return content
 	}
-	observed := findEntityIDBySuffix(messages, r.ObserveEntityIDSuffix)
+	observed := findEntityIDBySuffix(messages, suffix)
 	if observed == "" {
 		log.Printf("mock openai: no entity ID ending in %q appears in the request; leaving %s unresolved",
-			"."+r.ObserveEntityIDSuffix, ObservedEntityIDPlaceholder)
-		return r.Content
+			"."+suffix, ObservedEntityIDPlaceholder)
+		return content
 	}
-	return strings.ReplaceAll(r.Content, ObservedEntityIDPlaceholder, observed)
+	return strings.ReplaceAll(content, ObservedEntityIDPlaceholder, observed)
 }
 
 // dottedCandidatePattern matches a MAXIMAL dot-joined run of entity-ID

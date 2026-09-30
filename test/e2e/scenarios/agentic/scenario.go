@@ -707,7 +707,14 @@ func metricWithLabel(snapshot *client.MetricsSnapshot, name, label, value string
 // injectTask publishes a direct agent task for testing
 func (s *Scenario) injectTask(ctx context.Context, result *scenarios.Result) error {
 	// Inject a direct task to test agentic loop
-	task := newTestTask(time.Now())
+	// The mock must query a graph entity this deployment actually created. Its
+	// authority is minted at boot, so pass the observed ID in the task prompt
+	// for the mock to quote back rather than predicting a static sensor ID.
+	modelEntityID := agentic.ModelEndpointEntityID(s.authorityOrg, s.authorityPlatform, "mock")
+	if _, err := s.nats.GetEntity(ctx, modelEntityID); err != nil {
+		return fmt.Errorf("controlled query target %s is not in ENTITY_STATES: %w", modelEntityID, err)
+	}
+	task := newTestTask(time.Now(), modelEntityID)
 
 	taskMsg := message.NewBaseMessage(task.Schema(), &task, "e2e-test")
 	taskData, err := json.Marshal(taskMsg)
@@ -726,7 +733,7 @@ func (s *Scenario) injectTask(ctx context.Context, result *scenarios.Result) err
 	return nil
 }
 
-func newTestTask(now time.Time) agentic.TaskMessage {
+func newTestTask(now time.Time, modelEntityID string) agentic.TaskMessage {
 	taskID := fmt.Sprintf("e2e-agentic-%d", now.UnixNano())
 	return agentic.TaskMessage{
 		// A loop instance token is a framework-minted canonical UUID (ADR-105,
@@ -735,12 +742,12 @@ func newTestTask(now time.Time) agentic.TaskMessage {
 		TaskID:      taskID,
 		Role:        "general",
 		Model:       "mock",
-		Prompt:      "Analyze the temperature sensor temp-sensor-001. Respond with a brief assessment including valid JSON in your response.",
+		Prompt:      "Use query_entity to inspect configured mock model endpoint " + modelEntityID + ". Respond with a brief assessment including valid JSON in your response.",
 		ChannelType: "e2e",
 		ChannelID:   taskID,
 		Tools: []agentic.ToolDefinition{{
 			Name:        "query_entity",
-			Description: "Query the test temperature sensor by its entity ID.",
+			Description: "Query the configured mock model endpoint by its entity ID.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

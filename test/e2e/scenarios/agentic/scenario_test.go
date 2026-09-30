@@ -2,6 +2,7 @@ package agentic
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,13 +12,20 @@ import (
 )
 
 func TestNewTestTaskRequiresQueryEntity(t *testing.T) {
-	task := newTestTask(time.Unix(0, 42))
+	entityID := agentic.ModelEndpointEntityID("c360", "semstreams-agentic-observed", "mock")
+	task := newTestTask(time.Unix(0, 42), entityID)
 
 	if len(task.Tools) != 1 || task.Tools[0].Name != "query_entity" {
 		t.Fatalf("tools = %#v, want explicit query_entity allowlist", task.Tools)
 	}
 	if task.ToolChoice == nil || task.ToolChoice.Mode != "function" || task.ToolChoice.FunctionName != "query_entity" {
 		t.Fatalf("tool choice = %#v, want forced query_entity", task.ToolChoice)
+	}
+	if !strings.Contains(task.Prompt, entityID) {
+		t.Fatalf("task prompt %q omits the runtime-observed model entity %q", task.Prompt, entityID)
+	}
+	if strings.Contains(task.Prompt, "c360.logistics.sensor.environmental.temperature.temp-sensor-001") {
+		t.Fatalf("task prompt retains obsolete cross-authority sensor: %q", task.Prompt)
 	}
 	if err := task.Validate(); err != nil {
 		t.Fatalf("task validation failed: %v", err)

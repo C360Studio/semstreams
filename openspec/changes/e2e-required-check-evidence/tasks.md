@@ -58,8 +58,8 @@ The owner approved explicitly incomplete outer Task launcher history while retai
 source/configuration identity and observed results. Implementation must distinguish the resolved Task target from
 observed command arguments; the active delta and guide record this narrow limit.
 
-Task truth is 7/10. The assembled run exposed an agentic tool failure; final implementation proof and push gates
-remain incomplete.
+Task truth is 7/10. The observed agentic fixture failure is corrected and its real Task now passes; remaining
+implementation and push gates remain incomplete.
 The 2026-09-27 pause and earlier evidence records below are historical checkpoints.
 
 ## Completed bounded corrections
@@ -103,7 +103,9 @@ reports; independent review approved it. All 17 existing statistical bind fixtur
 The five-family composite ran at clean checkpoint `6b495b77` with unchanged source hashes and exited 201 after
 856.857 seconds. Core, structural, statistical and semantic required checks passed. Agentic failed because the
 controlled tool call completed with status `failed`; streaming proof was consequently missing. This remains a failed
-composite, with the actual tool error under diagnosis. The full push gate has not run.
+composite. A separate corrected agentic Task now passes: the mock queries the exact model-endpoint entity already
+verified in the active deployment, replacing its unseeded fixed sensor ID. The seven-file fixture correction has
+independent approval; strict tool success remains required. The full push gate has not run.
 
 Before the two-key provenance allowlist extension, Result/Writer passed four native fuzz targets with bounded three-second exploration, and the
 Result observation target also passed exploration. Strict OpenSpec validation passed all 60 items; all 485 spec
@@ -120,8 +122,8 @@ agentic scenario, tier-authority and platform-identity behavior before editing t
 Claude's #1117 / PR #1425 retains semantic CI ownership; this claim retains #1222 required-check evidence.
 No transfer of that adjacent work is implied.
 
-Remaining work includes authorized CI retention, resolving the observed agentic failure, assembled proof, full push
-gates, final verification reconciliation
+Remaining work includes authorized CI retention, separate slow-consumer proof, full push gates, final verification
+reconciliation
 and archive/spec synchronization.
 The historical #1397 issue is closed. Required-job recurrence #1421 remains open and has no waiver for this PR. Earlier GREEN and claim-head hosted checks do not prove
 this dirty implementation. No implementation-complete or merge-ready claim is made.

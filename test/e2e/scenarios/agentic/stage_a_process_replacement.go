@@ -919,7 +919,7 @@ func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 		}
 	}()
 
-	task := newTestTask(time.Now())
+	task := newTestTask(time.Now(), agentic.ModelEndpointEntityID(s.authorityOrg, s.authorityPlatform, "mock"))
 	loopID := task.LoopID
 	taskData, err := json.Marshal(message.NewBaseMessage(task.Schema(), &task, "e2e-test"))
 	if err != nil {

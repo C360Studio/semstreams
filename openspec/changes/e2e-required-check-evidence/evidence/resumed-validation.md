@@ -42,7 +42,8 @@ community-ground-truth warnings; required-proof success is not a claim that ever
 
 Agentic task `e2e-agentic-1790767118980794000`, loop `ad834a6c-7332-4f1d-a451-26e57eb72043`,
 reached terminal state, but controlled tool call `call_21727c17` completed with status `failed`. The subsequent
-streaming observation was missing. The underlying tool error remains under diagnosis; no flake attribution is made.
+streaming observation was missing. Live request/result capture subsequently confirmed `error_kind=not_found` for the fixed, unseeded sensor ID;
+no flake attribution is made.
 The complete artifacts and source receipt are retained in `continuation/e2e-composite/` under the recovery archive.
 
 The failed child Task report existed but its parent lacked the path because the shell helper suppressed its marker
@@ -53,9 +54,27 @@ Reviewer approval covers helper SHA-256 `d2410d1f62adb585599b86075cbcf16b75c49b4
 and fixture SHA-256 `42ddc241854628785d9bdde8e1b2fc7fadf1376fc7a9129d537279eb0541e3e5`.
 Both RED and GREEN fixture logs are retained in `continuation/`. This correction does not repair the tool failure.
 
+## Corrected agentic fixture
+
+The seven-file correction targets the exact model-endpoint entity whose presence the scenario already verifies in
+`ENTITY_STATES`. The agentic-only mock preset quotes that observed ID into its request and yields after receiving
+the first tool result. It preserves the correlated successful-tool requirement. Independent review approved this
+bounded correction, including its first-turn completion control; the agentic and mock package race checks passed.
+Source patch, seven-file hash list, original `not_found` capture and post-fix output are retained in
+`continuation/agentic-postfix/`.
+
+The separate real `task e2e:agentic` passed at the reviewed dirty snapshot based on `02ac7ecd`.
+Task run `run-1790768801453318000-14542-1` and CLI run `run-1790768829712345000-14649-1` both finalized
+complete, required proof passed, all scenarios passed, zero errors and zero warnings, at 11:52:46 UTC on 2026-09-30.
+Live TOOL capture contains the exact requested endpoint entity in the matching successful result; cleanup completed.
+The earlier composite stays failed, and these reports retain their original source and run identities.
+
+The reviewer accepted the retained four-family application proof plus this corrected agentic Task as the required
+per-family assembled evidence. The scoped fixture/reporting corrections do not require repeating the unchanged
+semantic application path. This is not an all-green composite claim.
+
 ## Remaining proof
 
-The composite remains failed; targeted agentic diagnosis and final assembled proof are outstanding.
-The full push gate has not run. CI retention is still awaiting explicit upload
+The separate adopted slow-consumer Task and full push gate have not run on this continuation. CI retention is still awaiting explicit upload
 authorization after automatic approval rejected the prepared workflow edit. Earlier bounded Writer mutation
 deferrals remain unchanged. No merge-readiness, full implementation completion or issue closure is claimed.
