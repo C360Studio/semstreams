@@ -83,9 +83,16 @@ type LoopExecutionEntity struct {
 	Task     *TaskMessage `json:"task,omitempty"`
 }
 
-// EntityID returns the canonical 6-part entity ID for this loop execution.
+// EntityID returns the canonical 6-part entity ID for this loop execution, or
+// "" when the identity fields cannot form one (graph-ingest rejects an empty
+// ID; a decoded payload must never panic the consumer).
 func (e *LoopExecutionEntity) EntityID() string {
-	return LoopExecutionEntityID(e.Org, e.Platform, e.LoopID)
+	id, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.LoopID)
+	if err != nil {
+		// entity-id-audit:classify intentional-sentinel "" line=93 column=10 surface=go-return:EntityID entity_id_invalid:empty documented loop-execution failure return; graph-ingest rejects an empty ID and a decoded payload must not panic
+		return ""
+	}
+	return id
 }
 
 // Triples returns the spawn-identity origin triples for this loop execution.
@@ -126,9 +133,13 @@ func (e *LoopExecutionEntity) Triples() []message.Triple {
 	if e.Task.TaskID != "" {
 		triples = append(triples, triple(agvocab.LoopTask, e.Task.TaskID))
 	}
+	// Parent and reply-to are omitted when their ID cannot be constructed, the
+	// way the run branch below already does: this payload is decoded from the
+	// wire, and a malformed reference must never panic the consumer (#1112).
 	if e.Task.ParentLoopID != "" {
-		parentEntityID := LoopExecutionEntityID(e.Org, e.Platform, e.Task.ParentLoopID)
-		triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
+		if parentEntityID, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.Task.ParentLoopID); err == nil {
+			triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
+		}
 	}
 	// Stamp the run anchor when the loop belongs to a run (ADR-053 D7).
 	// Two triples: agent.loop.run = bare RunID; agent.run.entity-id = the full
@@ -141,8 +152,9 @@ func (e *LoopExecutionEntity) Triples() []message.Triple {
 	}
 	// Stamp the reply pointer when this loop is a reply (gh#256).
 	if e.Task.InReplyTo != "" {
-		replyEntityID := LoopExecutionEntityID(e.Org, e.Platform, e.Task.InReplyTo)
-		triples = append(triples, triple(agvocab.LoopReplyTo, replyEntityID))
+		if replyEntityID, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.Task.InReplyTo); err == nil {
+			triples = append(triples, triple(agvocab.LoopReplyTo, replyEntityID))
+		}
 	}
 	if e.Task.WorkflowSlug != "" {
 		triples = append(triples, triple(agvocab.LoopWorkflow, e.Task.WorkflowSlug))
