@@ -17,3 +17,21 @@ experiment and may not be cited as historical cause evidence without an actual o
 
 No additional issue is needed for the unresolved cause: #1421 already owns it. Graph-query #1433 / #1434 remains at its
 accepted inventory checkpoint. The previous owner waiver applied only to merged #1432, never to this follow-up.
+
+## Cleanup guard compatibility correction
+
+Required preflight stopped in nine seconds on two uncertain deferred callback sites: `ownerLoadAttemptScope` invokes
+`reportCleanup`, and `ownerLoadObservationScope` invokes `publish`. The canonical architect reviewed both helper
+bindings in default and integration selections. Their bodies report copied diagnostics; lifecycle finalization remains
+separately owned by the existing bounded `o.finish(parent)` call.
+
+The cleanup guard requires exact reviewed classification metadata for these two deferred diagnostic-publication callbacks.
+This correction permits only their `resolutions` records in `test/testinfra/cleanup_baseline.json`. It adds no legacy
+cleanup debt, changes no guard rules or cleanup ownership, and preserves the accepted observer behavior. This explicitly
+reconciles the original design's baseline-file exclusion. Root accepts this narrow implementation compatibility correction
+within the user's instruction to continue, subject to independent review of exact sites, dependencies and classification.
+
+The records retain cleanup applicability; they do not use an ordinary-only disposition. Complete caller fingerprints
+include the focused proof's buffered channel and publication. Non-lifecycle classification does not prove bounded logging,
+diagnostic callback completion or native watcher completion. The original native sample retains its original source hash;
+the later deadline-assertion refinement changes only a fake proof and needs no second diagnostic experiment.

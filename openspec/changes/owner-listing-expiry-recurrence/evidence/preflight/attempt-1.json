@@ -1,0 +1,12 @@
+{
+  "head": "5749a974a180fd798254843427f20e4292360218",
+  "command": "PATH=/private/tmp/gh1064-task-tools:$PATH task check:push",
+  "times": [
+    "start=2026-09-30T01:50:57Z",
+    "finish=2026-09-30T01:51:06Z",
+    "exit=201"
+  ],
+  "log_sha256": "3c8103bdcb7507283a7a8547ade8c746e166d57fcb9c17553cd66bf93a5cb5cb",
+  "archive_sha256": "0a2c3328849f66f90c43af6aa381425cfcee6be4c6ea49ca8387c4821e72c0ce",
+  "outcome": "Failed in cleanup-root guard before all later gates. Two new deferred diagnostic callbacks require exact reviewed non-lifecycle resolution. No new legacy debt or guard exception is accepted."
+}

@@ -26,9 +26,10 @@ The reduced two-case measurement design passed independent review at SHA-256
 The focused checks, selected attribution mutation and single native measurement pass are complete and independently
 reviewed (review/measurement-evidence-final.md). The pass did not reproduce CI's additional interval.
 The actual-workload observation design passed independent review at SHA-256
-`77a7dbc61d54a536ab5056f0ee9f0a01a03957746dde37c23f47a4db09cde81e`. The next slice adds private phase/Stop
+`77a7dbc61d54a536ab5056f0ee9f0a01a03957746dde37c23f47a4db09cde81e`. The implementation adds private phase/Stop
 evidence to the five initial CI predicate-forward calls, preserving their native channel, workload and failure
-semantics. It includes focused proof and one real-workload pass. Additional synthetic fault machinery and production
+semantics. Focused race proofs, a publication-sensitivity mutation and one actual-workload pass succeeded. The five native
+calls returned 5,000 keys in 59–61 ms; the expiry did not recur. Additional synthetic fault machinery and production
 repair remain unsupported by the current observations.
 Production changes require measured cause and independent design/implementation review. Preserve the real framework
 five-second deadline, workloads, latency assertions and error propagation. No blind repetition, retry-to-green,

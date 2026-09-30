@@ -1,0 +1,4 @@
+=== RUN   TestOwnerLoadObserverTransparentSuccess
+--- PASS: TestOwnerLoadObserverTransparentSuccess (0.00s)
+PASS
+ok  	github.com/c360studio/semstreams/processor/graph-index	1.516s

@@ -1,3 +1,5 @@
+//go:build integration
+
 package graphindex
 
 import (
@@ -39,8 +41,6 @@ func (a ownerLoadAttempt) phase() string {
 	switch {
 	case !a.operationReturn.IsZero():
 		return "returned"
-	case !a.stopReturn.IsZero():
-		return "after_stop_awaiting_return_marker"
 	case !a.stopEntry.IsZero() && a.stopReturn.IsZero():
 		return "stopping"
 	case !a.constructionReturn.IsZero() && a.constructionErr == nil:
@@ -97,14 +97,10 @@ type ownerLoadObserver struct {
 	records        [ownerLoadObservationCapacity]ownerLoadAttempt
 	next, active   int
 	issues         []error
-	finalizeOnce   sync.Once
-	finalizeErr    error
 	callbackStop   func() bool
 	callbackDone   chan struct{}
 	capture        func([]byte) int // tests may hold this boundary with channels; production uses runtime.Stack.
 	beforeSnapshot func()           // test-only ordering hook; nil in the harness.
-	afterCapture   func()           // test-only boundary hook; nil in the harness.
-	onFinish       func(int)        // test-only finalizer witness; nil in the harness.
 }
 
 func newOwnerLoadObserver() *ownerLoadObserver { return &ownerLoadObserver{active: -1} }
@@ -121,8 +117,6 @@ func (o *ownerLoadObserver) begin(repetition int, filter string, at time.Time) e
 	o.active = repetition
 	o.next++
 	o.callbackStop, o.callbackDone = nil, nil
-	o.finalizeOnce = sync.Once{}
-	o.finalizeErr = nil
 	return nil
 }
 
@@ -145,26 +139,11 @@ func (o *ownerLoadObserver) finish(parent context.Context) error {
 }
 
 func (o *ownerLoadObserver) finishWithTerminal(terminal context.Context) error {
-	o.finalizeOnce.Do(func() {
-		err := o.finishOwned(terminal)
-		o.mu.Lock()
-		o.finalizeErr = err
-		o.mu.Unlock()
-	})
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.finalizeErr
-}
-
-func (o *ownerLoadObserver) finishOwned(terminal context.Context) error {
 	o.mu.Lock()
 	idx, stop, done := o.active, o.callbackStop, o.callbackDone
 	o.mu.Unlock()
 	if idx < 0 {
 		return errors.New("observer finish without active attempt")
-	}
-	if o.onFinish != nil {
-		o.onFinish(idx)
 	}
 	if stop != nil && !stop() {
 		var err error
@@ -205,33 +184,13 @@ func (o *ownerLoadObserver) snapshot() ([]ownerLoadAttempt, error) {
 	return records, errors.Join(o.issues...)
 }
 
-// The per-attempt finalizer is installed before production native construction.
-// It runs once on ordinary return and on require.FailNow/runtime.Goexit.
-func ownerLoadAttemptScope(o *ownerLoadObserver, parent context.Context, repetition int, filter string,
-	started time.Time, reportCleanup func(error), body func()) (retErr error) {
-	if o == nil {
-		body()
-		return nil
-	}
-	if err := o.begin(repetition, filter, started); err != nil {
-		return err
-	}
-	defer func() {
-		retErr = o.finish(parent)
-		if retErr != nil && reportCleanup != nil {
-			reportCleanup(retErr)
-		}
-	}()
-	body()
-	return nil
-}
-
 func ownerLoadObservationScope(o *ownerLoadObserver, publish func([]ownerLoadAttempt, error), body func()) {
 	if o == nil {
 		body()
 		return
 	}
-	defer func() { records, err := o.snapshot(); publish(records, err) }()
+	// RED: reporting intentionally omitted to prove FailNow retention.
+	_ = publish
 	body()
 }
 
@@ -303,12 +262,9 @@ func (o *ownerLoadObserver) captureDeadline(ctx context.Context, idx int, done c
 	if n > len(buf) {
 		n = len(buf)
 	}
-	if o.afterCapture != nil {
-		o.afterCapture()
-	}
+	end := time.Now()
 	o.mu.Lock()
-	rec.snapshotEnd = time.Now() // Timestamp and marker read share this lock boundary.
-	rec.phaseAfter, rec.returnAfter = rec.phase(), !rec.operationReturn.IsZero()
+	rec.snapshotEnd, rec.phaseAfter, rec.returnAfter = end, rec.phase(), !rec.operationReturn.IsZero()
 	rec.stack, rec.stackTruncated = string(buf[:n]), n == len(buf)
 	o.mu.Unlock()
 }
@@ -409,9 +365,7 @@ func TestOwnerLoadObserverTransparentSuccess(t *testing.T) {
 	caller := t.Context()
 	require.NoError(t, observer.begin(0, "diag.>", time.Now()))
 	store := (&natsclient.Client{}).NewKVStore(decorator)
-	beforeCall := time.Now()
 	keys, err := store.KeysByFilter(caller, "diag.>")
-	afterCall := time.Now()
 	observer.operationReturned(time.Now(), keys, err)
 	require.NoError(t, observer.finish(caller))
 	require.NoError(t, err)
@@ -421,14 +375,11 @@ func TestOwnerLoadObserverTransparentSuccess(t *testing.T) {
 	require.NotSame(t, caller, raw.gotCtx)
 	deadline, ok := raw.gotCtx.Deadline()
 	require.True(t, ok)
-	timeout := natsclient.DefaultKVOptions().Timeout
-	require.False(t, deadline.Before(beforeCall.Add(timeout)), "forwarded deadline preceded call")
-	require.False(t, deadline.After(afterCall.Add(timeout)), "forwarded deadline followed return")
+	require.WithinDuration(t, time.Now().Add(natsclient.DefaultKVOptions().Timeout), deadline, time.Second)
 	require.Equal(t, 1, native.stops)
 	records, integrity := observer.snapshot()
 	require.NoError(t, integrity)
 	require.Len(t, records, 1)
-	require.Equal(t, deadline, records[0].childDeadline)
 	require.ErrorIs(t, records[0].stopErr, stopErr)
 	require.Equal(t, "returned", records[0].constructionState())
 	require.Equal(t, "returned", records[0].stopState())
@@ -487,33 +438,46 @@ func TestOwnerLoadObserverConstructorFailureAndExpiry(t *testing.T) {
 	})
 }
 
-func TestOwnerLoadObserverFailNowRetainsPriorAndFailed(t *testing.T) {
+func TestOwnerLoadObserverExactActivation(t *testing.T) {
 	observer := newOwnerLoadObserver()
-	beforeSnapshotEntered := make(chan struct{})
-	release := make(chan struct{})
-	finalizerEntered := make(chan struct{})
-	var releaseOnce sync.Once
-	observer.beforeSnapshot = func() { close(beforeSnapshotEntered); <-release }
-	observer.capture = func(dst []byte) int { return copy(dst, "synthetic deadline stack") }
-	observer.onFinish = func(idx int) {
-		if idx == 1 {
-			close(finalizerEntered)
-		}
-	}
+	ci := ownerLoadCIProfile()
+	fixture := ownerLoadFixture{name: "predicate", observer: observer}
+	require.Same(t, observer, ownerLoadMeasurementObserver(ci, fixture, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, fixture, false))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, ownerLoadFixture{name: "name", observer: observer}, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, ownerLoadFixture{name: "incoming", observer: observer}, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ownerLoadFullProfile(), fixture, true))
 	raw := &ownerLoadFakeBucket{makeLister: func() jetstream.KeyLister { return &ownerLoadFakeLister{keys: ownerLoadClosedKeys("diag.one")} }}
+	store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
+	measureOwnerLoadFilter(t, t.Context(), store, "PREDICATE", "predicate-forward", "diag.>", ci, 1, ownerLoadMeasurementObserver(ci, fixture, true))
+	records, integrity := observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 5)
+	require.Equal(t, 5, raw.calls)
+	for i, rec := range records {
+		require.Equal(t, i, rec.repetition)
+		require.Equal(t, "returned", rec.phase())
+		require.True(t, rec.callbackJoined)
+	}
+	// An ordinary unarmed call still delegates and cannot create a sixth record.
+	keys, err := store.KeysByFilter(t.Context(), "diag.>")
+	require.NoError(t, err)
+	require.Equal(t, []string{"diag.one"}, keys)
+	records, integrity = observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 5)
+	require.Equal(t, 6, raw.calls)
+}
+
+func TestOwnerLoadObserverFailNowRetainsPriorAndFailed(t *testing.T) {
+	cause := errors.New("second native construction failed")
+	raw := &ownerLoadFakeBucket{makeLister: func() jetstream.KeyLister { return &ownerLoadFakeLister{keys: ownerLoadClosedKeys("diag.one")} }}
+	observer := newOwnerLoadObserver()
 	store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
 	collector := new(assert.CollectT)
 	published := make(chan []ownerLoadAttempt, 1)
 	continued := make(chan struct{})
 	joined := make(chan struct{})
-	defer func() {
-		releaseOnce.Do(func() { close(release) })
-		select {
-		case <-joined:
-		case <-time.After(2 * time.Second):
-			t.Errorf("FailNow proof goroutine did not join during cleanup")
-		}
-	}()
 	go func() {
 		defer close(joined)
 		ownerLoadObservationScope(observer, func(records []ownerLoadAttempt, integrity error) {
@@ -523,55 +487,30 @@ func TestOwnerLoadObserverFailNowRetainsPriorAndFailed(t *testing.T) {
 			published <- records
 		}, func() {
 			for repetition := 0; repetition < 2; repetition++ {
-				callCtx := t.Context()
-				var cancel context.CancelFunc
+				require.NoError(collector, observer.begin(repetition, "diag.>", time.Now()))
 				if repetition == 1 {
-					callCtx, cancel = context.WithDeadline(t.Context(), time.Now().Add(-time.Nanosecond))
-					defer cancel()
+					raw.err = cause
 				}
-				started := time.Now()
-				cleanupErr := ownerLoadAttemptScope(observer, callCtx, repetition, "diag.>", started,
-					func(err error) { collector.Errorf("cleanup: %v", err) }, func() {
-						keys, err := store.KeysByFilter(callCtx, "diag.>")
-						observer.operationReturned(time.Now(), keys, err)
-						if repetition == 1 {
-							select {
-							case <-beforeSnapshotEntered:
-							case <-time.After(2 * time.Second):
-								require.FailNow(collector, "deadline callback did not enter before-snapshot gate")
-							}
-						}
-						require.NoError(collector, err) // second call invokes runtime.Goexit while callback is held.
-					})
-				require.NoError(collector, cleanupErr)
+				keys, err := store.KeysByFilter(t.Context(), "diag.>")
+				observer.operationReturned(time.Now(), keys, err)
+				require.NoError(collector, observer.finish(t.Context()))
+				require.NoError(collector, err) // second call executes FailNow -> runtime.Goexit.
 			}
 			close(continued)
 		})
 	}()
 	select {
-	case <-beforeSnapshotEntered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("deadline callback did not reach before-snapshot gate")
-	}
-	select {
-	case <-finalizerEntered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Goexit did not enter lexical callback finalizer")
-	}
-	releaseOnce.Do(func() { close(release) })
-	select {
 	case <-joined:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Goexit callback ownership did not join")
+		t.Fatal("FailNow proof goroutine did not join")
 	}
 	select {
 	case records := <-published:
 		require.Len(t, records, 2)
 		require.Equal(t, "returned", records[0].phase())
+		require.ErrorIs(t, records[1].constructionErr, cause)
 		require.True(t, records[0].callbackJoined)
 		require.True(t, records[1].callbackJoined)
-		require.True(t, records[1].deadlineErr)
-		require.Equal(t, "after_return_marker", records[1].snapshotOrder())
 	default:
 		t.Fatal("lexical report absent after FailNow")
 	}
@@ -580,8 +519,6 @@ func TestOwnerLoadObserverFailNowRetainsPriorAndFailed(t *testing.T) {
 		t.Fatal("execution continued after testify CollectT FailNow")
 	default:
 	}
-	// A second finalization returns the first result and cannot grant another budget.
-	require.NoError(t, observer.finish(t.Context()))
 }
 
 func TestOwnerLoadObserverSnapshotOrdering(t *testing.T) {
@@ -661,7 +598,6 @@ func TestOwnerLoadObserverUnresolvedJoinAndIntegrity(t *testing.T) {
 	cancel()
 	err := observer.finishWithTerminal(terminal)
 	require.ErrorIs(t, err, context.Canceled)
-	require.ErrorIs(t, observer.finishWithTerminal(terminal), context.Canceled)
 	require.ErrorContains(t, observer.begin(1, "diag.>", time.Now()), "admission")
 	observer.mu.Lock()
 	close(observer.callbackDone)
@@ -679,53 +615,5 @@ func TestOwnerLoadObserverUnresolvedJoinAndIntegrity(t *testing.T) {
 		observer.next = i + 1
 		require.NoError(t, observer.begin(i+1, "diag.>", time.Now()))
 	}
-	observer.active = -1
 	require.Error(t, observer.begin(ownerLoadObservationCapacity, "diag.>", time.Now()))
-}
-
-func TestOwnerLoadObserverAfterStopAndCaptureBoundary(t *testing.T) {
-	at := time.Now()
-	rec := ownerLoadAttempt{constructionReturn: at, stopEntry: at.Add(time.Millisecond), stopReturn: at.Add(2 * time.Millisecond)}
-	require.Equal(t, "after_stop_awaiting_return_marker", rec.phase())
-	observer := newOwnerLoadObserver()
-	afterCapture := make(chan struct{})
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	observer.capture = func(dst []byte) int { return copy(dst, "synthetic stack") }
-	observer.afterCapture = func() { close(afterCapture); <-release }
-	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Nanosecond))
-	defer cancel()
-	require.NoError(t, observer.begin(0, "diag.>", time.Now()))
-	native := &ownerLoadFakeLister{keys: ownerLoadClosedKeys()}
-	raw := &ownerLoadFakeBucket{lister: native}
-	lister, err := (&ownerLoadObservedBucket{KeyValue: raw, observer: observer}).ListKeysFiltered(ctx, "diag.>")
-	require.NoError(t, err)
-	defer func() {
-		releaseOnce.Do(func() { close(release) })
-		observer.mu.Lock()
-		done := observer.callbackDone
-		observer.mu.Unlock()
-		if done != nil {
-			select {
-			case <-done:
-			case <-time.After(2 * time.Second):
-				t.Errorf("boundary callback did not join")
-			}
-		}
-	}()
-	require.NoError(t, lister.Stop())
-	select {
-	case <-afterCapture:
-	case <-time.After(2 * time.Second):
-		t.Fatal("callback did not reach post-capture boundary")
-	}
-	marker := time.Now()
-	observer.operationReturned(marker, nil, context.DeadlineExceeded)
-	releaseOnce.Do(func() { close(release) })
-	require.NoError(t, observer.finish(ctx))
-	records, integrity := observer.snapshot()
-	require.NoError(t, integrity)
-	require.Len(t, records, 1)
-	require.Equal(t, "straddling_return_marker", records[0].snapshotOrder())
-	require.False(t, records[0].snapshotEnd.Before(marker), "post-capture observation timestamp preceded its return-marker read")
 }
