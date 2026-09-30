@@ -131,7 +131,7 @@ jobs:
   # timeout-minutes: 20. Measured full runs on this runner (E2E Ladder run
   # 36654106894, 682/677 s) minus the three quality stages (~488 s) and the
   # test-http-gateway synthesis (~18 s), plus ~60 s of registry pull, predict
-  # ~5 min; 20 is ~4x that and exceeds one full-variant run (13.4 min), so a
+  # ~5 min (the first run measured 4m17s, run 36728438332); 20 is ~4x that and exceeds one full-variant run (13.4 min), so a
   # flag that fails to take effect finishes and is diagnosed from [n/44]
   # instead of being killed. The ghcr login is kept: every measured run had it.
   e2e-semantic:

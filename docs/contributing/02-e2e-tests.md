@@ -20,7 +20,7 @@ E2E tests follow the **Observer Pattern**: they run against real services in Doc
 task e2e:core        # Platform boots, data flows (~10s)
 task e2e:structural  # Rules + PathRAG (~30s)
 task e2e:statistical # BM25 + community detection (~60s)
-task e2e:semantic    # Neural embeddings + LLM (~11.5 min on CI; E2E_PATH_ONLY=1 ~5 min, the per-PR shape; gh#1117)
+task e2e:semantic    # Neural embeddings + LLM (~11.5 min on CI; E2E_PATH_ONLY=1 4m17s, the per-PR shape, first run 2026-09-30; gh#1117)
 
 # Cleanup
 task e2e:clean
@@ -81,7 +81,7 @@ Neural embeddings + LLM. Full ML stack validation.
 
 | Duration | Purpose | Dependencies |
 |----------|---------|--------------|
-| ~11.5 min on CI (682/677 s, 2026-09-30); ~5 min with `E2E_PATH_ONLY=1`, the per-PR ladder shape (gh#1117) | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
+| ~11.5 min on CI (682/677 s, 2026-09-30); 4m17s with `E2E_PATH_ONLY=1`, the per-PR ladder shape, measured on the first run 2026-09-30 (run 36728438332, gh#1117) | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
 
 **Coverage**:
 - All statistical tier coverage
