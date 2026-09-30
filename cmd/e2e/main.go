@@ -137,7 +137,7 @@ func parseCommandLineFlags() *cliFlags {
 	flag.StringVar(&flags.variant, "variant", "",
 		"Test variant: structural (rules-only), statistical (BM25), semantic (neural+LLM)")
 	flag.BoolVar(&flags.pathOnly, "path-only", false,
-		"Tiered: skip the declared quality stages (the per-PR semantic ladder shape; env E2E_PATH_ONLY)")
+		"Tiered: skip the declared quality stages (the per-PR semantic ladder shape; env E2E_PATH_ONLY, any non-empty value)")
 	flag.StringVar(&flags.outputDir, "output-dir", "",
 		"Directory for saving results JSON (empty=no output)")
 	flag.BoolVar(&flags.compare, "compare", false,

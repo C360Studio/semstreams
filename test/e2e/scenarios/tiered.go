@@ -377,7 +377,9 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// validate_partition_colocation.go header). Only an unreachable partition
 		// index (GetAllCommunities) fails.
 		// Under path-only it records without its B0 pair and asserts nothing on
-		// the model's summaries (owner ruling R7, gh#1117).
+		// the model's summaries (owner ruling R7, gh#1117), and it
+		// reads before any stage has awaited a community generation, so a 0 in
+		// its metrics is not a measurement.
 		{"validate-partition-colocation", s.executePartitionColocation, []string{"semantic"}},
 		// NL intent routing tests (validates classifier → strategy routing through globalSearch).
 		// The probes send includeSummaries:false (no synthesis), and 0 probes
@@ -431,7 +433,9 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// code (fresh authority suffix, ID-ordered tie-breaks); ADR-099/#606
 		// make it deterministic, after which it asserts (#1426).
 		// It also reads COMMUNITY_SUMMARIES to record communities_llm_enhanced and
-		// asserts nothing on it (owner ruling R2, gh#1117).
+		// asserts nothing on it (owner ruling R2, gh#1117). Under path-only that
+		// read runs without validate-llm-enhancement's wait for the summarizer, so
+		// a 0 there is not a measurement.
 		{"validate-community-structure", s.executeValidateCommunityStructure, []string{"statistical", "semantic"}},
 		// ADR-090 breaking gate: statistical is the checked-in graph-clustering
 		// deployment and a fresh stack must never recreate retired persistence.
