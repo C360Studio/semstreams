@@ -27,8 +27,11 @@
 
 ## 3. Review and landing
 
-- [ ] 3.1 `semstreams-reviewer` on the diff; findings fixed and re-reviewed.
-- [ ] 3.2 Breaking gate: `task e2e:core` green at the final code revision, Docker window announced first
-      (`docker compose ls -q | wc -l` and e2e processes both 0 before starting); run id recorded in `evidence.md`.
-- [ ] 3.3 Archive as the last content commit; undraft; merge per the protocol's gate (main's CI re-read in the
-      command that arms auto-merge; flake #1421 needs its own waiver if it reddens a required job).
+- [x] 3.1 `semstreams-reviewer` on the diff: round 1 CHANGES REQUESTED at `6f15f8ed` (2 HIGH, 3 MEDIUM, 2 NIT),
+      round 2 PASS with NITs at `549b6a5c`; NITs fixed in `8e6cbeac`. Report under `review/`.
+- [x] 3.2 Breaking gate at the final code revision `8e6cbeac`: `task e2e:core` exit 0 and `task e2e:agentic` exit 0
+      ("Scenario completed successfully", 5m35s), Docker window announced to both peer sessions and cleared, compose
+      stacks and e2e processes both 0 before starting; record in `evidence.md` § Breaking gate.
+- [x] 3.3 Archive as the last content commit (the commit after this tick) and undraft. The merge gate is the
+      protocol's, not a task: main's CI re-read in the command that arms auto-merge; flake #1421 needs its own
+      waiver if it reddens a required job.

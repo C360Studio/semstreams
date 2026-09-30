@@ -190,3 +190,18 @@ proposal. `design.md` D1 already said "between P1's two calls" and is unchanged.
 | `scripts/run-integration-tests.sh ./processor/graph-ingest/` (host lock, `-race`, whole package) | 0 |
 | `openspec validate fact-lane-validate-and-identity-fence --strict` | 0 |
 | `npx markdownlint-cli2` on the change dir, both deltas and the migration note | 0 errors |
+
+## Breaking gate (task 3.2)
+
+Final code revision `8e6cbeac` (`git rev-parse HEAD` equal to `origin/claude/gh1112-fact-lane-identity`, porcelain 0).
+Pre-check before starting: `docker compose ls -q | wc -l` = 0; e2e processes = 0; Docker server 29.8.0; both peer
+Claude sessions notified of the window, one confirmed clear. Run 2026-09-30 by the coordinating session:
+
+| Command | Exit | Evidence |
+|---|---|---|
+| `task e2e:core` | 0 | tier ran and tore down cleanly (`docker compose ... down -v`) |
+| `task e2e:agentic` | 0 | `msg="Scenario completed successfully" duration=5m35.485572417s` |
+
+The agentic tier is the relevant one for the `LoopExecutionEntity` change (loops birth execution entities through
+the writer's `Validate()` and the Graphable lane); the core tier covers the plain Graphable path. The one
+`error:`-matching line in the agentic log is quoted in the coordinator's session record, not a stage failure.
