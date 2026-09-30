@@ -15,7 +15,8 @@ are in `design.md` at `1b1accf4ea4ea878c26236b5a9e6cb83d2d89d7a`.
 ## What Changes
 
 - **BREAKING (contract tightening on the Graphable lane):** `decodeEntity` calls `BaseMessage.Validate()` after
-  decode and before any Graphable method runs. A payload whose `Validate()` fails is a poison message on the lane's
+  decode and before any identity method (`EntityID()`, `Triples()`, `StorageRef()`, `IndexingProfile()`) runs. A
+  payload whose `Validate()` fails is a poison message on the lane's
   existing path: counted, logged at WARN with the subject and reason, acked and dropped, never persisted. A producer
   that publishes through `BaseMessage.MarshalJSON` already passed this check; only hand-written wire JSON that fails
   its own type's `Validate()` changes behavior. Migration note: `docs/operations/migration-fact-lane-validate.md`.

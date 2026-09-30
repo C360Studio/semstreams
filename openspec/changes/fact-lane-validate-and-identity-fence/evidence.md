@@ -163,3 +163,30 @@ hand-written `LoopExecutionEntity` wire bytes with a dotted `loop_id` on the `EN
 To reach 0 markdownlint errors, the two ADDED requirement headings were shortened to fit MD013's 80-character
 heading limit, and each delta gained its `# <capability> Delta` H1, matching the archived neighbour. Nothing in the
 tree cites these ADDED requirements yet. The one test comment that quoted the old heading was updated.
+
+## Revision 3: a panic through the real consume closure; validate wording
+
+This revision acts on two NITs from review round 2.
+
+`TestIntegration_FactLane_PanickingPayloadIsAckDropped` publishes a fence test payload whose `Validate()` panics. It
+publishes on the real `ENTITY` stream and makes the same server-side assertions as the poison row: counted once,
+pending and ack-pending 0, redelivered 0, `ENTITY_STATES` empty. The two rows share `assertPoisonAckDropped`.
+
+The red/green check used the `cp` + md5 ritual at `549b6a5c`, changing only `processor/graph-ingest/component.go`.
+
+- RED: with the Revision 1 extraction-only fence (`6f15f8ed`, `f2d04a95…`), natsclient logs `ERROR panic in message
+  handler panic="fence test payload: Validate boom"` repeatedly, which is the Nak-and-redeliver loop. The test fails
+  with `the poison message must be counted on the lane's error path`.
+- GREEN: after restore (`4fa7278e…`, matching HEAD), the test passes.
+
+The wording "before any method of the payload runs" now reads "before any identity method (`EntityID()`, `Triples()`,
+`StorageRef()`, `IndexingProfile()`) runs". The change is in the graph-ingest delta, the migration note and the
+proposal. `design.md` D1 already said "between P1's two calls" and is unchanged.
+
+| Command | Exit |
+|---------|------|
+| `task check` | 0 |
+| `go test -race -count=1 ./processor/graph-ingest/... ./agentic/...` | 0 |
+| `scripts/run-integration-tests.sh ./processor/graph-ingest/` (host lock, `-race`, whole package) | 0 |
+| `openspec validate fact-lane-validate-and-identity-fence --strict` | 0 |
+| `npx markdownlint-cli2` on the change dir, both deltas and the migration note | 0 errors |

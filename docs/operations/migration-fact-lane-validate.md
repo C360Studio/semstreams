@@ -6,12 +6,13 @@ each sister's owner applies it in their own repository.
 
 ## What changed
 
-graph-ingest's Graphable lane now calls `BaseMessage.Validate()` on every decoded arrival, before any method of the
-payload runs. A payload whose own `Validate()` fails is a poison message on the lane's existing path: counted in the
-component's error count, logged at WARN with the subject and the reason, acknowledged and dropped, never written to
-`ENTITY_STATES`. The lane also recovers a panic raised by payload code on the lane (a registered type's
-`UnmarshalJSON`, `Validate()`, `EntityID()`, `Triples()`, `StorageRef()` or `IndexingProfile()`). For such a payload
-the delivery changes from Nak-and-redeliver (the stream handler's panic recovery) to a counted ack-drop.
+graph-ingest's Graphable lane now calls `BaseMessage.Validate()` on every decoded arrival, before any identity method
+(`EntityID()`, `Triples()`, `StorageRef()`, `IndexingProfile()`) runs. A payload whose own `Validate()` fails is a
+poison message on the lane's existing path: counted in the component's error count, logged at WARN with the subject and
+the reason, acknowledged and dropped, never written to `ENTITY_STATES`. The lane also recovers a panic raised by payload
+code on the lane (a registered type's `UnmarshalJSON`, `Validate()`, `EntityID()`, `Triples()`, `StorageRef()` or
+`IndexingProfile()`). For such a payload the delivery changes from Nak-and-redeliver (the stream handler's panic
+recovery) to a counted ack-drop.
 
 `LoopExecutionEntity.EntityID()` now returns `""` for an identity it cannot construct, `Validate()` rejects a
 malformed parent, reply-to or run ID, and `Triples()` omits such a triple instead of panicking. The exported

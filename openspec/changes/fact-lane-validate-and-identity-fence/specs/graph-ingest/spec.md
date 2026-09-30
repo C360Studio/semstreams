@@ -4,9 +4,10 @@
 
 ### Requirement: The Graphable lane MUST validate and fence a decoded payload
 
-The Graphable lane MUST call the decoded `BaseMessage`'s `Validate()` after decode and before any method of the
-payload runs, and MUST treat a validation failure as a poison message: counted in the lane's error count, logged at
-WARN with the subject and the reason, acknowledged and dropped, never persisted. A panic raised by payload code on
+The Graphable lane MUST call the decoded `BaseMessage`'s `Validate()` after decode and before any identity method
+(`EntityID()`, `Triples()`, `StorageRef()`, `IndexingProfile()`) runs, and MUST treat a validation failure as a
+poison message: counted in the lane's error count, logged at WARN with the subject and the reason, acknowledged and
+dropped, never persisted. A panic raised by payload code on
 the lane (the registered type's `UnmarshalJSON` during decode, its `Validate()`, or its `EntityID()`, `Triples()`,
 `StorageRef()` or `IndexingProfile()`) MUST be recovered inside the lane and converted into a classified rejection
 that names the message type (or the subject, before decode succeeds) and the recovered value, on the same poison
