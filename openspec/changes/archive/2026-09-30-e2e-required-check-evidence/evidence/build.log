@@ -1,0 +1,3 @@
+task: [build:default] go build -o bin/semstreams ./cmd/semstreams
+task: [build:default] echo "Built bin/semstreams"
+Built bin/semstreams

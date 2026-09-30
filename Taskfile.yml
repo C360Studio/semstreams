@@ -164,39 +164,15 @@ tasks:
 
   # E2E composite tasks
   e2e:tiers:
-    desc: Run all tier E2E tests (structural -> statistical -> semantic)
+    desc: Run the three adopted inference tier proofs (structural -> statistical -> semantic)
     silent: false
-    deps:
-      - task: "e2e:check-ports"
-        vars: { COMPOSE_FILES: "docker/compose/tiered.yml", PROFILES: "structural statistical semantic" }
-      - "build:e2e"
     cmds:
-      - 'echo "[TIERS] Running all inference tier E2E tests..."'
-      - 'echo ""'
-      - 'echo "=== STRUCTURAL (Rules-Only) ==="'
-      - task: e2e:tier
-        vars:
-          PROFILE: structural
-          VARIANT: structural
+      - 'echo "[TIERS] Selected proof members: structural, statistical, semantic"'
+      - task: e2e:structural
       - sleep 3
-      - 'echo ""'
-      - 'echo "=== STATISTICAL (BM25 + LPA) ==="'
-      - task: e2e:tier
-        vars:
-          PROFILE: statistical
-          VARIANT: statistical
+      - task: e2e:statistical
       - sleep 3
-      - 'echo ""'
-      - 'echo "=== SEMANTIC (Neural + LLM) ==="'
-      - task: e2e:tier
-        vars:
-          PROFILE: semantic
-          VARIANT: semantic
-          EXTRA_ARGS: --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190
-      - 'echo ""'
-      - 'echo "[TIERS] Generating comparison report..."'
-      - cd cmd/e2e && ./e2e --compare-tiers --output-dir ./test/e2e/results
-      - 'echo "[OK] All tier tests complete. Results in ./test/e2e/results/"'
+      - task: e2e:semantic
 
   e2e:tier:
     internal: true
@@ -208,8 +184,44 @@ tasks:
       - cd cmd/e2e && ./e2e --scenario tiered --variant {{.VARIANT}} {{.EXTRA_ARGS}} --output-dir ./test/e2e/results
 
   e2e:all:
-    desc: Run all E2E tests (core -> inference tiers -> agentic)
+    desc: Alias for five-family core-inference-agentic proof
     cmds:
-      - task: e2e:core
-      - task: e2e:tiers
-      - task: e2e:agentic
+      - task: e2e:core-inference-agentic
+
+  e2e:core-inference-agentic:
+    desc: Required five-family proof (core, structural, statistical, semantic, agentic)
+    silent: false
+    deps: ["build:e2e"]
+    cmds:
+      - |
+        . scripts/e2e-required-report.sh
+        e2e_report_begin core-inference-agentic composite e2e:core-inference-agentic || exit 1
+        echo "[E2E] Required members: core, structural, statistical, semantic, agentic"
+        echo "[E2E] Excluded: slow-consumer, lessons, research-graph direct/execute, deep-research, CRUD-tools, ops, lifecycle, throughput, heavy/fallback semantic variants, live OpenAI adapter"
+        command_exit=0
+        finish() {
+          trap - EXIT
+          cleanup_exit=0
+          # Each child owns its Compose cleanup; the parent has no Compose stack.
+          report_exit=0
+          e2e_report_finalize "$command_exit" "$cleanup_exit" || report_exit=$?
+          cat "$E2E_REPORT_LOG"
+          if [ "$command_exit" -ne 0 ]; then exit "$command_exit"; fi
+          if [ "$report_exit" -ne 0 ]; then exit "$report_exit"; fi
+        }
+        trap finish EXIT
+        run_body() {
+          for member in core structural statistical semantic agentic; do
+            echo "[E2E] Running required child $member"
+            child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-$member.stdout"
+            child_exit=0
+            E2E_REPORT_PARENT_ID="$E2E_REPORT_RUN_ID" E2E_REPORT_PARENT_SLOT="$member" \
+              E2E_REPORT_DIR="$E2E_REPORT_DIR" task "e2e:$member" > "$child_output" 2>&1 || child_exit=$?
+            cat "$child_output"
+            child_argv_json=$(jq -nc --arg target "e2e:$member" '["task",$target]') || return 1
+            e2e_report_child "$member" "$child_output" "$child_exit" "$child_argv_json" || return 1
+            [ "$child_exit" -eq 0 ] || return "$child_exit"
+          done
+        }
+        run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?
+        finish

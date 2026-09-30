@@ -1,0 +1,124 @@
+{
+  "retrieved_at": "2026-09-27T14:40:21.689Z",
+  "baseline": "12ae633381b8b8b26c333efe5f5c8691cfa47fb4",
+  "issues": [
+    {
+      "number": 1222,
+      "url": "https://github.com/C360Studio/semstreams/issues/1222",
+      "title": "e2e: make selected required checks and their evidence determine success",
+      "state": "open",
+      "milestone": 3,
+      "updated_at": "2026-09-27T14:20:18Z",
+      "body": "## Owner-approved scope reconciliation — 2026-09-27\n\nKeep **v1.0.0-beta.165**, within #1134 work package C. The owner approved using this existing issue for the shared required-check evidence pattern, demonstrated by repairs to existing scenarios. Its original acceptance already allowed replacing the count with a signal every tier actually produces. No parallel assertion-accounting issue or broad E2E epic is created.\n\n## Current evidence\n\nThe original claim that agentic never populates `AssertionsRun` is stale. At survey baseline `fe9482b7f336e575317cfb45fd1ad7c40baf7904`, it increments and cross-checks the count, but a stage returning nil can still mean the named check did not pass:\n\n- [Agentic stage accounting](https://github.com/C360Studio/semstreams/blob/fe9482b7f336e575317cfb45fd1ad7c40baf7904/test/e2e/scenarios/agentic/scenario.go#L236) counts successful stage returns. [Tool/streaming metric checks](https://github.com/C360Studio/semstreams/blob/fe9482b7f336e575317cfb45fd1ad7c40baf7904/test/e2e/scenarios/agentic/scenario.go#L1060) can warning-skip failed observation; streaming can return success with zero chunks despite the configured streaming path.\n- [Statistical search](https://github.com/C360Studio/semstreams/blob/fe9482b7f336e575317cfb45fd1ad7c40baf7904/test/e2e/scenarios/validate_search.go#L20) records query failures without failing the tier; the [final known-answer guard](https://github.com/C360Studio/semstreams/blob/fe9482b7f336e575317cfb45fd1ad7c40baf7904/test/e2e/scenarios/validate_search.go#L477) applies to semantic. Semantic also has independent hard checks, so this is not a claim that all semantic search failures pass.\n- [Core dataflow](https://github.com/C360Studio/semstreams/blob/fe9482b7f336e575317cfb45fd1ad7c40baf7904/test/e2e/scenarios/core_dataflow.go#L265) can warn on content-validation failure. Its file-count minimum still fails missing output; those are different checks.\n- Research assertion reporting still needs reconciliation. #1224 owns the direct-route false green, #1288 owns actual result-readback agreement, and #1195 owns throughput skip/response-validation failures.\n- [`e2e:all`](https://github.com/C360Studio/semstreams/blob/fe9482b7f336e575317cfb45fd1ad7c40baf7904/Taskfile.yml#L209) selects five of thirteen container-backed tier families. A task name/dispatch guard proves selection resolves, not that every advertised or release-required tier ran. Thirteen available tiers are not automatically thirteen required tiers per PR.\n\nThese are source-review findings, not new runtime measurements. The earlier comments retain the count history; the agentic count check alone must not be copied as sufficient evidence.\n\n## Bounded acceptance\n\n- [ ] Inventory existing selector/task/dispatch and Result/TestRun writer surfaces before designing changes. Select and record explicit required suite membership, including intentional exclusions and measured cost; align task naming/help/docs. Unknown selections, zero required selections and missing selected required scenarios cannot produce a successful claimed run.\n- [ ] Distinguish required checks, diagnostics and skipped work in the existing result/report path. Missing, failed or skipped required evidence prevents success and propagates to runner/task/job exit. Optional quality/profiler observations remain visibly diagnostic.\n- [ ] Record actual completed behavioral checks, not nil stage returns. If a count remains, increment at real assertion points and verify the named required set; nonzero totals alone are insufficient.\n- [ ] Repair representative existing agentic, graph/statistical and core checks above. Bind input/run/entity/loop identities to the expected consumer or terminal result; retain lower-level integration coverage rather than copying every race matrix into Docker.\n- [ ] Demonstrate healthy controls and representative absent/wrong-result, observation-error and skipped-work controls. Show each defect makes the required check and outer runner fail, including the propagation path. Use deterministic fixtures; exercise real composition where that is the property at risk.\n- [ ] Retain exact source/configuration and binary identity, command, selected/completed checks, outcomes and relevant artifacts, including failed runs, by extending existing writers and the release-candidate proof contract. An aggregate count or inaccessible scratch-log locator is insufficient on its own.\n- [ ] Update `docs/contributing/01-testing.md` and `02-e2e-tests.md` with the implemented pattern and repaired examples; add one canonical reviewer/preflight pointer rather than duplicate rule prose across contracts. State precisely where scripted dependencies are used and what they prove.\n- [ ] Use the normal OpenSpec change process before changing the harness acceptance contract. Specs describe the implemented behavior after landing; no standalone program document or new ADR is required merely for this work.\n\n## Boundaries and sequencing\n\n#1117 owns the beta.163 small-model semantic path gate; #769/#1128 own rc.1 agentic/CRUD assertions and CI selection. #1293 owns broader common local/CI verification, citation/fuzz/Go-coverage plumbing. Capability issues retain their own behavior and tests; this issue is not a second implementation owner for #1195/#1224/#1288.\n\nBeta.163/164 membership is unchanged by this reconciliation. Where a current release's acceptance relies on one of the known false-positive checks, repair that required path in its owning work before citing it as proof; otherwise narrow the claim accurately. Do not pull the entire shared-contract migration into those tags.\n\nDo not expand all tiers to full-run-per-PR, invent a new generic test framework, require model-quality thresholds without calibration, or add a fourth #1134 work package. Recheck live claims before touching shared harness/workflow files. Heavy local gates remain serialized; no paid model run is implied.\n"
+    },
+    {
+      "number": 1117,
+      "url": "https://github.com/C360Studio/semstreams/issues/1117",
+      "title": "e2e/ci: the default semantic variant is already the small-model CI gate but runs in no workflow — wire it into the ladder",
+      "state": "open",
+      "milestone": 2,
+      "updated_at": "2026-09-27T14:21:13Z"
+    },
+    {
+      "number": 769,
+      "url": "https://github.com/C360Studio/semstreams/issues/769",
+      "title": "ci: add measured agentic and CRUD critical-path coverage to the PR ladder",
+      "state": "open",
+      "milestone": 6,
+      "updated_at": "2026-09-27T14:19:02Z"
+    },
+    {
+      "number": 1128,
+      "url": "https://github.com/C360Studio/semstreams/issues/1128",
+      "title": "e2e(crud-tools): prove persona prompt pickup and name rule activation accurately",
+      "state": "open",
+      "milestone": 6,
+      "updated_at": "2026-09-27T14:19:15Z"
+    },
+    {
+      "number": 1293,
+      "url": "https://github.com/C360Studio/semstreams/issues/1293",
+      "title": "ci: unify local and CI verification with citation, fuzz, and coverage evidence",
+      "state": "open",
+      "milestone": 6,
+      "updated_at": "2026-09-27T14:21:01Z"
+    },
+    {
+      "number": 1195,
+      "url": "https://github.com/C360Studio/semstreams/issues/1195",
+      "title": "e2e(throughput): scenario exits 0 while skipping its query load — a green tier that measured nothing",
+      "state": "open",
+      "milestone": 3,
+      "updated_at": "2026-09-12T08:46:39Z"
+    },
+    {
+      "number": 1224,
+      "url": "https://github.com/C360Studio/semstreams/issues/1224",
+      "title": "e2e(research-graph): the direct fixture is green while the synthesizer LLM is never invoked — the degraded path stamps every triple the assertions check",
+      "state": "open",
+      "milestone": 3,
+      "updated_at": "2026-09-14T15:57:46Z"
+    },
+    {
+      "number": 1288,
+      "url": "https://github.com/C360Studio/semstreams/issues/1288",
+      "title": "research-graph: completion envelopes do not match read_loop_result and current loop state",
+      "state": "open",
+      "milestone": 3,
+      "updated_at": "2026-09-12T07:40:57Z"
+    },
+    {
+      "number": 1134,
+      "url": "https://github.com/C360Studio/semstreams/issues/1134",
+      "title": "beta.165: declaration fidelity, current-state readiness, and path-closed proof",
+      "state": "open",
+      "milestone": 3,
+      "updated_at": "2026-09-27T14:20:31Z"
+    },
+    {
+      "number": 1176,
+      "url": "https://github.com/C360Studio/semstreams/issues/1176",
+      "title": "e2e: slow-consumer is the last tier with no port preflight — it binds 38090/39100 and probes neither",
+      "state": "open",
+      "milestone": 3,
+      "updated_at": "2026-09-27T14:18:18Z"
+    }
+  ],
+  "active_prs": [
+    {
+      "number": 1406,
+      "url": "https://github.com/C360Studio/semstreams/pull/1406",
+      "title": "test(e2e): claim required-check evidence work (#1222)"
+    },
+    {
+      "number": 1404,
+      "url": "https://github.com/C360Studio/semstreams/pull/1404",
+      "title": "fix(config)!: namespace the config KV bucket by the authority pair and retire the gh#459 identity guard"
+    },
+    {
+      "number": 1403,
+      "url": "https://github.com/C360Studio/semstreams/pull/1403",
+      "title": "fix(agentic-loop): a deferred turn whose durable write fails is retried, not acknowledged (#1400)"
+    },
+    {
+      "number": 1402,
+      "url": "https://github.com/C360Studio/semstreams/pull/1402",
+      "title": "fix(agentic-loop): a different-kind terminal for the same loop adopts the durable winner (#1399)"
+    },
+    {
+      "number": 1368,
+      "url": "https://github.com/C360Studio/semstreams/pull/1368",
+      "title": "docs(governance): prepare the beta.164 NEAR golden audit"
+    },
+    {
+      "number": 1254,
+      "url": "https://github.com/C360Studio/semstreams/pull/1254",
+      "title": "docs(auth): inventory-only deliverable for the principal primitive"
+    },
+    {
+      "number": 1141,
+      "url": "https://github.com/C360Studio/semstreams/pull/1141",
+      "title": "fix(agentic-tools)!: restore bounded GET-only page retrieval"
+    }
+  ]
+}

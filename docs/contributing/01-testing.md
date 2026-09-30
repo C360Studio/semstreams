@@ -71,6 +71,20 @@ persistence, or API-to-UI behavior its environment does not exercise. Focused ex
 Use existing repository tools and declared commands. Tool adoption or new automated gates require a separately scoped
 change. This discipline does not select a mutation runner, require a library, or introduce a score threshold.
 
+### Preserve the Scope of E2E Evidence
+
+For adopted E2E suites, declare the required observations before execution and compare actual consumer results with
+independently expected input identities and values. A successful callback, stage count or healthy component cannot
+stand in for a missing behavioral observation. A failed required observation must propagate through scenario result,
+runner exit, Task exit and retained artifact. Diagnostics retain their actual outcome in reports without independently
+failing required acceptance, and cannot fill required IDs.
+
+The [E2E evidence guide](02-e2e-tests.md#named-required-evidence) owns the author recipe, adopted scope, reporting
+boundary and artifact interpretation. Complete means complete for the named set in that invocation. Legacy or
+incomplete reports remain unattested; neither their aggregate success nor their assertion count proves adoption.
+Use lower-tier fault controls to exercise the classifier and exit propagation, and assembled runs to establish the
+application path. Review both claims separately.
+
 ### When to Use Property-Based Testing
 
 For a material behavior change involving any of the following shapes, record the PBT decision in its existing issue,

@@ -20,17 +20,25 @@ var mintedSuffix = regexp.MustCompile(`^-[0-9a-f]{6}$`)
 // using a per-deployment authority (ADR-104) — the value every other fixture
 // now READS instead of predicting.
 type MintedAuthorityScenario struct {
-	natsURL       string
-	declaredStem  string
-	nats          *client.NATSValidationClient
-	requireSuffix bool
+	natsURL          string
+	declaredStem     string
+	nats             *client.NATSValidationClient
+	requireSuffix    bool
+	evidenceRunID    string
+	evidenceMemberID string
 }
 
 // NewMintedAuthorityScenario builds the core tier's validate-minted-authority
 // stage. declaredStem is the org.platform the stack's shipped configuration
 // declares; the recorded identity must have that stem and an entropy suffix.
-func NewMintedAuthorityScenario(natsURL, declaredStem string) *MintedAuthorityScenario {
-	return &MintedAuthorityScenario{natsURL: natsURL, declaredStem: declaredStem, requireSuffix: true}
+func NewMintedAuthorityScenario(natsURL, declaredStem, runID, memberID string) *MintedAuthorityScenario {
+	return &MintedAuthorityScenario{natsURL: natsURL, declaredStem: declaredStem, requireSuffix: true,
+		evidenceRunID: runID, evidenceMemberID: memberID}
+}
+
+// CheckRequirements declares the minted authority observation before setup.
+func (s *MintedAuthorityScenario) CheckRequirements() []CheckRequirement {
+	return []CheckRequirement{{ID: "core.minted-authority", Required: true}}
 }
 
 // Name returns the scenario identifier.
@@ -58,7 +66,14 @@ func (s *MintedAuthorityScenario) Execute(ctx context.Context) (*Result, error) 
 		ScenarioName: s.Name(), StartTime: time.Now(),
 		Metrics: make(map[string]any), Details: make(map[string]any),
 	}
+	if err := result.DeclareChecks(s.evidenceRunID, s.evidenceMemberID, s.CheckRequirements()); err != nil {
+		return result, err
+	}
 	fail := func(err error) (*Result, error) {
+		if recordErr := result.RecordCheck(CheckObservation{ID: "core.minted-authority", RunID: s.evidenceRunID,
+			MemberID: s.evidenceMemberID, Status: "failed", Reason: err.Error()}); recordErr != nil {
+			return result, recordErr
+		}
 		result.Error = err.Error()
 		result.Errors = []string{err.Error()}
 		result.EndTime = time.Now()
@@ -117,6 +132,11 @@ func (s *MintedAuthorityScenario) Execute(ctx context.Context) (*Result, error) 
 
 	result.Details["declared_stem"] = s.declaredStem
 	result.Details["effective_authority"] = authority
+	if err := result.RecordCheck(CheckObservation{ID: "core.minted-authority", RunID: s.evidenceRunID,
+		MemberID: s.evidenceMemberID, Status: "passed", Evidence: map[string]string{
+			"declared_stem": s.declaredStem, "effective_authority": authority}}); err != nil {
+		return result, err
+	}
 	result.Success = true
 	result.EndTime = time.Now()
 	result.Duration = result.EndTime.Sub(result.StartTime)
@@ -137,16 +157,27 @@ func (s *MintedAuthorityScenario) Teardown(ctx context.Context) error {
 // identity record. The boot itself is the taskfile's job, because only it can
 // observe the container's exit code and logs.
 type PreIdentityBucketScenario struct {
-	natsURL string
-	mode    string
-	stem    string
-	nats    *client.NATSValidationClient
+	natsURL          string
+	mode             string
+	stem             string
+	nats             *client.NATSValidationClient
+	evidenceRunID    string
+	evidenceMemberID string
 }
 
 // NewPreIdentityBucketScenario builds one half of the stage. mode is "seed" or
 // "assert"; declaredStem is the org.platform of the configuration the app boots.
-func NewPreIdentityBucketScenario(natsURL, mode, declaredStem string) *PreIdentityBucketScenario {
-	return &PreIdentityBucketScenario{natsURL: natsURL, mode: mode, stem: declaredStem}
+func NewPreIdentityBucketScenario(natsURL, mode, declaredStem, runID, memberID string) *PreIdentityBucketScenario {
+	return &PreIdentityBucketScenario{natsURL: natsURL, mode: mode, stem: declaredStem,
+		evidenceRunID: runID, evidenceMemberID: memberID}
+}
+
+// CheckRequirements declares only the assertion half's observed absence.
+func (s *PreIdentityBucketScenario) CheckRequirements() []CheckRequirement {
+	if s.mode != "assert" {
+		return nil
+	}
+	return []CheckRequirement{{ID: "core.preidentity.no-record", Required: true}}
 }
 
 // Name returns the scenario identifier, distinguished by mode.
@@ -176,7 +207,22 @@ func (s *PreIdentityBucketScenario) Execute(ctx context.Context) (*Result, error
 		ScenarioName: s.Name(), StartTime: time.Now(),
 		Metrics: make(map[string]any), Details: make(map[string]any),
 	}
+	if s.mode == "assert" {
+		if err := result.DeclareChecks(s.evidenceRunID, s.evidenceMemberID, s.CheckRequirements()); err != nil {
+			return result, err
+		}
+	}
 	finish := func(err error) (*Result, error) {
+		if s.mode == "assert" {
+			observation := CheckObservation{ID: "core.preidentity.no-record", RunID: s.evidenceRunID,
+				MemberID: s.evidenceMemberID, Status: "passed"}
+			if err != nil {
+				observation.Status, observation.Reason = "failed", err.Error()
+			}
+			if recordErr := result.RecordCheck(observation); recordErr != nil {
+				return result, recordErr
+			}
+		}
 		if err != nil {
 			result.Error = err.Error()
 			result.Errors = []string{err.Error()}

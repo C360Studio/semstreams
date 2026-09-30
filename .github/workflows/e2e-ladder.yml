@@ -70,6 +70,24 @@ jobs:
 
       - name: Run assembled slow-consumer attribution proof
         run: task e2e:slow-consumer
+        env:
+          E2E_REPORT_DIR: ${{ runner.temp }}/semstreams-e2e-evidence
+
+      # Retain only the named evidence outputs. Copied app binaries, report
+      # inputs, repository files and unrelated results are not uploaded.
+      - name: Retain required-check evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: e2e-slow-consumer-evidence
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-results-*.json
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-member-*.json
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-manifest-*.json
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-task-*.log
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-log-*.log
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-child-*.stdout
 
   e2e-statistical:
     name: e2e statistical
@@ -120,3 +138,21 @@ jobs:
 
       - name: Run e2e statistical tier
         run: task e2e:statistical
+        env:
+          E2E_REPORT_DIR: ${{ runner.temp }}/semstreams-e2e-evidence
+
+      # Retain only the named evidence outputs. Copied app binaries, report
+      # inputs, repository files and unrelated results are not uploaded.
+      - name: Retain required-check evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: e2e-statistical-evidence
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-results-*.json
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-member-*.json
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-manifest-*.json
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-task-*.log
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-log-*.log
+            ${{ runner.temp }}/semstreams-e2e-evidence/e2e-child-*.stdout

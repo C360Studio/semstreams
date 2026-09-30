@@ -51,7 +51,7 @@ const clusteringRunsMetric = clusteringSubsystem + "detection_duration_seconds_c
 
 // executeValidateZeroEmbeddings validates that NO embeddings were generated (structural tier constraint)
 func (s *TieredScenario) executeValidateZeroEmbeddings(ctx context.Context, result *Result) error {
-	return s.validateTierMustNotRun(ctx, zeroConstraint{
+	err := s.validateTierMustNotRun(ctx, zeroConstraint{
 		subsystem:  embeddingSubsystem,
 		metric:     embeddingsGeneratedMetric,
 		component:  "graph-embedding",
@@ -61,11 +61,17 @@ func (s *TieredScenario) executeValidateZeroEmbeddings(ctx context.Context, resu
 		detailsKey: "zero_embeddings_validation",
 		countKey:   "embeddings_generated",
 	}, result)
+	evidence := map[string]string{"metric": embeddingsGeneratedMetric,
+		"expected_max": fmt.Sprint(s.config.ExpectedEmbeddings), "observed": "unavailable"}
+	if count, ok := result.Metrics["embeddings_generated"]; ok {
+		evidence["observed"] = fmt.Sprint(count)
+	}
+	return s.recordTieredCheck(result, "structural.zero-embeddings", err, evidence)
 }
 
 // executeValidateZeroClusters validates that NO clustering occurred (structural tier constraint)
 func (s *TieredScenario) executeValidateZeroClusters(ctx context.Context, result *Result) error {
-	return s.validateTierMustNotRun(ctx, zeroConstraint{
+	err := s.validateTierMustNotRun(ctx, zeroConstraint{
 		subsystem:  clusteringSubsystem,
 		metric:     clusteringRunsMetric,
 		component:  "graph-clustering",
@@ -75,6 +81,12 @@ func (s *TieredScenario) executeValidateZeroClusters(ctx context.Context, result
 		detailsKey: "zero_clusters_validation",
 		countKey:   "clustering_runs",
 	}, result)
+	evidence := map[string]string{"metric": clusteringRunsMetric,
+		"expected_max": fmt.Sprint(s.config.ExpectedClusters), "observed": "unavailable"}
+	if count, ok := result.Metrics["clustering_runs"]; ok {
+		evidence["observed"] = fmt.Sprint(count)
+	}
+	return s.recordTieredCheck(result, "structural.zero-clustering-runs", err, evidence)
 }
 
 // confirmComponentAbsent returns nil only when the running service's component

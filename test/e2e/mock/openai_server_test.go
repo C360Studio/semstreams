@@ -932,3 +932,72 @@ func TestOpenAIServer_ObserveEntityIDSuffix_MissLeavesPlaceholder(t *testing.T) 
 		t.Errorf("content = %q, want the unresolved placeholder %q", got, ObservedEntityIDPlaceholder)
 	}
 }
+
+// The agentic fixture must quote the entity ID supplied by the running stack,
+// rather than a fixed authority that has no seeded ENTITY_STATES record.
+func TestOpenAIServer_RoleToolCallObservesRuntimeEntityID(t *testing.T) {
+	server := NewOpenAIServer().WithRoleToolCallSequence([]RoleToolCall{{
+		Marker:                "inspect configured mock model endpoint",
+		ToolName:              "query_entity",
+		Args:                  map[string]any{},
+		ObserveEntityIDSuffix: "model-registry.agent.endpoint.mock",
+	}})
+	if err := server.Start(":0"); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+	entityID := "c360.semstreams-agentic-observed.model-registry.agent.endpoint.mock"
+	request := ChatCompletionRequest{
+		Model:    "mock-model",
+		Tools:    []Tool{{Type: "function", Function: FunctionDef{Name: "query_entity"}}},
+		Messages: []ChatMessage{{Role: "user", Content: "inspect configured mock model endpoint " + entityID}},
+	}
+	response := makeRequest(t, server.URL()+"/v1/chat/completions", request)
+	var args map[string]string
+	if err := json.Unmarshal([]byte(response.Choices[0].Message.ToolCalls[0].Function.Arguments), &args); err != nil {
+		t.Fatal(err)
+	}
+	if args["entity_id"] != entityID {
+		t.Fatalf("entity_id = %q, want runtime entity %q", args["entity_id"], entityID)
+	}
+
+	request.Messages[0].Content = "inspect configured mock model endpoint c360.logistics.sensor.environmental.temperature.temp-sensor-001"
+	response = makeRequest(t, server.URL()+"/v1/chat/completions", request)
+	args = nil
+	if err := json.Unmarshal([]byte(response.Choices[0].Message.ToolCalls[0].Function.Arguments), &args); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := args["entity_id"]; found {
+		t.Fatalf("wrong-suffix request selected entity_id = %q, want no target", args["entity_id"])
+	}
+}
+
+func TestOpenAIServer_FirstTurnRoleToolCallYieldsToCompletedTool(t *testing.T) {
+	server := NewOpenAIServer().
+		WithCompletionContent(`{"valid":true}`).
+		WithRoleToolCallSequence([]RoleToolCall{{
+			Marker:                "inspect configured mock model endpoint",
+			ToolName:              "query_entity",
+			Args:                  map[string]any{},
+			ObserveEntityIDSuffix: "model-registry.agent.endpoint.mock",
+			OnlyBeforeToolResult:  true,
+		}})
+	if err := server.Start(":0"); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+	request := ChatCompletionRequest{
+		Model:    "mock-model",
+		Tools:    []Tool{{Type: "function", Function: FunctionDef{Name: "query_entity"}}},
+		Messages: []ChatMessage{{Role: "user", Content: "inspect configured mock model endpoint c360.semstreams-agentic-observed.model-registry.agent.endpoint.mock"}},
+	}
+	first := makeRequest(t, server.URL()+"/v1/chat/completions", request)
+	if len(first.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("first turn tool calls = %d, want one", len(first.Choices[0].Message.ToolCalls))
+	}
+	request.Messages = append(request.Messages, ChatMessage{Role: "tool", ToolCallID: first.Choices[0].Message.ToolCalls[0].ID, Content: "endpoint found"})
+	second := makeRequest(t, server.URL()+"/v1/chat/completions", request)
+	if len(second.Choices[0].Message.ToolCalls) != 0 || second.Choices[0].Message.Content != `{"valid":true}` {
+		t.Fatalf("second turn = %#v, want completion after tool result", second.Choices[0])
+	}
+}

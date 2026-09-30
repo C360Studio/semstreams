@@ -1,0 +1,36 @@
+# #1222 Result/Writer finalization API shape for bounded review
+
+This is a review of current uncommitted bytes, not a claim that the slice is stable or tests are complete.
+Accepted authority: openspec/changes/e2e-required-check-evidence/design.md (accepted SHA-256 a31a5c690da763b124a7d1e1727836e57a270f943b5b61576216d7f386b9b48c), its active e2e-evidence delta and implementation-handoff.md.
+
+## Exact current proposal
+
+Exported `results.ValidateRequiredEvidence(run *TestRun) error` (writer.go:368) is a preterminal check. It calls private `checkRequiredEvidence(run) (missing []string, err error)` (writer.go:380). That private check examines schema/run/selection identity, start/argv/absolute working directory, exact unique selected member IDs, Result run/member identity, the child's existing `Result.FinalizeChecks` (on a copy) and derived assertion count, and syntactic/available provenance. It deliberately does not require CompletedAt or ExitCode because those are set after the caller decides outcome.
+
+`Writer.WriteRun(run) (path,error)` (writer.go:120) calls `evaluateRequiredProof(run) (missing []string, complete bool)` (writer.go:373), which calls the same `checkRequiredEvidence` and additionally requires terminal CompletedAt and ExitCode=0. WriteRun recomputes Summary and EvidenceStatus, then marshals/writes; callers do not set those fields. `Writer.LoadRun(path)` (writer.go:312) calls decodeRun, which uses evaluateRequiredProof to reject a schema-2 record claiming complete proof without it. `Result.FinalizeChecks() error` (evidence.go) is the single child required-check finalizer; Writer does not define a second check grammar.
+
+Proposed runner call order: WriteRun(initial incomplete); execute selected members and retain observed Result/lifecycle failures; call ValidateRequiredEvidence; set nonzero ExitCode if it fails while preserving any original command failure; set CompletedAt; call WriteRun once for terminal persistence; return nonzero on check or required write failure. The preterminal function reads run fields and returns an error, with no filesystem effects or mutation. WriteRun mutates SchemaVersion/defaults, UTC times, Summary/EvidenceStatus and typed metadata, and atomically replaces the initial aggregate at the same path. It does not start/stop tests or commands.
+
+## Provenance and effects
+
+Result declarations/observations are stored in Result; invalid RecordCheck attempts append sticky source errors. FinalizeChecks updates Success, EvidenceStatus, AssertionsRun and typed projection and preserves source errors. Writer uses the existing TestRun/Result family, not a TaskResult, second filesystem owner or process scheduler. The new exported preterminal method has an immediate cmd/e2e runner consumer; later Task reporting can use the same method.
+
+writer.go:229 currently refuses writing to an existing aggregate whose CompletedAt is nonzero. That terminal rewrite restriction was inferred by the developer from distinct initial/final records and concern about overwriting a completed run. The accepted design explicitly requires unique child records and atomic initial/final aggregate replacement; it does not explicitly require terminal aggregate immutability. This inferred restriction caused a real runner integration cycle: with a single terminal WriteRun, the caller only sees EvidenceStatus after persisting ExitCode=0; if evidence is incomplete, a corrective ExitCode=1 rewrite is refused. The preterminal method resolves the cycle without changing the restriction. Whether the restriction or preterminal export is the smallest accepted API is the decision requested of architect/reviewer/root. No code after this snapshot changes either choice until that decision.
+
+An alternative within the same Writer owner would be one `Writer.FinalizeRun(run *TestRun, commandExit int) (path string, finalExit int, err error)` operation that calls the private check, sets CompletedAt/ExitCode, calls WriteRun once, returns both persistence/proof error and the resulting nonzero exit. That avoids a separate public preterminal check but broadens Writer mutation. It is not implemented. Another option is allowing terminal correction rewrites, but that creates a persisted intermediate terminal state with exit zero and unattested proof; the caller must still correct it before returning, and a failed correction leaves inconsistent status. No option is represented as accepted yet.
+
+## Snapshot identity
+
+- test/e2e/results/writer.go SHA-256 92651bcbcce944fae814e5baa112e3bfac10157d555b075b68f9088326661695
+- test/e2e/scenarios/scenario.go SHA-256 55944b35bb995c94b72d2f3376c78d170d4bbb8b128e2f7a3149f2ec1c5248e4
+- test/e2e/scenarios/evidence.go SHA-256 5ffa1c2f0416a3bdcd672f03c1ad4952cfa9998bd9c68e6ad270285f61069c60
+
+The Writer snapshot has not yet been gofmt'd/tested after the last preterminal patch. Earlier focused tests passed before this patch; this document does not transfer that result to these bytes. No Docker, task integration, mutation or independent implementation review has been run.
+
+## Root's smaller option B for architect review
+
+Keep only the existing exported `Writer.WriteRun`. Treat `TestRun.ExitCode` as the overall proof-command exit, initialized by the runner from its observed command/cleanup status after retaining each underlying child/process/cleanup status separately in member Results and log references. On terminal WriteRun (`CompletedAt` set and `ExitCode` nonnil), call the existing private proof check before marshalling. Preserve a nonzero exit; if the provisional overall exit is zero but required proof is incomplete, set it to one before marshalling. Recompute Summary and EvidenceStatus from those final fields, atomically replace the initial aggregate once, and return. The caller uses the mutated `run.ExitCode` to choose its outer process exit, or exits nonzero on WriteRun error. Initial WriteRun has nil exit and stays incomplete. No new exported preflight method or separate acceptance interpreter is needed. This is proposed, not implemented.
+
+The observed-versus-overall distinction is essential: downgrading a zero ExitCode is honest only if ExitCode is explicitly the overall proof command, while the original executed child's status and cleanup status remain in distinct retained member/lifecycle evidence. If ExitCode is intended to be the directly observed child status, overwriting it would misstate an observation and this option would require a separate final gate field. The runner developer confirms it can keep those underlying observed statuses separately. The architect should pin this interpretation. The current `TestRun.ExitCode` comment in implementation-handoff.md says absent means not observed, but does not specify whether the present value is child status or overall proof status.
+
+Under option B, the terminal-rewrite restriction at writer.go:229 may remain, because Writer reaches a final coherent record on the first terminal call. The existing `ValidateRequiredEvidence` export would be removed and its private `checkRequiredEvidence` reused by WriteRun and LoadRun. Option B is narrower if this ExitCode interpretation is accepted; it avoids a second public phase while preserving atomic initial/final persistence.

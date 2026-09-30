@@ -9,261 +9,333 @@ tasks:
         vars: { COMPOSE_FILES: "docker/compose/e2e.yml", PROFILES: "fixtures" }
       - ":build:e2e"
     cmds:
-      - echo "[E2E] Starting SemStreams E2E environment..."
-      # --build so the tier exercises CURRENT source, not a stale cached image (gh#246 follow-up).
-      - defer: docker compose -f docker/compose/e2e.yml down -v --timeout 15
-      - docker compose -f docker/compose/e2e.yml up -d --wait --build
-      - echo "[OK] All services are healthy"
       - |
-        fail() {
-          echo "[FAIL] $1"
-          docker logs semstreams-e2e-app 2>&1 || true
-          exit 1
+        . scripts/e2e-required-report.sh
+        e2e_report_begin core fixtures e2e:core || exit 1
+        command_exit=0
+        finish() {
+          trap - EXIT
+          cleanup_exit=0
+          docker compose -f docker/compose/e2e.yml --profile fixtures down -v --timeout 15 >> "$E2E_REPORT_LOG" 2>&1 || cleanup_exit=$?
+          report_exit=0
+          e2e_report_finalize "$command_exit" "$cleanup_exit" || report_exit=$?
+          cat "$E2E_REPORT_LOG"
+          if [ "$command_exit" -ne 0 ]; then exit "$command_exit"; fi
+          if [ "$cleanup_exit" -ne 0 ]; then exit "$cleanup_exit"; fi
+          if [ "$report_exit" -ne 0 ]; then exit "$report_exit"; fi
         }
+        trap finish EXIT
+        e2e_report_add_file compose docker/compose/e2e.yml || command_exit=$?
+        [ "$command_exit" -eq 0 ] && e2e_report_add_file config configs/protocol-flow.json || command_exit=1
+        [ "$command_exit" -eq 0 ] && e2e_report_add_file fixture cmd/e2e-semstreams/fixtures/register.go || command_exit=1
+        run_body() {
+          echo "[E2E] Starting SemStreams E2E environment..."
+          docker compose -f docker/compose/e2e.yml up -d --wait --build || return $?
+          echo "[OK] All services are healthy"
+          e2e_report_capture_app production semstreams-e2e-app || return $?
+          (
+            current_check=core.readiness
+            expected="READY and all components healthy"
+            fail() {
+              e2e_report_record "$current_check" failed "$1" "$expected" "${heartbeat:-${ready:-unavailable}}" || true
+              echo "[FAIL] $1"
+              docker logs semstreams-e2e-app 2>&1 || true
+              exit 1
+            }
 
-        ready=$(curl --max-time 5 -fsS http://localhost:38080/readyz) || fail "readiness endpoint unavailable"
-        [ "$ready" = "READY" ] || fail "readiness body was not exact READY"
+            ready=$(curl --max-time 5 -fsS http://localhost:38080/readyz) || fail "readiness endpoint unavailable"
+            [ "$ready" = "READY" ] || fail "readiness body was not exact READY"
 
-        health=$(curl --max-time 5 -fsS http://localhost:38080/components/health) || fail "component health unavailable"
-        total=$(printf '%s' "$health" | jq -er '.total | select(type == "number" and . > 0)') || fail "component health total is missing or zero"
-        healthy=$(printf '%s' "$health" | jq -er '[.components[] | select(.healthy == true)] | length') || fail "component health entries are malformed"
-        overall=$(printf '%s' "$health" | jq -er '.overall.status') || fail "overall component health is missing"
-        [ "$overall" = "healthy" ] || fail "selected core fixture is not fully healthy"
-        [ "$healthy" -eq "$total" ] || fail "selected core fixture reports unhealthy components"
+            health=$(curl --max-time 5 -fsS http://localhost:38080/components/health) || fail "component health unavailable"
+            total=$(printf '%s' "$health" | jq -er '.total | select(type == "number" and . > 0)') || fail "component health total is missing or zero"
+            healthy=$(printf '%s' "$health" | jq -er '[.components[] | select(.healthy == true)] | length') || fail "component health entries are malformed"
+            overall=$(printf '%s' "$health" | jq -er '.overall.status') || fail "overall component health is missing"
+            [ "$overall" = "healthy" ] || fail "selected core fixture is not fully healthy"
+            [ "$healthy" -eq "$total" ] || fail "selected core fixture reports unhealthy components"
 
-        startup_metrics=$(curl --max-time 5 -fsS http://localhost:39090/metrics) \
-          || fail "startup metrics unavailable"
-        startup_series=$(printf '%s\n' "$startup_metrics" | grep '^semstreams_startup_units{') \
-          || fail "startup metric family missing"
-        series_count=$(printf '%s\n' "$startup_series" | wc -l | tr -d ' ')
-        [ "$series_count" -eq 9 ] || fail "startup metric family did not contain exactly nine fixed series"
-        startup_value() {
-          printf '%s\n' "$startup_series" \
-            | awk -v owner="$1" -v stage="$2" \
-              '$0 ~ "owner=\\\"" owner "\\\"" && $0 ~ "stage=\\\"" stage "\\\"" {print $2}'
+            e2e_report_record core.readiness passed "" "$expected" "READY; healthy=$healthy/$total" || fail "readiness observation could not be retained"
+            current_check=core.heartbeat
+            expected="nine startup series and matching heartbeat totals"
+            startup_metrics=$(curl --max-time 5 -fsS http://localhost:39090/metrics) \
+              || fail "startup metrics unavailable"
+            startup_series=$(printf '%s\n' "$startup_metrics" | grep '^semstreams_startup_units{') \
+              || fail "startup metric family missing"
+            series_count=$(printf '%s\n' "$startup_series" | wc -l | tr -d ' ')
+            [ "$series_count" -eq 9 ] || fail "startup metric family did not contain exactly nine fixed series"
+            startup_value() {
+              printf '%s\n' "$startup_series" \
+                | awk -v owner="$1" -v stage="$2" \
+                  '$0 ~ "owner=\\\"" owner "\\\"" && $0 ~ "stage=\\\"" stage "\\\"" {print $2}'
+            }
+            services_admitted=$(startup_value services admitted)
+            services_invoked=$(startup_value services starts_invoked)
+            services_completed=$(startup_value services starts_completed)
+            services_failed=$(startup_value services starts_failed)
+            components_admitted=$(startup_value components admitted)
+            components_participants=$(startup_value components lifecycle_participants)
+            components_invoked=$(startup_value components starts_invoked)
+            components_completed=$(startup_value components starts_completed)
+            components_failed=$(startup_value components starts_failed)
+            [ "$services_admitted" -gt 0 ] || fail "no admitted services in startup metrics"
+            [ "$services_invoked" = "$services_admitted" ] || fail "service Starts invoked did not match admission"
+            [ "$services_completed" = "$services_admitted" ] || fail "service Starts completed did not match admission"
+            [ "$services_failed" = "0" ] || fail "normal boot reported failed service Starts"
+            [ "$components_admitted" -gt 0 ] || fail "no admitted components in startup metrics"
+            [ "$components_participants" -gt 0 ] || fail "no lifecycle components in startup metrics"
+            [ "$components_invoked" = "$components_participants" ] || fail "component Starts invoked did not match participants"
+            [ "$components_completed" = "$components_participants" ] || fail "component Starts completed did not match participants"
+            [ "$components_failed" = "0" ] || fail "normal boot reported failed component Starts"
+
+            attempt=0
+            matched=false
+            while [ "$attempt" -lt 20 ]; do
+              if docker logs semstreams-e2e-app 2>&1 | jq -Re \
+                'fromjson? | select(.msg == "System heartbeat" and .components_total == 0 and .components_healthy == 0)' >/dev/null; then
+                fail "heartbeat reported 0/0 while runtime component health was non-empty"
+              fi
+              heartbeat=$(docker logs semstreams-e2e-app 2>&1 | jq -Rc 'fromjson? | select(.msg == "System heartbeat")' | tail -n 1)
+              if [ -n "$heartbeat" ] && printf '%s' "$heartbeat" | jq -e --argjson total "$total" --argjson healthy "$healthy" \
+                '.components_total == $total and .components_healthy == $healthy' >/dev/null; then
+                matched=true
+                break
+              fi
+              attempt=$((attempt + 1))
+              sleep 0.5
+            done
+            [ "$matched" = "true" ] || fail "heartbeat totals did not match runtime component health within 10s"
+            e2e_report_record core.heartbeat passed "" "$expected" "$heartbeat" || fail "heartbeat observation could not be retained"
+            echo "[OK] Readiness and heartbeat report $healthy/$total healthy components"
+          ) || return $?
+          echo "[E2E] validate-minted-authority - the deployment minted and recorded its own authority..."
+          child_input=$(e2e_report_child_input core.minted-authority core-minted-authority) || return $?
+          child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-core.minted-authority.stdout"
+          child_exit=0
+          (cd cmd/e2e && ./e2e --scenario core-minted-authority --output-dir "$E2E_REPORT_DIR" --evidence-input "$child_input") > "$child_output" 2>&1 || child_exit=$?
+          cat "$child_output"
+          e2e_report_child core.minted-authority "$child_output" "$child_exit" || return 1
+          [ "$child_exit" -eq 0 ] || return "$child_exit"
+          echo "[OK] platform_identity records {org, stem, id} and the effective pair carries the minted suffix"
+          echo "[E2E] Running core tests on the production binary (health + dataflow)..."
+          child_input=$(e2e_report_child_input core.core-scenarios core-scenarios) || return $?
+          child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-core.core-scenarios.stdout"
+          child_exit=0
+          "$E2E_REPORT_BIN" --scenario all --output-dir "$E2E_REPORT_DIR" --evidence-input "$child_input" > "$child_output" 2>&1 || child_exit=$?
+          cat "$child_output"
+          e2e_report_child core.core-scenarios "$child_output" "$child_exit" || return 1
+          [ "$child_exit" -eq 0 ] || return "$child_exit"
+          (
+            current_check=core.shutdown.exit
+            expected="application exit 0"
+            fail() {
+              e2e_report_record "$current_check" failed "$1" "$expected" "${exit_code:-${api_status:-${metrics_status:-unavailable}}}" || true
+              echo "[FAIL] $1"
+              docker logs semstreams-e2e-app 2>&1 || true
+              exit 1
+            }
+
+            echo "[E2E] Sending SIGTERM to the SemStreams application..."
+            docker compose -f docker/compose/e2e.yml stop --timeout 35 semstreams || fail "application stop command failed"
+
+            exit_code=$(docker inspect semstreams-e2e-app | jq -er '.[0].State.ExitCode') || fail "application exit code unavailable"
+            [ "$exit_code" -eq 0 ] || fail "application exited with code $exit_code"
+            e2e_report_record core.shutdown.exit passed "" "$expected" "$exit_code" || fail "shutdown exit observation could not be retained"
+            current_check=core.shutdown.log
+            expected="SemStreams shutdown complete log record"
+
+            docker logs semstreams-e2e-app 2>&1 | jq -Re 'fromjson? | select(.msg == "SemStreams shutdown complete")' >/dev/null \
+              || fail "shutdown-complete record missing"
+            e2e_report_record core.shutdown.log passed "" "$expected" "record present" || fail "shutdown log observation could not be retained"
+            current_check=core.shutdown.listeners
+            expected="API and metrics connection refusal 7; NATS healthy"
+
+            if curl --connect-timeout 1 --max-time 2 -sS http://localhost:38080/readyz >/dev/null 2>&1; then
+              api_status=0
+            else
+              api_status=$?
+            fi
+            [ "$api_status" -eq 7 ] || fail "API listener probe exited $api_status after application exit, want connection failure 7"
+
+            if curl --connect-timeout 1 --max-time 2 -sS http://localhost:39090/metrics >/dev/null 2>&1; then
+              metrics_status=0
+            else
+              metrics_status=$?
+            fi
+            [ "$metrics_status" -eq 7 ] || fail "metrics listener probe exited $metrics_status after application exit, want connection failure 7"
+
+            curl --max-time 5 -fsS http://localhost:38222/healthz >/dev/null \
+              || fail "external NATS did not remain healthy after application exit"
+            e2e_report_record core.shutdown.listeners passed "" "$expected" "API=$api_status metrics=$metrics_status NATS=healthy" || fail "listener observation could not be retained"
+            echo "[OK] SIGTERM exited 0, released listeners, completed shutdown, and left NATS healthy"
+          ) || return $?
+          (
+            current_check=core.early-cancel.exit
+            expected="controlled exit 1 after blocked NATS connect"
+            early_suffix=$$
+            early_network="semstreams-early-sigterm-net-$early_suffix"
+            early_blackhole="semstreams-early-sigterm-blackhole-$early_suffix"
+            early_app="semstreams-early-sigterm-app-$early_suffix"
+
+            cleanup_early_boot() {
+              early_cleanup_status=0
+              docker rm -f "$early_app" "$early_blackhole" >/dev/null 2>&1 \
+                || { early_cleanup_status=$?; echo "[FAIL] Early-boot containers could not be removed"; }
+              docker network rm "$early_network" >/dev/null 2>&1 \
+                || { early_cleanup_status=$?; echo "[FAIL] Early-boot network could not be removed"; }
+              return "$early_cleanup_status"
+            }
+            fail_early_boot() {
+              e2e_report_record "$current_check" failed "$1" "$expected" "${exit_code:-${running:-unavailable}}" || true
+              echo "[FAIL] $1"
+              docker logs "$early_app" 2>&1 || true
+              docker logs "$early_blackhole" 2>&1 || true
+              trap - EXIT
+              cleanup_early_boot || echo "[FAIL] Early-boot cleanup also failed"
+              exit 1
+            }
+            trap cleanup_early_boot EXIT
+
+            echo "[E2E] Verifying SIGTERM during blocked production bootstrap..."
+            docker network create "$early_network" >/dev/null \
+              || fail_early_boot "could not create isolated early-boot network"
+            docker run -d --name "$early_blackhole" --network "$early_network" alpine:3.22 \
+              sh -c 'tail -f /dev/null | nc -l -p 4222' >/dev/null \
+              || fail_early_boot "could not start NATS blackhole listener"
+            docker run -d --name "$early_app" --network "$early_network" \
+              -e "SEMSTREAMS_NATS_URLS=nats://$early_blackhole:4222" \
+              -e SEMSTREAMS_LOG_LEVEL=debug \
+              c360studio/semstreams:e2e-production \
+              --config /app/configs/protocol-flow.json >/dev/null \
+              || fail_early_boot "could not start production application"
+
+            attempt=0
+            connecting=false
+            while [ "$attempt" -lt 50 ]; do
+              if docker logs "$early_app" 2>&1 | grep -F '"msg":"Connecting to NATS"' >/dev/null; then
+                connecting=true
+                break
+              fi
+              running=$(docker inspect "$early_app" | jq -r '.[0].State.Running') \
+                || fail_early_boot "early-boot application state unavailable"
+              [ "$running" = "true" ] || fail_early_boot "application exited before entering NATS Connect"
+              attempt=$((attempt + 1))
+              sleep 0.1
+            done
+            [ "$connecting" = "true" ] || fail_early_boot "Connecting to NATS evidence absent"
+
+            attempt=0
+            accepted=false
+            while [ "$attempt" -lt 50 ]; do
+              if docker exec "$early_blackhole" netstat -tn 2>/dev/null | grep -q ESTABLISHED; then
+                accepted=true
+                break
+              fi
+              attempt=$((attempt + 1))
+              sleep 0.1
+            done
+            [ "$accepted" = "true" ] || fail_early_boot "blackhole did not accept the NATS TCP connection"
+
+            docker kill --signal=TERM "$early_app" >/dev/null \
+              || fail_early_boot "could not send SIGTERM to early-boot application"
+
+            attempt=0
+            exited=false
+            while [ "$attempt" -lt 100 ]; do
+              running=$(docker inspect "$early_app" | jq -r '.[0].State.Running') \
+                || fail_early_boot "early-boot application state unavailable after SIGTERM"
+              if [ "$running" = "false" ]; then
+                exited=true
+                break
+              fi
+              attempt=$((attempt + 1))
+              sleep 0.1
+            done
+            [ "$exited" = "true" ] || fail_early_boot "application did not exit within 10s of SIGTERM"
+
+            exit_code=$(docker inspect "$early_app" | jq -er '.[0].State.ExitCode') \
+              || fail_early_boot "early-boot exit code unavailable"
+            [ "$exit_code" -eq 1 ] \
+              || fail_early_boot "early SIGTERM exited $exit_code, want controlled failed-boot exit 1 (not default 143)"
+            e2e_report_record core.early-cancel.exit passed "" "$expected" "$exit_code" || fail_early_boot "early exit observation could not be retained"
+            current_check=core.early-cancel.no-services
+            expected="context cancellation and no service startup"
+
+            early_logs=$(docker logs "$early_app" 2>&1)
+            printf '%s\n' "$early_logs" | grep -F "context canceled" >/dev/null \
+              || fail_early_boot "context-cancellation evidence missing after early SIGTERM"
+            if printf '%s\n' "$early_logs" | grep -F "Starting all services" >/dev/null; then
+              fail_early_boot "services started after early SIGTERM"
+            fi
+            e2e_report_record core.early-cancel.no-services passed "" "$expected" "context canceled; Starting all services absent" || fail_early_boot "no-services observation could not be retained"
+            trap - EXIT
+            cleanup_early_boot || { echo "[FAIL] Early-boot cleanup failed after the observations passed"; exit 1; }
+            echo "[OK] Early SIGTERM canceled blocked NATS boot, exited 1, and fenced service startup"
+          ) || return $?
+          docker compose -f docker/compose/e2e.yml down -v --timeout 15 || return $?
+          echo "[E2E] validate-pre-identity-bucket-refusal - booting into a bucket that predates identity minting..."
+          docker compose -f docker/compose/e2e.yml up -d --wait nats || return $?
+          (cd cmd/e2e && ./e2e --scenario core-pre-identity-seed) || return $?
+          docker compose -f docker/compose/e2e.yml up -d --no-deps semstreams || return $?
+          (
+            current_check=core.preidentity.refusal
+            expected="nonzero refusal naming pre-identity bucket"
+            fail_pre_identity() {
+              e2e_report_record "$current_check" failed "$1" "$expected" "${exit_code:-${running:-unavailable}}" || true
+              echo "[FAIL] $1"
+              docker logs semstreams-e2e-app 2>&1 || true
+              exit 1
+            }
+
+            attempt=0
+            exited=false
+            while [ "$attempt" -lt 100 ]; do
+              running=$(docker inspect semstreams-e2e-app 2>/dev/null | jq -r '.[0].State.Running') || running=unknown
+              if [ "$running" = "false" ]; then
+                exited=true
+                break
+              fi
+              attempt=$((attempt + 1))
+              sleep 0.2
+            done
+            [ "$exited" = "true" ] || fail_pre_identity "application did not exit within 20s of booting a pre-identity bucket"
+
+            exit_code=$(docker inspect semstreams-e2e-app | jq -er '.[0].State.ExitCode') \
+              || fail_pre_identity "application exit code unavailable"
+            [ "$exit_code" -ne 0 ] || fail_pre_identity "application booted a pre-identity bucket instead of refusing it"
+
+            docker logs semstreams-e2e-app 2>&1 | grep -F "predates framework-minted platform identity" >/dev/null \
+              || fail_pre_identity "the refusal did not name the pre-identity bucket as the cause"
+            e2e_report_record core.preidentity.refusal passed "" "$expected" "exit=$exit_code; refusal log present" || fail_pre_identity "refusal observation could not be retained"
+
+            child_input=$(e2e_report_child_input core.preidentity.no-record core-pre-identity-bucket-assert) \
+              || { echo "[FAIL] Could not prepare no-record child identity"; exit 1; }
+            child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-core.preidentity.no-record.stdout"
+            child_exit=0
+            (cd cmd/e2e && ./e2e --scenario core-pre-identity-assert --output-dir "$E2E_REPORT_DIR" \
+              --evidence-input "$child_input") > "$child_output" 2>&1 || child_exit=$?
+            cat "$child_output"
+            e2e_report_child core.preidentity.no-record "$child_output" "$child_exit" \
+              || { echo "[FAIL] No-record child failed or its required evidence was unavailable"; exit 1; }
+            [ "$child_exit" -eq 0 ] || { echo "[FAIL] Refused boot left a platform_identity record"; exit 1; }
+            echo "[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record"
+          ) || return $?
+          docker compose -f docker/compose/e2e.yml down -v --timeout 15 || return $?
+          echo "[E2E] Phase 2 - graph round-trip probe against the e2e-target binary..."
+          docker compose -f docker/compose/e2e.yml --profile fixtures up -d --wait --build nats semstreams-fixtures || return $?
+          echo "[OK] e2e-target services are healthy"
+          e2e_report_capture_app fixtures semstreams-e2e-fixtures-app || return $?
+          child_input=$(e2e_report_child_input core.graph-roundtrip.identity core-graph-roundtrip fixtures) || return $?
+          child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-core.graph-roundtrip.identity.stdout"
+          child_exit=0
+          (cd cmd/e2e && ./e2e --scenario core-graph-roundtrip --output-dir "$E2E_REPORT_DIR" --evidence-input "$child_input") > "$child_output" 2>&1 || child_exit=$?
+          cat "$child_output"
+          e2e_report_child core.graph-roundtrip.identity "$child_output" "$child_exit" || return 1
+          [ "$child_exit" -eq 0 ] || return "$child_exit"
+          echo "[OK] graph round-trip probe passed against the e2e-target binary"
         }
-        services_admitted=$(startup_value services admitted)
-        services_invoked=$(startup_value services starts_invoked)
-        services_completed=$(startup_value services starts_completed)
-        services_failed=$(startup_value services starts_failed)
-        components_admitted=$(startup_value components admitted)
-        components_participants=$(startup_value components lifecycle_participants)
-        components_invoked=$(startup_value components starts_invoked)
-        components_completed=$(startup_value components starts_completed)
-        components_failed=$(startup_value components starts_failed)
-        [ "$services_admitted" -gt 0 ] || fail "no admitted services in startup metrics"
-        [ "$services_invoked" = "$services_admitted" ] || fail "service Starts invoked did not match admission"
-        [ "$services_completed" = "$services_admitted" ] || fail "service Starts completed did not match admission"
-        [ "$services_failed" = "0" ] || fail "normal boot reported failed service Starts"
-        [ "$components_admitted" -gt 0 ] || fail "no admitted components in startup metrics"
-        [ "$components_participants" -gt 0 ] || fail "no lifecycle components in startup metrics"
-        [ "$components_invoked" = "$components_participants" ] || fail "component Starts invoked did not match participants"
-        [ "$components_completed" = "$components_participants" ] || fail "component Starts completed did not match participants"
-        [ "$components_failed" = "0" ] || fail "normal boot reported failed component Starts"
-
-        attempt=0
-        matched=false
-        while [ "$attempt" -lt 20 ]; do
-          if docker logs semstreams-e2e-app 2>&1 | jq -Re \
-            'fromjson? | select(.msg == "System heartbeat" and .components_total == 0 and .components_healthy == 0)' >/dev/null; then
-            fail "heartbeat reported 0/0 while runtime component health was non-empty"
-          fi
-          heartbeat=$(docker logs semstreams-e2e-app 2>&1 | jq -Rc 'fromjson? | select(.msg == "System heartbeat")' | tail -n 1)
-          if [ -n "$heartbeat" ] && printf '%s' "$heartbeat" | jq -e --argjson total "$total" --argjson healthy "$healthy" \
-            '.components_total == $total and .components_healthy == $healthy' >/dev/null; then
-            matched=true
-            break
-          fi
-          attempt=$((attempt + 1))
-          sleep 0.5
-        done
-        [ "$matched" = "true" ] || fail "heartbeat totals did not match runtime component health within 10s"
-        echo "[OK] Readiness and heartbeat report $healthy/$total healthy components"
-      # ADR-104: the deployment minted an entropy suffix onto platform.id at
-      # first boot and recorded it as {org, stem, id}. Every fixture in this
-      # tree now READS that record instead of predicting the pair from the
-      # shipped config, so the record's presence and shape is itself a stage.
-      - echo "[E2E] validate-minted-authority - the deployment minted and recorded its own authority..."
-      - cd cmd/e2e && ./e2e --scenario core-minted-authority
-      - echo "[OK] platform_identity records {org, stem, id} and the effective pair carries the minted suffix"
-      - echo "[E2E] Running core tests on the production binary (health + dataflow)..."
-      - cd cmd/e2e && ./e2e --scenario all
-      - |
-        fail() {
-          echo "[FAIL] $1"
-          docker logs semstreams-e2e-app 2>&1 || true
-          exit 1
-        }
-
-        echo "[E2E] Sending SIGTERM to the SemStreams application..."
-        docker compose -f docker/compose/e2e.yml stop --timeout 35 semstreams || fail "application stop command failed"
-
-        exit_code=$(docker inspect semstreams-e2e-app | jq -er '.[0].State.ExitCode') || fail "application exit code unavailable"
-        [ "$exit_code" -eq 0 ] || fail "application exited with code $exit_code"
-
-        docker logs semstreams-e2e-app 2>&1 | jq -Re 'fromjson? | select(.msg == "SemStreams shutdown complete")' >/dev/null \
-          || fail "shutdown-complete record missing"
-
-        if curl --connect-timeout 1 --max-time 2 -sS http://localhost:38080/readyz >/dev/null 2>&1; then
-          api_status=0
-        else
-          api_status=$?
+        if [ "$command_exit" -eq 0 ]; then
+          run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?
         fi
-        [ "$api_status" -eq 7 ] || fail "API listener probe exited $api_status after application exit, want connection failure 7"
-
-        if curl --connect-timeout 1 --max-time 2 -sS http://localhost:39090/metrics >/dev/null 2>&1; then
-          metrics_status=0
-        else
-          metrics_status=$?
-        fi
-        [ "$metrics_status" -eq 7 ] || fail "metrics listener probe exited $metrics_status after application exit, want connection failure 7"
-
-        curl --max-time 5 -fsS http://localhost:38222/healthz >/dev/null \
-          || fail "external NATS did not remain healthy after application exit"
-        echo "[OK] SIGTERM exited 0, released listeners, completed shutdown, and left NATS healthy"
-      - |
-        early_suffix=$$
-        early_network="semstreams-early-sigterm-net-$early_suffix"
-        early_blackhole="semstreams-early-sigterm-blackhole-$early_suffix"
-        early_app="semstreams-early-sigterm-app-$early_suffix"
-
-        cleanup_early_boot() {
-          docker rm -f "$early_app" "$early_blackhole" >/dev/null 2>&1 || true
-          docker network rm "$early_network" >/dev/null 2>&1 || true
-        }
-        fail_early_boot() {
-          echo "[FAIL] $1"
-          docker logs "$early_app" 2>&1 || true
-          docker logs "$early_blackhole" 2>&1 || true
-          exit 1
-        }
-        trap cleanup_early_boot EXIT
-
-        echo "[E2E] Verifying SIGTERM during blocked production bootstrap..."
-        docker network create "$early_network" >/dev/null \
-          || fail_early_boot "could not create isolated early-boot network"
-        docker run -d --name "$early_blackhole" --network "$early_network" alpine:3.22 \
-          sh -c 'tail -f /dev/null | nc -l -p 4222' >/dev/null \
-          || fail_early_boot "could not start NATS blackhole listener"
-        docker run -d --name "$early_app" --network "$early_network" \
-          -e "SEMSTREAMS_NATS_URLS=nats://$early_blackhole:4222" \
-          -e SEMSTREAMS_LOG_LEVEL=debug \
-          c360studio/semstreams:e2e-production \
-          --config /app/configs/protocol-flow.json >/dev/null \
-          || fail_early_boot "could not start production application"
-
-        attempt=0
-        connecting=false
-        while [ "$attempt" -lt 50 ]; do
-          if docker logs "$early_app" 2>&1 | grep -F '"msg":"Connecting to NATS"' >/dev/null; then
-            connecting=true
-            break
-          fi
-          running=$(docker inspect "$early_app" | jq -r '.[0].State.Running') \
-            || fail_early_boot "early-boot application state unavailable"
-          [ "$running" = "true" ] || fail_early_boot "application exited before entering NATS Connect"
-          attempt=$((attempt + 1))
-          sleep 0.1
-        done
-        [ "$connecting" = "true" ] || fail_early_boot "Connecting to NATS evidence absent"
-
-        attempt=0
-        accepted=false
-        while [ "$attempt" -lt 50 ]; do
-          if docker exec "$early_blackhole" netstat -tn 2>/dev/null | grep -q ESTABLISHED; then
-            accepted=true
-            break
-          fi
-          attempt=$((attempt + 1))
-          sleep 0.1
-        done
-        [ "$accepted" = "true" ] || fail_early_boot "blackhole did not accept the NATS TCP connection"
-
-        docker kill --signal=TERM "$early_app" >/dev/null \
-          || fail_early_boot "could not send SIGTERM to early-boot application"
-
-        attempt=0
-        exited=false
-        while [ "$attempt" -lt 100 ]; do
-          running=$(docker inspect "$early_app" | jq -r '.[0].State.Running') \
-            || fail_early_boot "early-boot application state unavailable after SIGTERM"
-          if [ "$running" = "false" ]; then
-            exited=true
-            break
-          fi
-          attempt=$((attempt + 1))
-          sleep 0.1
-        done
-        [ "$exited" = "true" ] || fail_early_boot "application did not exit within 10s of SIGTERM"
-
-        exit_code=$(docker inspect "$early_app" | jq -er '.[0].State.ExitCode') \
-          || fail_early_boot "early-boot exit code unavailable"
-        [ "$exit_code" -eq 1 ] \
-          || fail_early_boot "early SIGTERM exited $exit_code, want controlled failed-boot exit 1 (not default 143)"
-
-        early_logs=$(docker logs "$early_app" 2>&1)
-        printf '%s\n' "$early_logs" | grep -F "context canceled" >/dev/null \
-          || fail_early_boot "context-cancellation evidence missing after early SIGTERM"
-        if printf '%s\n' "$early_logs" | grep -F "Starting all services" >/dev/null; then
-          fail_early_boot "services started after early SIGTERM"
-        fi
-        echo "[OK] Early SIGTERM canceled blocked NATS boot, exited 1, and fenced service startup"
-
-      # validate-pre-identity-bucket-refusal (ADR-104): a configuration bucket
-      # written before identity minting holds `platform` and `version` and no
-      # `platform_identity`. Booting into it must REFUSE, naming that cause, and
-      # must mint nothing and create nothing — minting there would durably
-      # record an authority the deployment's own guard then rejects for the
-      # wrong reason, and ADR-102 d7 forbids the rewrite that would repair it.
-      - docker compose -f docker/compose/e2e.yml down -v --timeout 15
-      - echo "[E2E] validate-pre-identity-bucket-refusal - booting into a bucket that predates identity minting..."
-      - defer: docker compose -f docker/compose/e2e.yml down -v --timeout 15
-      - docker compose -f docker/compose/e2e.yml up -d --wait nats
-      - cd cmd/e2e && ./e2e --scenario core-pre-identity-seed
-      - defer: docker compose -f docker/compose/e2e.yml down -v --timeout 15
-      - docker compose -f docker/compose/e2e.yml up -d --no-deps semstreams
-      - |
-        fail_pre_identity() {
-          echo "[FAIL] $1"
-          docker logs semstreams-e2e-app 2>&1 || true
-          exit 1
-        }
-
-        attempt=0
-        exited=false
-        while [ "$attempt" -lt 100 ]; do
-          running=$(docker inspect semstreams-e2e-app 2>/dev/null | jq -r '.[0].State.Running') || running=unknown
-          if [ "$running" = "false" ]; then
-            exited=true
-            break
-          fi
-          attempt=$((attempt + 1))
-          sleep 0.2
-        done
-        [ "$exited" = "true" ] || fail_pre_identity "application did not exit within 20s of booting a pre-identity bucket"
-
-        exit_code=$(docker inspect semstreams-e2e-app | jq -er '.[0].State.ExitCode') \
-          || fail_pre_identity "application exit code unavailable"
-        [ "$exit_code" -ne 0 ] || fail_pre_identity "application booted a pre-identity bucket instead of refusing it"
-
-        docker logs semstreams-e2e-app 2>&1 | grep -F "predates framework-minted platform identity" >/dev/null \
-          || fail_pre_identity "the refusal did not name the pre-identity bucket as the cause"
-
-        (cd cmd/e2e && ./e2e --scenario core-pre-identity-assert) \
-          || fail_pre_identity "the refused boot left a platform_identity record behind"
-        echo "[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record"
-      - docker compose -f docker/compose/e2e.yml down -v --timeout 15
-
-      # Phase 2 (ADR-103): the graph round-trip probe births a synthetic type
-      # (test.fixture.v1) that only cmd/e2e-semstreams registers, so after the
-      # production app's shutdown checks it runs against the e2e-target twin.
-      - echo "[E2E] Phase 2 - graph round-trip probe against the e2e-target binary..."
-      - defer: docker compose -f docker/compose/e2e.yml --profile fixtures down -v --timeout 15
-      - docker compose -f docker/compose/e2e.yml --profile fixtures up -d --wait --build nats semstreams-fixtures
-      - echo "[OK] e2e-target services are healthy"
-      - cd cmd/e2e && ./e2e --scenario core-graph-roundtrip
-      - echo "[OK] graph round-trip probe passed against the e2e-target binary"
-
+        finish
   debug:
     desc: Start E2E environment for debugging (leaves containers running)
     silent: false

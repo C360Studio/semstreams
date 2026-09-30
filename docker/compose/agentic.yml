@@ -47,6 +47,7 @@ services:
       context: ../..
       dockerfile: test/e2e/mock/Dockerfile
     container_name: semstreams-agentic-mock-llm
+    command: ["--port", "8080", "--scenario", "agentic"]
     ports:
       - "38180:8080" # Mock LLM (3xxxx range)
     networks:

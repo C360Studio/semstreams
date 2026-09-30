@@ -38,6 +38,13 @@ type Result struct {
 	// Overall status
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
+	// EvidenceStatus is complete only after the declared required checks finalize.
+	// Legacy results remain unattested even when their execution succeeds.
+	EvidenceStatus    string             `json:"evidence_status"`
+	RunID             string             `json:"run_id,omitempty"`
+	MemberID          string             `json:"member_id,omitempty"`
+	CheckRequirements []CheckRequirement `json:"check_requirements,omitempty"`
+	CheckObservations []CheckObservation `json:"check_observations,omitempty"`
 
 	// Detailed results (legacy flat format)
 	Metrics  map[string]any `json:"metrics,omitempty"`
@@ -45,10 +52,13 @@ type Result struct {
 	Errors   []string       `json:"errors,omitempty"`
 	Warnings []string       `json:"warnings,omitempty"`
 
-	// AssertionsRun is the number of assertions the scenario actually executed.
+	// AssertionsRun counts evaluated required named checks for finalized adopted
+	// results. Unattested legacy results retain their historical scenario-local count.
 	AssertionsRun int `json:"assertions_run,omitempty"`
 
 	// Structured results (new typed format for tiered scenarios)
 	// This is populated alongside Metrics/Details for backward compatibility
 	Structured *TieredResults `json:"structured,omitempty"`
+
+	finalizationError string
 }

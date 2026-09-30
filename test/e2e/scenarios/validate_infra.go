@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ func (s *TieredScenario) executeVerifyComponents(ctx context.Context, result *Re
 	components, err := s.client.GetComponents(ctx)
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("Failed to get components: %v", err))
-		return fmt.Errorf("component verification failed: %w", err)
+		return s.recordTieredCheck(result, s.config.Variant+".components", fmt.Errorf("component verification failed: %w", err), nil)
 	}
 
 	var allRequired []string
@@ -57,6 +58,15 @@ func (s *TieredScenario) executeVerifyComponents(ctx context.Context, result *Re
 	}
 
 	missingComponents := []string{}
+	observedComponents := make([]string, 0, len(foundComponents))
+	for name := range foundComponents {
+		observedComponents = append(observedComponents, name)
+	}
+	sort.Strings(observedComponents)
+	evidence := map[string]string{
+		"expected_components": strings.Join(allRequired, ","),
+		"observed_components": strings.Join(observedComponents, ","),
+	}
 	for _, required := range allRequired {
 		if !foundComponents[required] {
 			missingComponents = append(missingComponents, required)
@@ -66,7 +76,8 @@ func (s *TieredScenario) executeVerifyComponents(ctx context.Context, result *Re
 	if len(missingComponents) > 0 {
 		result.Errors = append(result.Errors,
 			fmt.Sprintf("Missing components: %v", missingComponents))
-		return fmt.Errorf("missing components: %v", missingComponents)
+		evidence["missing_components"] = strings.Join(missingComponents, ",")
+		return s.recordTieredCheck(result, s.config.Variant+".components", fmt.Errorf("missing components: %v", missingComponents), evidence)
 	}
 
 	result.Details["component_breakdown"] = map[string]any{
@@ -76,7 +87,7 @@ func (s *TieredScenario) executeVerifyComponents(ctx context.Context, result *Re
 		"found":    len(components),
 	}
 
-	return nil
+	return s.recordTieredCheck(result, s.config.Variant+".components", nil, evidence)
 }
 
 // executeSendMixedData captures baseline metrics before data processing.

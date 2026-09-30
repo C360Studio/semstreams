@@ -79,6 +79,9 @@ satisfy a required breaking-change gate. Follow the protocol's File ritual for u
 
 ## Report evidence and remaining gates
 
+For adopted E2E suites, apply the [named-evidence contract and author guide](../../../docs/contributing/02-e2e-tests.md#named-required-evidence).
+Check the declared set, run identity, final disposition and retained artifact; a count or legacy success is insufficient.
+
 Record the tested HEAD (or dirty snapshot), exact command, exit status, assertions/tests actually exercised,
 and log/artifact location. Separate failure, skip, no selected tests and compilation-only results. When the
 implementation changes, older green results remain evidence for the older revision. Preserve the command's

@@ -1,0 +1,459 @@
+# Inventory supplement: #1222 E2E result, selection, and evidence structure
+base: 12ae633381b8b8b26c333efe5f5c8691cfa47fb4
+
+Reference inventory: `/private/tmp/semstreams-e2e-survey-20260927/evidence/gate-inventory.md`. Reference SHA-256: `77d4d86dc932dd42315597269be9ed32d3a3610267d19cf9696a38419b25f045`.
+The reference has 579 pins at fe9482b7f336e575317cfb45fd1ad7c40baf7904. The diff to this base lists only
+the two #1222 claim documents (63 inserted lines). Its workflow/tier/binary matrix, result metadata,
+paid/skip declarations, and release provenance are reused by reference; they were not re-inventoried.
+This supplement enumerates structural declarations, consumers, selected-stage branches, and counter spellings.
+
+Gopls workspace-symbol queries and Scenario implementation/reference queries returned zero locations and no
+permission error. Direct runScenario references returned four locations, Result references returned only
+the interface return type, and WriteRun references returned its WriteLatest call. Tracked Execute declarations
+below supplement those observed results; zero gopls output is not treated as proof of zero implementations.
+
+## Claimed gap
+
+- `openspec/changes/e2e-required-check-evidence/proposal.md:3` — `Issue: #1222. Milestone: v1.0.0-beta.165, #1134 work package C.`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:8` — `The owner approved an E2E coverage survey and reconciled #1222 as the existing home for truthful selected-check`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:9` — `outcomes and evidence. The issue records hypotheses requiring repository-first inventory: an assertion count may`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:10` — `include a stage that warning-skips its observation, and a suite name may imply more coverage than it selects.`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:13` — `## What Changes`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:15` — `This initial commit establishes the design-phase claim only. It changes no runner behavior, test, current spec,`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:16` — `CI workflow or claimed acceptance outcome. No target API, result representation or suite membership is selected.`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:18` — `The first deliverable is the surface and adopter inventory, with an exact baseline, source pins and search record.`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:19` — `Independent INVENTORY PASS precedes options and design. Independent design review and owner acceptance precede`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:20` — `behavioral deltas or implementation. The issue's bounded acceptance remains the scope authority.`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:22` — `## Impact`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:24` — `Inventory surfaces include cmd/e2e, test/e2e/scenarios and results, Taskfiles, workflow gates, the canonical testing`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:25` — `and E2E guides, and the existing release-candidate proof contract. This is an inspection boundary, not a write list.`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:27` — `#1117 retains semantic CI; #769/#1128 retain agentic/CRUD CI and persona proof; #1293 retains broader verification`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:28` — `plumbing. #1195/#1224/#1288 retain their capability-specific defects. No new test framework, all-tier-per-PR mandate,`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:29` — `model-quality threshold, fourth beta.165 package, or parallel implementation owner is implied.`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:31` — `## Parallel-work boundary`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:33` — `At claim preparation, #1402/#1403 own agentic recovery, and #1404 owns #1188 config namespacing. The #1188 worktree`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:34` — `has uncommitted edits in test/e2e/scenarios/agentic/scenario.go, test/e2e/config/tier_authority.go and its tests,`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:35` — `and test/e2e/scenarios/platform_identity.go. A remote PR file list alone did not expose those pending changes.`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:37` — `This claim starts with inventory/design only. Do not edit those shared scenario/authority files, runtime recovery,`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:38` — `or config implementation while the existing writer owns them. Reconcile the landed base and live claims before`
+- `openspec/changes/e2e-required-check-evidence/proposal.md:39` — `implementation. Shared Docker/integration/E2E work remains serialized; no heavy host run is part of this claim.`
+
+## Spellings of the fact
+
+- `test/e2e/scenarios/scenario.go:10` — `type Scenario interface {`
+- `test/e2e/scenarios/scenario.go:12` — `Name() string`
+- `test/e2e/scenarios/scenario.go:15` — `Description() string`
+- `test/e2e/scenarios/scenario.go:19` — `Setup(ctx context.Context) error`
+- `test/e2e/scenarios/scenario.go:23` — `Execute(ctx context.Context) (*Result, error)`
+- `test/e2e/scenarios/scenario.go:27` — `Teardown(ctx context.Context) error`
+- `test/e2e/scenarios/scenario.go:31` — `type Result struct {`
+- `test/e2e/scenarios/scenario.go:33` — `ScenarioName string        `json:"scenario_name"``
+- `test/e2e/scenarios/scenario.go:34` — `StartTime    time.Time     `json:"start_time"``
+- `test/e2e/scenarios/scenario.go:35` — `EndTime      time.Time     `json:"end_time"``
+- `test/e2e/scenarios/scenario.go:36` — `Duration     time.Duration `json:"duration"``
+- `test/e2e/scenarios/scenario.go:39` — `Success bool   `json:"success"``
+- `test/e2e/scenarios/scenario.go:40` — `Error   string `json:"error,omitempty"``
+- `test/e2e/scenarios/scenario.go:43` — `Metrics  map[string]any `json:"metrics,omitempty"``
+- `test/e2e/scenarios/scenario.go:44` — `Details  map[string]any `json:"details,omitempty"``
+- `test/e2e/scenarios/scenario.go:45` — `Errors   []string       `json:"errors,omitempty"``
+- `test/e2e/scenarios/scenario.go:46` — `Warnings []string       `json:"warnings,omitempty"``
+- `test/e2e/scenarios/scenario.go:49` — `AssertionsRun int `json:"assertions_run,omitempty"``
+- `test/e2e/scenarios/scenario.go:53` — `Structured *TieredResults `json:"structured,omitempty"``
+- `test/e2e/results/writer.go:19` — `type TestRun struct {`
+- `test/e2e/results/writer.go:20` — `ID          string                `json:"id"``
+- `test/e2e/results/writer.go:21` — `Timestamp   time.Time             `json:"timestamp"``
+- `test/e2e/results/writer.go:22` — `Duration    time.Duration         `json:"duration_ns"``
+- `test/e2e/results/writer.go:23` — `DurationStr string                `json:"duration"``
+- `test/e2e/results/writer.go:24` — `Config      TestRunConfig         `json:"config"``
+- `test/e2e/results/writer.go:25` — `Scenarios   []scenarios.Result    `json:"scenarios"``
+- `test/e2e/results/writer.go:26` — `Metrics     *client.MetricsReport `json:"metrics,omitempty"``
+- `test/e2e/results/writer.go:27` — `Summary     Summary               `json:"summary"``
+- `test/e2e/results/writer.go:28` — `Environment map[string]string     `json:"environment,omitempty"``
+- `test/e2e/results/writer.go:32` — `type TestRunConfig struct {`
+- `test/e2e/results/writer.go:33` — `Variant    string   `json:"variant"` // "structural", "statistical", or "semantic"`
+- `test/e2e/results/writer.go:34` — `MLEnabled  bool     `json:"ml_enabled"``
+- `test/e2e/results/writer.go:35` — `Scenarios  []string `json:"scenarios"``
+- `test/e2e/results/writer.go:36` — `BaseURL    string   `json:"base_url"``
+- `test/e2e/results/writer.go:37` — `MetricsURL string   `json:"metrics_url"``
+- `test/e2e/results/writer.go:41` — `type Summary struct {`
+- `test/e2e/results/writer.go:42` — `TotalScenarios  int     `json:"total_scenarios"``
+- `test/e2e/results/writer.go:43` — `PassedScenarios int     `json:"passed_scenarios"``
+- `test/e2e/results/writer.go:44` — `FailedScenarios int     `json:"failed_scenarios"``
+- `test/e2e/results/writer.go:45` — `SuccessRate     float64 `json:"success_rate"``
+- `test/e2e/results/writer.go:46` — `TotalErrors     int     `json:"total_errors"``
+- `test/e2e/results/writer.go:47` — `TotalWarnings   int     `json:"total_warnings"``
+- `test/e2e/results/writer.go:48` — `AllPassed       bool    `json:"all_passed"``
+- `test/e2e/results/writer.go:95` — `type Writer struct {`
+- `test/e2e/results/writer.go:96` — `outputDir string`
+- `test/e2e/results/writer.go:100` — `func NewWriter(outputDir string) *Writer {`
+- `test/e2e/results/writer.go:105` — `func (w *Writer) WriteRun(run *TestRun) (string, error) {`
+- `test/e2e/results/writer.go:132` — `func (w *Writer) WriteLatest(run *TestRun) (string, error) {`
+- `test/e2e/results/writer.go:147` — `func (w *Writer) WriteComparison(comparison *Comparison) (string, error) {`
+- `test/e2e/results/writer.go:170` — `func (w *Writer) LoadRun(filepath string) (*TestRun, error) {`
+- `test/e2e/results/writer.go:185` — `func CreateTestRun(`
+- `test/e2e/results/writer.go:208` — `func computeSummary(results []scenarios.Result) Summary {`
+- `test/e2e/results/writer.go:444` — `func (w *Writer) ListRuns() ([]string, error) {`
+- `test/e2e/results/writer.go:468` — `func (w *Writer) GetLatestRun() (*TestRun, error) {`
+- `test/e2e/scenarios/tiered.go:235` — `type stage struct {`
+- `test/e2e/scenarios/tiered.go:236` — `name     string`
+- `test/e2e/scenarios/tiered.go:237` — `fn       func(context.Context, *Result) error`
+- `test/e2e/scenarios/tiered.go:238` — `variants []string // Empty = run for all variants`
+- `test/e2e/scenarios/tiered.go:247` — `func (s *TieredScenario) getStagesForVariant(variant string) []stage {`
+- `test/e2e/scenarios/tiered.go:403` — `// Filter stages based on variant`
+- `test/e2e/scenarios/tiered.go:404` — `stages := []stage{}`
+- `test/e2e/scenarios/tiered.go:405` — `for _, st := range allStages {`
+- `test/e2e/scenarios/tiered.go:406` — `if len(st.variants) == 0 {`
+- `test/e2e/scenarios/tiered.go:407` — `stages = append(stages, st)`
+- `test/e2e/scenarios/tiered.go:409` — `for _, allowedVariant := range st.variants {`
+- `test/e2e/scenarios/tiered.go:410` — `if variant == allowedVariant {`
+- `test/e2e/scenarios/tiered.go:411` — `stages = append(stages, st)`
+- `test/e2e/scenarios/tiered.go:417` — `return stages`
+- `test/e2e/scenarios/tiered.go:539` — `variant := s.config.Variant`
+- `test/e2e/scenarios/tiered.go:540` — `if variant == "" {`
+- `test/e2e/scenarios/tiered.go:541` — `info := s.detectVariantAndProvider(result)`
+- `test/e2e/scenarios/tiered.go:542` — `variant = info.variant`
+- `test/e2e/scenarios/tiered.go:550` — `authority, err := config.EffectiveTierAuthority(ctx, s.natsClient, variant)`
+- `test/e2e/scenarios/tiered.go:551` — `if err != nil {`
+- `test/e2e/scenarios/tiered.go:552` — `result.Error = fmt.Sprintf("resolve the deployment authority: %v", err)`
+- `test/e2e/scenarios/tiered.go:555` — `return result, nil`
+- `test/e2e/scenarios/tiered.go:560` — `stages := s.getStagesForVariant(variant)`
+- `test/e2e/scenarios/tiered.go:561` — `if !s.executeStages(ctx, result, stages) {`
+- `test/e2e/scenarios/tiered.go:562` — `return result, nil`
+- `test/e2e/scenarios/tiered.go:567` — `result.Success = true`
+- `test/e2e/scenarios/tiered.go:570` — `result.Structured = BuildTieredResults(result, s.searchStats)`
+- `test/e2e/scenarios/tiered.go:572` — `if err := s.validateSemanticRequirements(result); err != nil {`
+- `test/e2e/scenarios/tiered.go:573` — `result.Success = false`
+- `test/e2e/scenarios/tiered.go:574` — `result.Error = fmt.Sprintf("semantic tier validation failed: %v", err)`
+- `test/e2e/scenarios/tiered.go:575` — `return result, nil`
+- `test/e2e/scenarios/tiered.go:578` — `if err := s.validateFallbackBehavior(result); err != nil {`
+- `test/e2e/scenarios/tiered.go:579` — `result.Success = false`
+- `test/e2e/scenarios/tiered.go:580` — `result.Error = fmt.Sprintf("fallback validation failed: %v", err)`
+- `test/e2e/scenarios/tiered.go:581` — `return result, nil`
+- `test/e2e/scenarios/tiered.go:584` — `return result, nil`
+- `test/e2e/scenarios/agentic/scenario.go:196` — `// agenticStage is one verification the tier performs. asserts marks the stages`
+- `test/e2e/scenarios/agentic/scenario.go:197` — `// whose completion is a proof: a stage that only records a baseline and`
+- `test/e2e/scenarios/agentic/scenario.go:198` — `// tolerates its own failure is not one, and counting it would report a`
+- `test/e2e/scenarios/agentic/scenario.go:199` — `// verification that cannot fail.`
+- `test/e2e/scenarios/agentic/scenario.go:200` — `type agenticStage struct {`
+- `test/e2e/scenarios/agentic/scenario.go:201` — `name    string`
+- `test/e2e/scenarios/agentic/scenario.go:202` — `fn      func(context.Context, *scenarios.Result) error`
+- `test/e2e/scenarios/agentic/scenario.go:203` — `asserts bool`
+- `test/e2e/scenarios/agentic/scenario.go:206` — `// assertingStageCount is how many stages a complete run must count. One unit of`
+- `test/e2e/scenarios/agentic/scenario.go:207` — `// the runner's assertions_run= line therefore reads as "one verification stage`
+- `test/e2e/scenarios/agentic/scenario.go:211` — `// It is DERIVED from stages() rather than carried as a constant beside it,`
+- `test/e2e/scenarios/agentic/scenario.go:212` — `// because a hand-carried number is one edit away from agreeing with a list it`
+- `test/e2e/scenarios/agentic/scenario.go:213` — `// no longer describes. That makes Execute's comparison a check on the counting,`
+- `cmd/e2e/main_test.go:34` — `func (s assertionReportingScenario) Execute(context.Context) (*scenarios.Result, error) {`
+- `test/e2e/scenarios/agentic/scenario.go:289` — `func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {`
+- `test/e2e/scenarios/core_dataflow.go:101` — `func (s *CoreDataflowScenario) Execute(ctx context.Context) (*Result, error) {`
+- `test/e2e/scenarios/core_health.go:83` — `func (s *CoreHealthScenario) Execute(ctx context.Context) (*Result, error) {`
+- `test/e2e/scenarios/core_slow_consumer.go:57` — `func (s *SlowConsumerAttributionScenario) Execute(parent context.Context) (*Result, error) {`
+- `test/e2e/scenarios/crud-tools/scenario.go:154` — `func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {`
+- `test/e2e/scenarios/deep-research/scenario.go:110` — `func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {`
+- `test/e2e/scenarios/graph_roundtrip_scenario.go:48` — `func (s *GraphRoundTripScenario) Execute(ctx context.Context) (*Result, error) {`
+- `test/e2e/scenarios/lessons/scenario.go:205` — `func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {`
+- `test/e2e/scenarios/lifecycle/scenario.go:166` — `func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {`
+- `test/e2e/scenarios/ops/scenario.go:206` — `func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {`
+- `test/e2e/scenarios/platform_identity.go:56` — `func (s *MintedAuthorityScenario) Execute(ctx context.Context) (*Result, error) {`
+- `test/e2e/scenarios/platform_identity.go:170` — `func (s *PreIdentityBucketScenario) Execute(ctx context.Context) (*Result, error) {`
+- `test/e2e/scenarios/research-graph/scenario.go:283` — `func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {`
+- `test/e2e/scenarios/throughput/scenario.go:164` — `func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {`
+- `test/e2e/scenarios/tiered.go:532` — `func (s *TieredScenario) Execute(ctx context.Context) (*Result, error) {`
+
+## Adjacent claims
+
+- `docs/adr/106-beta-rc-v1-exit-criteria-and-the-two-tier-surface-freeze.md:107` — `| RC-3 | Every stressed capability walked on a booted binary | `class:e2e-gap` cleared, **plus** a guard failing any tier that reports `assertions_run=0` (#1195, #1238) |`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:1` — `# Tasks`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:3` — `## Inventory and design`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:5` — `- [ ] Produce the surface inventory at the exact baseline, including existing selectors, outcomes, writers,`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:6` — `diagnostics, consumers, contracts, active claims and the same problem shapes under other spellings.`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:7` — `- [ ] Produce the adopter seam inventory for scenario authors, runner/CI users and evidence consumers.`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:8` — `- [ ] Obtain independent INVENTORY PASS and preserve the reviewed checkpoint.`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:9` — `- [ ] After inventory review, frame bounded options and costs, draft the design and state its invariants.`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:10` — `- [ ] Obtain independent design review and explicit owner acceptance before implementation or spec deltas.`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:12` — `## Implementation and proof`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:14` — `- [ ] After acceptance, implement the agreed behavior and representative failure controls through existing surfaces.`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:15` — `- [ ] Reconcile the active config/recovery changes before editing shared scenario/authority files.`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:16` — `- [ ] Update canonical testing documentation and the accepted capability delta to match implemented behavior.`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:17` — `- [ ] Complete appropriate verification and independent implementation review, preserving exact evidence and limits.`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:18` — `- [ ] Reconcile and archive the accepted change with spec synchronization as the final content commit.`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:20` — `## Current hold`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:22` — `Inventory is not yet independently reviewed. Design, runtime/spec deltas and implementation are not authorized by`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:23` — `this claim alone. The delta-less initial claim may fail strict OpenSpec validation as described in the shared`
+- `openspec/changes/e2e-required-check-evidence/tasks.md:24` — `protocol; that is not a waiver for any other check and is not a merge-ready state.`
+
+## Consumers
+
+- `cmd/e2e/main.go:128` — `flag.StringVar(&flags.scenarioName, "scenario", "",`
+- `cmd/e2e/main.go:129` — `"Run specific scenario (core-health, core-dataflow, core-graph-roundtrip, lessons, or 'all')")`
+- `cmd/e2e/main.go:134` — `flag.BoolVar(&flags.listScenarios, "list", false, "List available scenarios")`
+- `cmd/e2e/main.go:136` — `flag.StringVar(&flags.variant, "variant", "",`
+- `cmd/e2e/main.go:137` — `"Test variant: structural (rules-only), statistical (BM25), semantic (neural+LLM)")`
+- `cmd/e2e/main.go:138` — `flag.StringVar(&flags.outputDir, "output-dir", "",`
+- `cmd/e2e/main.go:139` — `"Directory for saving results JSON (empty=no output)")`
+- `cmd/e2e/main.go:314` — `if flags.scenarioName == "" || flags.scenarioName == "all" {`
+- `cmd/e2e/main.go:315` — `logger.Info("Running all core scenarios...")`
+- `cmd/e2e/main.go:316` — `return runAllScenarios(ctx, logger, edgeClient, flags.udpEndpoint)`
+- `cmd/e2e/main.go:317` — `} else if flags.scenarioName == "semantic" {`
+- `cmd/e2e/main.go:319` — `return runSemanticScenarios(ctx, logger, edgeClient, flags.udpEndpoint)`
+- `cmd/e2e/main.go:320` — `} else if flags.scenarioName == "rules" {`
+- `cmd/e2e/main.go:322` — `return runRulesScenarios(ctx, logger, edgeClient, flags.udpEndpoint)`
+- `cmd/e2e/main.go:326` — `scenario := createScenario(edgeClient, flags)`
+- `cmd/e2e/main.go:327` — `if scenario == nil {`
+- `cmd/e2e/main.go:328` — `logger.Error("Unknown scenario", "name", flags.scenarioName)`
+- `cmd/e2e/main.go:330` — `return 1`
+- `cmd/e2e/main.go:334` — `return runScenario(ctx, logger, scenario, flags)`
+- `cmd/e2e/main.go:395` — `case "tiered", "structural", "statistical", "semantic":`
+- `cmd/e2e/main.go:400` — `cfg.OutputDir = flags.outputDir`
+- `cmd/e2e/main.go:402` — `cfg.Variant = flags.variant`
+- `cmd/e2e/main.go:403` — `if cfg.Variant == "" {`
+- `cmd/e2e/main.go:405` — `if flags.scenarioName == "structural" || flags.scenarioName == "statistical" || flags.scenarioName == "semantic" {`
+- `cmd/e2e/main.go:406` — `cfg.Variant = flags.scenarioName`
+- `cmd/e2e/main.go:410` — `if cfg.Variant == "semantic" {`
+- `cmd/e2e/main.go:421` — `cfg.ValidationTimeout = 120 * time.Second`
+- `cmd/e2e/main.go:423` — `cfg.GraphQLURL = "http://localhost:38080/graph-gateway/graphql"`
+- `cmd/e2e/main.go:425` — `return scenarios.NewTieredScenario(edgeClient, flags.udpEndpoint, cfg)`
+- `cmd/e2e/main.go:510` — `func runScenario(ctx context.Context, logger *slog.Logger, scenario scenarios.Scenario, flags *cliFlags) int {`
+- `cmd/e2e/main.go:513` — `if err := scenario.Setup(ctx); err != nil {`
+- `cmd/e2e/main.go:515` — `return 1`
+- `cmd/e2e/main.go:519` — `result, err := scenario.Execute(ctx)`
+- `cmd/e2e/main.go:523` — `if teardownErr := scenario.Teardown(ctx); teardownErr != nil {`
+- `cmd/e2e/main.go:524` — `logger.Warn("Teardown failed", "error", teardownErr)`
+- `cmd/e2e/main.go:527` — `if err != nil {`
+- `cmd/e2e/main.go:528` — `logger.Error("Scenario failed", "error", err, "assertions_run", assertionsRun(result))`
+- `cmd/e2e/main.go:529` — `return 1`
+- `cmd/e2e/main.go:532` — `if !result.Success {`
+- `cmd/e2e/main.go:536` — `"assertions_run", result.AssertionsRun)`
+- `cmd/e2e/main.go:537` — `return 1`
+- `cmd/e2e/main.go:540` — `logger.Info("Scenario completed successfully",`
+- `cmd/e2e/main.go:543` — `"assertions_run", result.AssertionsRun)`
+- `cmd/e2e/main.go:546` — `if flags.outputDir != "" && result.Structured != nil {`
+- `cmd/e2e/main.go:547` — `filepath, err := scenarios.SaveStructuredResults(result.Structured, flags.outputDir)`
+- `cmd/e2e/main.go:549` — `logger.Warn("Failed to save structured results", "error", err)`
+- `cmd/e2e/main.go:559` — `metricsPath, err := saveMetricsDump(logger, flags.metricsURL, variant, flags.outputDir)`
+- `cmd/e2e/main.go:561` — `logger.Warn("Failed to save metrics dump", "error", err)`
+- `cmd/e2e/main.go:567` — `return 0`
+- `cmd/e2e/main.go:570` — `func assertionsRun(result *scenarios.Result) int {`
+- `cmd/e2e/main.go:571` — `if result == nil {`
+- `cmd/e2e/main.go:572` — `return 0`
+- `cmd/e2e/main.go:574` — `return result.AssertionsRun`
+- `cmd/e2e/main.go:617` — `tests := []scenarios.Scenario{`
+- `cmd/e2e/main.go:618` — `scenarios.NewCoreHealthScenario(obsClient, nil),`
+- `cmd/e2e/main.go:619` — `scenarios.NewCoreDataflowScenario(obsClient, wsClient, udpEndpoint, nil),`
+- `cmd/e2e/main.go:627` — `exitCode := runScenario(ctx, logger, scenario, &cliFlags{})`
+- `cmd/e2e/main.go:629` — `if exitCode == 0 {`
+- `cmd/e2e/main.go:632` — `} else {`
+- `cmd/e2e/main.go:633` — `failed++`
+- `cmd/e2e/main.go:643` — `if failed > 0 {`
+- `cmd/e2e/main.go:644` — `return 1`
+- `cmd/e2e/main.go:646` — `return 0`
+- `cmd/e2e/main.go:658` — `tests := []scenarios.Scenario{`
+- `cmd/e2e/main.go:659` — `scenarios.NewTieredScenario(obsClient, udpEndpoint, cfg),`
+- `cmd/e2e/main.go:667` — `exitCode := runScenario(ctx, logger, scenario, &cliFlags{})`
+- `cmd/e2e/main.go:683` — `if failed > 0 {`
+- `cmd/e2e/main.go:684` — `return 1`
+- `cmd/e2e/main.go:686` — `return 0`
+- `cmd/e2e/main.go:698` — `cfg.Variant = "structural"`
+- `cmd/e2e/main.go:699` — `tests := []scenarios.Scenario{`
+- `cmd/e2e/main.go:700` — `scenarios.NewTieredScenario(obsClient, udpEndpoint, cfg),`
+- `cmd/e2e/main.go:708` — `exitCode := runScenario(ctx, logger, scenario, &cliFlags{})`
+- `cmd/e2e/main.go:724` — `if failed > 0 {`
+- `cmd/e2e/main.go:725` — `return 1`
+- `cmd/e2e/main.go:727` — `return 0`
+- `cmd/e2e/main.go:739` — `writer := results.NewWriter(outputDir)`
+- `cmd/e2e/main.go:742` — `files, err := writer.ListRuns()`
+- `cmd/e2e/main.go:748` — `if len(files) < 2 {`
+- `cmd/e2e/main.go:749` — `logger.Warn("Need at least 2 test runs to compare", "found", len(files))`
+- `cmd/e2e/main.go:750` — `return 1`
+- `cmd/e2e/main.go:754` — `var statisticalRun, semanticRun *results.TestRun`
+- `cmd/e2e/main.go:756` — `run, err := writer.LoadRun(files[i])`
+- `cmd/e2e/main.go:757` — `if err != nil {`
+- `cmd/e2e/main.go:758` — `logger.Warn("Failed to load run", "file", files[i], "error", err)`
+- `cmd/e2e/main.go:759` — `continue`
+- `cmd/e2e/main.go:762` — `if run.Config.Variant == "statistical" && statisticalRun == nil {`
+- `cmd/e2e/main.go:764` — `} else if run.Config.Variant == "semantic" && semanticRun == nil {`
+- `cmd/e2e/main.go:773` — `if statisticalRun == nil || semanticRun == nil {`
+- `cmd/e2e/main.go:777` — `return 1`
+- `cmd/e2e/main.go:781` — `comparison := results.Compare(statisticalRun, semanticRun)`
+- `cmd/e2e/main.go:784` — `filepath, err := writer.WriteComparison(comparison)`
+- `cmd/e2e/main.go:785` — `if err != nil {`
+- `cmd/e2e/main.go:787` — `return 1`
+- `cmd/e2e/main.go:855` — `// Build tier comparison report`
+- `cmd/e2e/main.go:856` — `report := TierComparisonReport{`
+- `cmd/e2e/main.go:859` — `Tiers:       make(map[string]TierMetrics),`
+- `cmd/e2e/main.go:863` — `tierExpectations := map[string]TierExpectation{`
+- `cmd/e2e/main.go:911` — `tierReportFile := fmt.Sprintf("%s/tier-comparison-%s.json", outputDir, time.Now().Format("20060102-150405"))`
+- `cmd/e2e/main.go:912` — `data, err := json.MarshalIndent(report, "", "  ")`
+- `cmd/e2e/main.go:913` — `if err == nil {`
+- `cmd/e2e/main.go:914` — `if err := os.WriteFile(tierReportFile, data, 0644); err == nil {`
+- `cmd/e2e/main.go:915` — `logger.Info("Report saved", "file", tierReportFile)`
+- `cmd/e2e/main.go:919` — `return 0`
+- `cmd/e2e/compare.go:28` — `baseline, err := scenarios.LoadStructuredResults(baselineFile)`
+- `cmd/e2e/compare.go:35` — `target, err := scenarios.LoadStructuredResults(targetFile)`
+- `test/e2e/results/writer.go:100` — `func NewWriter(outputDir string) *Writer {`
+- `test/e2e/results/writer.go:105` — `func (w *Writer) WriteRun(run *TestRun) (string, error) {`
+- `test/e2e/results/writer.go:132` — `func (w *Writer) WriteLatest(run *TestRun) (string, error) {`
+- `test/e2e/results/writer.go:133` — `filepath, err := w.WriteRun(run)`
+- `test/e2e/results/writer.go:185` — `func CreateTestRun(`
+- `test/e2e/results/writer.go:468` — `func (w *Writer) GetLatestRun() (*TestRun, error) {`
+- `test/e2e/scenarios/results.go:738` — `func SaveStructuredResults(tr *TieredResults, outputDir string) (string, error) {`
+- `test/e2e/scenarios/results.go:765` — `func LoadStructuredResults(path string) (*TieredResults, error) {`
+- `cmd/e2e/main_test.go:47` — `{name: "success", result: &scenarios.Result{Success: true, AssertionsRun: 11}, wantOutput: "assertions_run=11"},`
+- `cmd/e2e/main_test.go:48` — `{name: "partial failure", result: &scenarios.Result{AssertionsRun: 4}, err: errors.New("failed"),`
+- `cmd/e2e/main_test.go:49` — `wantExit: 1, wantOutput: "assertions_run=4"},`
+- `test/e2e/scenarios/agentic/approval_signal_test.go:71` — `// The number Execute pins assertions_run against is derived from the same`
+- `test/e2e/scenarios/agentic/scenario.go:207` — `// the runner's assertions_run= line therefore reads as "one verification stage`
+- `test/e2e/scenarios/agentic/scenario.go:321` — `result.AssertionsRun++`
+- `test/e2e/scenarios/agentic/scenario.go:328` — `// assertions_run=0 shipped green in the first place (#1238).`
+- `test/e2e/scenarios/agentic/scenario.go:329` — `if want := s.assertingStageCount(); result.AssertionsRun != want {`
+- `test/e2e/scenarios/agentic/scenario.go:330` — `result.Error = fmt.Sprintf("assertions_run = %d, want %d", result.AssertionsRun, want)`
+- `test/e2e/scenarios/core_slow_consumer.go:78` — `"assertions_run": result.AssertionsRun,`
+- `test/e2e/scenarios/core_slow_consumer.go:207` — `return requireSlowConsumer(result, result.AssertionsRun+1 == slowConsumerExpectedAssertions,`
+- `test/e2e/scenarios/core_slow_consumer.go:212` — `result.AssertionsRun++`
+- `test/e2e/scenarios/core_slow_consumer_test.go:41` — `assert.Equal(t, 4, result.AssertionsRun)`
+- `test/e2e/scenarios/core_slow_consumer_test.go:52` — `assert.Equal(t, slowConsumerExpectedAssertions, result.AssertionsRun)`
+- `test/e2e/scenarios/lessons/scenario.go:263` — `result.AssertionsRun++`
+- `test/e2e/scenarios/lessons/scenario_test.go:53` — `if result.AssertionsRun != 1 {`
+- `test/e2e/scenarios/lessons/scenario_test.go:54` — `t.Fatalf("AssertionsRun = %d, want 1", result.AssertionsRun)`
+- `test/e2e/scenarios/lessons/scenario_test.go:432` — `if result.AssertionsRun != 0 {`
+- `test/e2e/scenarios/lessons/scenario_test.go:433` — `t.Fatalf("AssertionsRun = %d, want 0", result.AssertionsRun)`
+- `test/e2e/scenarios/ops/scenario.go:257` — `result.AssertionsRun++`
+- `test/e2e/scenarios/ops/scenario_test.go:53` — `if result.AssertionsRun != test.wantCount {`
+- `test/e2e/scenarios/ops/scenario_test.go:54` — `t.Errorf("AssertionsRun = %d, want %d", result.AssertionsRun, test.wantCount)`
+- `test/e2e/scenarios/scenario.go:48` — `// AssertionsRun is the number of assertions the scenario actually executed.`
+- `test/e2e/scenarios/scenario.go:49` — `AssertionsRun int `json:"assertions_run,omitempty"``
+
+## Problem shape
+
+- `cmd/e2e/dispatch_coverage_test.go:53` — `require.NotEmpty(t, dispatchable, "createScenario's dispatch switch must be found and non-empty")`
+- `cmd/e2e/dispatch_coverage_test.go:56` — `require.GreaterOrEqualf(t, len(menuNames), 10,`
+- `cmd/e2e/dispatch_coverage_test.go:60` — `require.Truef(t, dispatchable[name],`
+- `cmd/e2e/dispatch_coverage_test.go:64` — `require.Truef(t, dispatchable[name],`
+- `cmd/e2e/dispatch_coverage_test.go:91` — `func TestAdvertisedScenariosHaveARunner(t *testing.T) {`
+- `cmd/e2e/dispatch_coverage_test.go:97` — `require.Truef(t, namedByTask[name] || inAllBundle[name],`
+- `cmd/e2e/dispatch_coverage_test.go:98` — `"scenario %q is advertised but nothing runs it: no `./e2e --scenario %s` in Taskfile.yml or "+`
+- `cmd/e2e/dispatch_coverage_test.go:106` — `// TestOnlyExecutedTaskLinesCountAsRunners guards the executed-versus-documented`
+- `cmd/e2e/dispatch_coverage_test.go:272` — `require.NotEmpty(t, clauses, "createScenario's switch statement must be found by AST walk")`
+- `cmd/e2e/dispatch_coverage_test.go:347` — `require.NotEmpty(t, constructors,`
+- `cmd/e2e/dispatch_coverage_test.go:348` — `"runAllScenarios must build a non-empty []scenarios.Scenario literal — this guard reads it as the "+`
+- `cmd/e2e/dispatch_coverage_test.go:526` — `require.GreaterOrEqualf(t, len(files), 10,`
+- `cmd/e2e/dispatch_coverage_test.go:536` — `require.GreaterOrEqualf(t, len(names), 8,`
+- `cmd/e2e/dispatch_coverage_test.go:614` — `require.NotEmpty(t, fields, "matched menu line %q must yield a name token", line)`
+- `cmd/e2e/dispatch_coverage_test.go:617` — `require.NotEmptyf(t, names, "--list output must advertise at least one scenario under %q", scenarioSectionHeader)`
+- `cmd/e2e/dispatch_coverage_test.go:671` — `require.NotEmpty(t, names, "-scenario usage text must list at least one bare scenario name")`
+- `cmd/e2e/dispatch_coverage_test.go:704` — `require.NotEmpty(t, usage, "-scenario flag registration must be found by AST walk")`
+- `test/contract/e2e_tier_binary_contract_test.go:173` — `t.Fatalf("%s: unclassified gate token %q in row %s", path, gate, row.tier)`
+- `test/contract/e2e_tier_binary_contract_test.go:179` — `t.Fatalf("%s: tier table parsed to zero rows", path)`
+- `test/contract/e2e_tier_binary_contract_test.go:685` — `t.Fatalf("%s: no non-empty `options` table", path)`
+- `scripts/spec-properties.sh:187` — `if [ "$total" -eq 0 ]; then`
+- `scripts/spec-properties.sh:188` — `echo "SCAN found no '// spec:' citations under '$scope' — nothing was verified."`
+- `scripts/spec-properties.sh:189` — `echo "An empty parse is not a clean pass; check the pathspec, or remove this gate if property citations are gone."`
+- `scripts/spec-properties.sh:190` — `exit 2`
+- `scripts/spec-properties.sh:195` — `if [ "$bad" -gt 0 ]; then`
+- `scripts/spec-properties.sh:196` — `printf '\n%d of %d citations do not resolve.\n' "$bad" "$total"`
+- `scripts/spec-properties.sh:197` — `printf 'A reworded `### Requirement:` heading leaves its citations silently lying — fix the citation or the delta.\n'`
+- `scripts/spec-properties.sh:198` — `exit 1`
+- `scripts/spec-properties.sh:201` — `printf 'spec-properties: %d/%d citations resolve.\n' "$ok" "$total"`
+- `test/e2e/scenarios/agentic/scenario.go:311` — `if err := stage.fn(ctx, result); err != nil {`
+- `test/e2e/scenarios/agentic/scenario.go:312` — `result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", stage.name, err))`
+- `test/e2e/scenarios/agentic/scenario.go:313` — `result.Error = fmt.Sprintf("%s failed: %v", stage.name, err)`
+- `test/e2e/scenarios/agentic/scenario.go:316` — `return result, nil`
+- `test/e2e/scenarios/agentic/scenario.go:319` — `result.Metrics[fmt.Sprintf("%s_duration_ms", stage.name)] = time.Since(stageStart).Milliseconds()`
+- `test/e2e/scenarios/agentic/scenario.go:320` — `if stage.asserts {`
+- `test/e2e/scenarios/agentic/scenario.go:321` — `result.AssertionsRun++`
+- `test/e2e/scenarios/agentic/scenario.go:329` — `if want := s.assertingStageCount(); result.AssertionsRun != want {`
+- `test/e2e/scenarios/agentic/scenario.go:330` — `result.Error = fmt.Sprintf("assertions_run = %d, want %d", result.AssertionsRun, want)`
+- `test/e2e/scenarios/agentic/scenario.go:331` — `result.Errors = append(result.Errors, result.Error)`
+- `test/e2e/scenarios/agentic/scenario.go:334` — `return result, nil`
+- `test/e2e/scenarios/agentic/scenario.go:337` — `result.Success = true`
+- `test/e2e/scenarios/core_slow_consumer.go:207` — `return requireSlowConsumer(result, result.AssertionsRun+1 == slowConsumerExpectedAssertions,`
+- `test/e2e/scenarios/core_slow_consumer.go:208` — `"assertions run after final check must equal %d", slowConsumerExpectedAssertions)`
+- `test/e2e/scenarios/core_slow_consumer.go:211` — `func requireSlowConsumer(result *Result, condition bool, format string, args ...any) error {`
+- `test/e2e/scenarios/core_slow_consumer.go:212` — `result.AssertionsRun++`
+- `test/e2e/scenarios/core_slow_consumer.go:213` — `if !condition {`
+- `test/e2e/scenarios/core_slow_consumer.go:214` — `return fmt.Errorf(format, args...)`
+- `test/e2e/scenarios/core_slow_consumer.go:216` — `return nil`
+- `test/e2e/scenarios/lessons/scenario.go:258` — `func runStages(ctx context.Context, result *scenarios.Result, stages []stage) (string, error) {`
+- `test/e2e/scenarios/lessons/scenario.go:259` — `for _, current := range stages {`
+- `test/e2e/scenarios/lessons/scenario.go:260` — `if err := current.run(ctx); err != nil {`
+- `test/e2e/scenarios/lessons/scenario.go:261` — `return current.name, err`
+- `test/e2e/scenarios/lessons/scenario.go:263` — `result.AssertionsRun++`
+- `test/e2e/scenarios/lessons/scenario.go:265` — `return "", nil`
+- `test/e2e/scenarios/ops/scenario.go:250` — `func runOpsStages(ctx context.Context, result *scenarios.Result, stages []opsStage) (string, error) {`
+- `test/e2e/scenarios/ops/scenario.go:251` — `for _, stage := range stages {`
+- `test/e2e/scenarios/ops/scenario.go:253` — `if err := stage.fn(ctx, result); err != nil {`
+- `test/e2e/scenarios/ops/scenario.go:254` — `return stage.name, err`
+- `test/e2e/scenarios/ops/scenario.go:256` — `result.Metrics[fmt.Sprintf("%s_duration_ms", stage.name)] = time.Since(stageStart).Milliseconds()`
+- `test/e2e/scenarios/ops/scenario.go:257` — `result.AssertionsRun++`
+- `test/e2e/scenarios/ops/scenario.go:259` — `return "", nil`
+
+## Searches
+
+Every search is scoped to the claim worktree. Tracked-query counts were re-collected while writing
+this file; no tests were run. Initial state: git rev-parse HEAD matched base; git status --short returned zero entries.
+Contract read: .agents/contracts/semstreams-explorer.md. Project Purpose/Product Boundary read at openspec/project.md:1–78.
+
+- `git diff --stat fe9482b7f336e575317cfb45fd1ad7c40baf7904..HEAD && sed -n '1,78p' openspec/project.md` → source-diff or located-range read; exit 0.
+- `gopls workspace_symbol -matcher=fuzzy '^Scenario$'` → 0 output lines; exit 0.
+- `gopls workspace_symbol -matcher=fuzzy '^Result$'` → 0 output lines; exit 0.
+- `gopls workspace_symbol -matcher=fuzzy runScenario` → 0 output lines; exit 0.
+- `gopls workspace_symbol -matcher=fuzzy '^Writer$'` → 0 output lines; exit 0.
+- `gopls references test/e2e/scenarios/scenario.go:10:6` → 0 output lines; exit 0.
+- `gopls implementation test/e2e/scenarios/scenario.go:10:6` → 0 output lines; exit 0.
+- `gopls references test/e2e/scenarios/scenario.go:31:6` → 1 output lines; exit 0.
+  - test/e2e/scenarios/scenario.go:23:33-39
+- `gopls references cmd/e2e/main.go:510:6` → 4 output lines; exit 0.
+  - cmd/e2e/main.go:334:9-20
+  - cmd/e2e/main.go:627:15-26
+  - cmd/e2e/main.go:667:15-26
+  - cmd/e2e/main.go:708:15-26
+- `gopls references test/e2e/results/writer.go:105:18` → 1 output lines; exit 0.
+  - test/e2e/results/writer.go:133:21-29
+- `gopls implementation test/e2e/scenarios/scenario.go:23:2` → 0 output lines; exit 0.
+- `gopls call_hierarchy cmd/e2e/main.go:510:6` → 10 output lines; exit 0.
+  - caller[0]: ranges 334:9-20 in cmd/e2e/main.go from/to function runScenarios in cmd/e2e/main.go:303:6-18
+  - caller[1]: ranges 627:15-26 in cmd/e2e/main.go from/to function runAllScenarios in cmd/e2e/main.go:601:6-21
+  - caller[2]: ranges 667:15-26 in cmd/e2e/main.go from/to function runSemanticScenarios in cmd/e2e/main.go:650:6-26
+  - caller[3]: ranges 708:15-26 in cmd/e2e/main.go from/to function runRulesScenarios in cmd/e2e/main.go:690:6-23
+  - identifier: function runScenario in cmd/e2e/main.go:510:6-17
+  - callee[0]: ranges 528:67-80 in cmd/e2e/main.go from/to function assertionsRun in cmd/e2e/main.go:570:6-19
+  - callee[1]: ranges 559:23-38 in cmd/e2e/main.go from/to function saveMetricsDump in cmd/e2e/main.go:578:6-21
+  - callee[2]: ranges 511:9-13, 518:9-13, 522:9-13, 540:9-13, 551:11-15, 563:11-15 in cmd/e2e/main.go from/to function Info in /usr/local/go/src/log/slog/logger.go:208:18-22
+  - callee[3]: ranges 524:10-14, 549:11-15, 561:11-15 in cmd/e2e/main.go from/to function Warn in /usr/local/go/src/log/slog/logger.go:218:18-22
+  - callee[4]: ranges 514:10-15, 528:10-15, 533:10-15 in cmd/e2e/main.go from/to function Error in /usr/local/go/src/log/slog/logger.go:228:18-23
+- `git grep -n -E 'type (Scenario|Result|Runner|Writer|TestRun|Summary|TestMetadata)|func .*Execute\(|scenarios\.(Result|Scenario)|\*Result' -- cmd/e2e test/e2e` → 306 matching lines; exit 0.
+- `git grep -n -E 'Required|Diagnostic|Skipped|required|diagnostic|skipped|SKIP|ASSERTIONS_RUN|assertions_run|AssertionsRun' -- cmd/e2e test/e2e/scenarios/scenario.go test/e2e/results test/e2e/scenarios/results_common_types.go test/e2e/scenarios/results_tier_types.go` → 13 matching lines; exit 0.
+- `git grep -n -E 'junit|JUnit|JUNIT|markdown|Markdown|\.xml|\.md|\.json|WriteRun|WriteLatest|CreateTestRun|LoadRun|ListRuns|SaveStructuredResults|LoadStructuredResults|WriteComparison' -- cmd/e2e test/e2e/results scripts .github/workflows` → 90 matching lines; exit 0.
+- `git grep -n -E 'AssertionsRun|assertions_run|[Ss]kipped|[Dd]iagnostic|[Rr]equired' -- test/e2e/scenarios/scenario.go test/e2e/scenarios/tiered.go test/e2e/scenarios/tiered_*.go test/e2e/scenarios/results*.go` → 25 matching lines; exit 0.
+- `git grep -n -E 'e2e/results|LoadStructuredResults\(|SaveStructuredResults\(|CreateTestRun\(|WriteRun\(|WriteLatest\(|GetLatestRun\(|NewWriter\(' -- '*.go'` → 17 matching lines; exit 0.
+- `git grep -n -i -E 'junit|testcase|testsuite|markdown|\.xml|\.md' -- cmd/e2e test/e2e/results test/e2e/scenarios/results*.go` → 0 matching lines; exit 1.
+- `git grep -n -E 'type Runner|type Check|RequiredCheck|required_check|required-check|diagnostic_only|diagnostic-only|skipped_required|SkippedRequired|CHECKS_REQUIRED|ASSERTIONS_RUN' -- cmd/e2e test/e2e .github/workflows taskfiles/e2e openspec/changes/e2e-required-check-evidence` → 1 matching lines; exit 0.
+- `git grep -n -E 'non-empty|NotEmpty|GreaterOrEqual|nothing runs|zero|exit [12]|no spec|malformed|unclassified' -- cmd/e2e/dispatch_coverage_test.go test/contract/e2e_tier_binary_contract_test.go scripts/spec-properties.sh` → 24 matching lines; exit 0.
+- `git grep -n -E 'func .*Execute\(.*\(\*(scenarios\.)?Result, error\)|AssertionsRun|assertionsRun|assertions_run|assertions-run|assertion_count|assertionCount|ASSERTIONS_RUN' -- cmd/e2e test/e2e` → 45 matching lines; exit 0.
+- `git grep -n -i -E '#1222|required.check|zero.assertion|assertions_run|assertionsrun|junit|diagnostic.only' -- openspec/specs docs/adr openspec/changes/e2e-required-check-evidence docs/contributing` → 4 matching lines; exit 0.
+- `nl -ba cmd/e2e/main.go | sed -n '125,144p;303,334p;510,568p;650,727p;731,791p;848,921p'` → source-diff or located-range read; exit 0.
+- `nl -ba scripts/spec-properties.sh | sed -n '170,201p'; nl -ba test/e2e/scenarios/lessons/scenario.go | sed -n '249,281p'; nl -ba test/e2e/scenarios/ops/scenario.go | sed -n '242,263p'; nl -ba test/e2e/scenarios/tiered.go | sed -n '232,259p;374,420p'` → source-diff or located-range read; exit 0.
+- `nl -ba cmd/e2e/main.go | sed -n '395,425p;570,575p;611,647p'; nl -ba test/e2e/scenarios/tiered.go | sed -n '532,622p'; nl -ba test/e2e/scenarios/agentic/scenario.go | sed -n '196,213p;310,343p'; nl -ba test/e2e/scenarios/core_slow_consumer.go | sed -n '199,219p'` → source-diff or located-range read; exit 0.
+- `git grep -n -E 'skip|Skip|diagnostic|Diagnostic|warning|Warning|result.Success|Success:' -- test/e2e/scenarios/agentic/scenario.go test/e2e/scenarios/tiered.go test/e2e/scenarios/lessons/scenario.go test/e2e/scenarios/ops/scenario.go` → 33 matching lines; exit 0.
+- `git grep -n -E 'LoadRun\(|ListRuns\(|WriteComparison\(|LoadStructuredResults\(|SaveStructuredResults\(|WriteRun\(|WriteLatest\(|CreateTestRun\(|AssertionsRun|assertions_run' -- cmd/e2e test/e2e/results test/e2e/scenarios/results.go` → 24 matching lines; exit 0.
+- `git grep -n -E "func .*Execute\(.*\(\*(scenarios\.)?Result, error\)" -- cmd/e2e test/e2e` → 16 matching lines; exit 0.
+- `git grep -n -E LoadStructuredResults\(|SaveStructuredResults\(|CreateTestRun\(|WriteRun\(|WriteLatest\(|GetLatestRun\(|NewWriter\( -- *.go` → 12 matching lines; exit 0.
+- `git grep -n -E AssertionsRun|assertionsRun|assertions_run|assertions-run|assertion_count|assertionCount|ASSERTIONS_RUN -- cmd/e2e test/e2e` → 29 matching lines; exit 0.
+- `git grep -n -E "type Runner|type Check|RequiredCheck|required_check|required-check|diagnostic_only|diagnostic-only|skipped_required|SkippedRequired|CHECKS_REQUIRED|ASSERTIONS_RUN" -- cmd/e2e test/e2e .github/workflows taskfiles/e2e` → 0 matching lines; exit 1.
+
+### NOT RUN / omissions
+
+- NOT RUN: GitHub issue/PR enumeration and live workflow/ruleset/run retrieval; coordinator owns #1222 / PR #1406 claims.
+- NOT RUN: openspec list; active claim is read directly from its two tracked files.
+- NOT RUN: tests, mutations, Docker, paid providers, artifact generation, or repository writes.
+- NOT RUN: gopls expansion beyond returned locations; literal Execute/signature and consumer searches supplement those results.
+- NOT RUN: exhaustive per-scenario business-check outcome inventory or variant cost/value judgments; architect assembly owns those.
+- NOT RUN: external JSON/JUnit/Markdown consumers, deployed report storage, or historical scratch logs.
+- No Runner/Check or required/diagnostic/skipped outcome declaration returned by the exact structural-spelling search over the named surface.
+- No JUnit/XML/Markdown spelling returned over cmd/e2e, test/e2e/results, and test/e2e/scenarios/results*.go.
+- Execute declaration search returned 16 signatures, including the CLI test double; gopls implementation returned zero.
+
+## Inventory counts
+
+{"Adjacent claims": 19, "Claimed gap": 23, "Consumers": 138, "Problem shape": 61, "Spellings of the fact": 119}.
+Search/read command records: 31. Initial state/contract read recorded separately.

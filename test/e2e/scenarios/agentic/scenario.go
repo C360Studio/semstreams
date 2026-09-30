@@ -72,6 +72,11 @@ type Scenario struct {
 
 // Config holds configuration for the agentic scenario.
 type Config struct {
+	// Evidence identity is supplied by the selected runner before execution.
+	// Empty identity retains the legacy execution-only scenario.
+	EvidenceRunID    string `json:"evidence_run_id,omitempty"`
+	EvidenceMemberID string `json:"evidence_member_id,omitempty"`
+
 	// NATS URL for publishing tasks
 	NATSURL string `json:"nats_url"`
 
@@ -152,6 +157,40 @@ func (s *Scenario) Description() string {
 	return s.description
 }
 
+const (
+	// The submitted task uses the "mock" alias; the shipped endpoint emits
+	// stream metrics under its resolved model name.
+	agenticMetricsModel  = "mock-model"
+	agenticTerminalCheck = "agentic.terminal.task-loop"
+	agenticToolCheck     = "agentic.tool.request-result"
+	agenticChunksCheck   = "agentic.streaming.chunks"
+	agenticTTFTCheck     = "agentic.streaming.ttft"
+)
+
+// CheckRequirements declares the accepted agentic proof and its TTFT diagnostic.
+func (s *Scenario) CheckRequirements() []scenarios.CheckRequirement {
+	return []scenarios.CheckRequirement{
+		{ID: agenticTerminalCheck, Required: true},
+		{ID: agenticToolCheck, Required: true},
+		{ID: agenticChunksCheck, Required: true},
+		{ID: agenticTTFTCheck, Required: false},
+	}
+}
+
+func (s *Scenario) evidenceEnabled() bool {
+	return s.config.EvidenceRunID != "" || s.config.EvidenceMemberID != ""
+}
+
+func (s *Scenario) recordEvidence(result *scenarios.Result, id, status, reason string, values map[string]string) error {
+	if !s.evidenceEnabled() {
+		return nil
+	}
+	return result.RecordCheck(scenarios.CheckObservation{
+		ID: id, RunID: s.config.EvidenceRunID, MemberID: s.config.EvidenceMemberID,
+		Status: status, Reason: reason, Evidence: values,
+	})
+}
+
 // Setup prepares the scenario environment.
 func (s *Scenario) Setup(ctx context.Context) error {
 	// Create NATS client
@@ -203,10 +242,9 @@ type agenticStage struct {
 	asserts bool
 }
 
-// assertingStageCount is how many stages a complete run must count. One unit of
-// the runner's assertions_run= line therefore reads as "one verification stage
-// that ran to completion" — the tier's green stops resting on stage durations
-// alone (#1238).
+// assertingStageCount is the execution-stage guard for legacy runs. Adopted
+// required evidence replaces this supplemental count during FinalizeChecks.
+// Stage completion still cannot hide an existing fatal execution check (#1238).
 //
 // It is DERIVED from stages() rather than carried as a constant beside it,
 // because a hand-carried number is one edit away from agreeing with a list it
@@ -295,6 +333,11 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		Details:      make(map[string]any),
 		Errors:       []string{},
 		Warnings:     []string{},
+	}
+	if s.evidenceEnabled() {
+		if err := result.DeclareChecks(s.config.EvidenceRunID, s.config.EvidenceMemberID, s.CheckRequirements()); err != nil {
+			return result, err
+		}
 	}
 
 	// Store mock info
@@ -617,6 +660,14 @@ func requiredComponents() []string {
 func (s *Scenario) captureBaseline(ctx context.Context, result *scenarios.Result) error {
 	snapshot, err := s.metrics.FetchSnapshot(ctx)
 	if err != nil {
+		if s.evidenceEnabled() {
+			baselineErr := fmt.Errorf("capture controlled agentic metric baseline before task injection: %w", err)
+			values := map[string]string{"phase": "before-task-injection"}
+			toolErr := s.recordEvidence(result, agenticToolCheck, "failed", baselineErr.Error(), values)
+			chunksErr := s.recordEvidence(result, agenticChunksCheck, "failed", baselineErr.Error(), values)
+			ttftErr := s.recordEvidence(result, agenticTTFTCheck, "skipped", baselineErr.Error(), values)
+			return errors.Join(baselineErr, toolErr, chunksErr, ttftErr)
+		}
 		result.Warnings = append(result.Warnings, fmt.Sprintf("Could not capture metrics baseline: %v", err))
 		return nil // Non-fatal
 	}
@@ -626,13 +677,44 @@ func (s *Scenario) captureBaseline(ctx context.Context, result *scenarios.Result
 		snapshot,
 		"semstreams_agentic_loop_loops_completed_total",
 	)
+	if s.evidenceEnabled() {
+		chunks, _ := metricWithLabel(snapshot, "semstreams_agentic_model_stream_chunks_total", "model", agenticMetricsModel)
+		ttft, _ := metricWithLabel(snapshot, "semstreams_agentic_model_stream_ttft_seconds_count", "model", agenticMetricsModel)
+		toolCalls, _ := metricWithLabel(snapshot, "semstreams_agentic_tools_executions_total", "tool_name", "query_entity")
+		result.Details["baseline_stream_chunks"] = chunks
+		result.Details["baseline_stream_ttft"] = ttft
+		result.Details["baseline_tool_executions"] = toolCalls
+		result.Details["baseline_stream_scrape_at"] = snapshot.Timestamp.UTC().Format(time.RFC3339Nano)
+	}
 	return nil
+}
+
+func metricWithLabel(snapshot *client.MetricsSnapshot, name, label, value string) (float64, bool) {
+	if snapshot == nil {
+		return 0, false
+	}
+	var total float64
+	found := false
+	for _, metric := range snapshot.Metrics {
+		if metric.Name == name && metric.Labels[label] == value {
+			total += metric.Value
+			found = true
+		}
+	}
+	return total, found
 }
 
 // injectTask publishes a direct agent task for testing
 func (s *Scenario) injectTask(ctx context.Context, result *scenarios.Result) error {
 	// Inject a direct task to test agentic loop
-	task := newTestTask(time.Now())
+	// The mock must query a graph entity this deployment actually created. Its
+	// authority is minted at boot, so pass the observed ID in the task prompt
+	// for the mock to quote back rather than predicting a static sensor ID.
+	modelEntityID := agentic.ModelEndpointEntityID(s.authorityOrg, s.authorityPlatform, "mock")
+	if _, err := s.nats.GetEntity(ctx, modelEntityID); err != nil {
+		return fmt.Errorf("controlled query target %s is not in ENTITY_STATES: %w", modelEntityID, err)
+	}
+	task := newTestTask(time.Now(), modelEntityID)
 
 	taskMsg := message.NewBaseMessage(task.Schema(), &task, "e2e-test")
 	taskData, err := json.Marshal(taskMsg)
@@ -651,7 +733,7 @@ func (s *Scenario) injectTask(ctx context.Context, result *scenarios.Result) err
 	return nil
 }
 
-func newTestTask(now time.Time) agentic.TaskMessage {
+func newTestTask(now time.Time, modelEntityID string) agentic.TaskMessage {
 	taskID := fmt.Sprintf("e2e-agentic-%d", now.UnixNano())
 	return agentic.TaskMessage{
 		// A loop instance token is a framework-minted canonical UUID (ADR-105,
@@ -660,12 +742,12 @@ func newTestTask(now time.Time) agentic.TaskMessage {
 		TaskID:      taskID,
 		Role:        "general",
 		Model:       "mock",
-		Prompt:      "Analyze the temperature sensor temp-sensor-001. Respond with a brief assessment including valid JSON in your response.",
+		Prompt:      "Use query_entity to inspect configured mock model endpoint " + modelEntityID + ". Respond with a brief assessment including valid JSON in your response.",
 		ChannelType: "e2e",
 		ChannelID:   taskID,
 		Tools: []agentic.ToolDefinition{{
 			Name:        "query_entity",
-			Description: "Query the test temperature sensor by its entity ID.",
+			Description: "Query the configured mock model endpoint by its entity ID.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -678,9 +760,22 @@ func newTestTask(now time.Time) agentic.TaskMessage {
 	}
 }
 
-func (s *Scenario) verifyTerminalResponse(ctx context.Context, result *scenarios.Result) error {
+func (s *Scenario) verifyTerminalResponse(ctx context.Context, result *scenarios.Result) (retErr error) {
 	loopID, _ := result.Details["loop_id"].(string)
 	taskID, _ := result.Details["task_id"].(string)
+	if s.evidenceEnabled() {
+		defer func() {
+			status, reason := "passed", ""
+			if retErr != nil {
+				status, reason = "failed", retErr.Error()
+			}
+			values := map[string]string{"task_id": taskID, "loop_id": loopID}
+			if terminalID, ok := result.Details["terminal_source_id"].(string); ok {
+				values["terminal_id"] = terminalID
+			}
+			retErr = errors.Join(retErr, s.recordEvidence(result, agenticTerminalCheck, status, reason, values))
+		}()
+	}
 	if loopID == "" || taskID == "" {
 		return fmt.Errorf("terminal response proof requires loop_id and task_id")
 	}
@@ -697,16 +792,17 @@ func (s *Scenario) verifyTerminalResponse(ctx context.Context, result *scenarios
 		return fmt.Errorf("read source terminal: %w", err)
 	}
 	var source struct {
-		ID      string `json:"id"`
-		Payload struct {
-			Outcome string `json:"outcome"`
-		} `json:"payload"`
+		ID      string                     `json:"id"`
+		Payload agentic.LoopCompletedEvent `json:"payload"`
 	}
 	if err := json.Unmarshal(terminal.Data, &source); err != nil {
 		return fmt.Errorf("decode source terminal: %w", err)
 	}
 	if source.ID == "" || source.Payload.Outcome != agentic.OutcomeSuccess {
 		return fmt.Errorf("source terminal id/outcome = %q/%q, want nonempty/success", source.ID, source.Payload.Outcome)
+	}
+	if err := terminalMatchesTaskLoop(source.Payload, taskID, loopID); err != nil {
+		return err
 	}
 
 	userStream, err := js.Stream(ctx, "USER")
@@ -758,6 +854,17 @@ func (s *Scenario) verifyTerminalResponse(ctx context.Context, result *scenarios
 	}
 	result.Details["terminal_response_id"] = wantID
 	result.Details["terminal_response_subject"] = responseSubject
+	result.Details["terminal_source_id"] = source.ID
+	result.Details["terminal_task_id"] = source.Payload.TaskID
+	result.Details["terminal_loop_id"] = source.Payload.LoopID
+	return nil
+}
+
+func terminalMatchesTaskLoop(terminal agentic.LoopCompletedEvent, taskID, loopID string) error {
+	if terminal.TaskID != taskID || terminal.LoopID != loopID {
+		return fmt.Errorf("terminal task/loop = %q/%q, want %q/%q",
+			terminal.TaskID, terminal.LoopID, taskID, loopID)
+	}
 	return nil
 }
 
@@ -1057,11 +1164,59 @@ func (s *Scenario) verifyGraphTriples(ctx context.Context, result *scenarios.Res
 	return nil
 }
 
-// verifyToolExecution verifies that tools were executed during the agent loop.
-// This is a critical verification that tool definitions are being injected into
-// AgentRequest messages. The mock LLM only returns tool calls when it receives
-// tool definitions, so if this fails, it indicates the tool injection path is broken.
-func (s *Scenario) verifyToolExecution(ctx context.Context, result *scenarios.Result) error {
+// verifyToolExecution binds a query_entity request and successful completion
+// to the submitted loop. Legacy execution retains its aggregate metric check.
+func (s *Scenario) verifyToolExecution(ctx context.Context, result *scenarios.Result) (retErr error) {
+	if s.evidenceEnabled() {
+		taskID, _ := result.Details["task_id"].(string)
+		loopID, _ := result.Details["loop_id"].(string)
+		values := map[string]string{"task_id": taskID, "loop_id": loopID}
+		defer func() {
+			status, reason := "passed", ""
+			if retErr != nil {
+				status, reason = "failed", retErr.Error()
+			}
+			retErr = errors.Join(retErr, s.recordEvidence(result, agenticToolCheck, status, reason, values))
+		}()
+		if taskID == "" || loopID == "" || result.Details["terminal_task_id"] != taskID ||
+			result.Details["terminal_loop_id"] != loopID {
+			return fmt.Errorf("tool proof requires the submitted task/loop and matching terminal")
+		}
+		pages, err := s.nats.GetTrajectoryPages(ctx, loopID)
+		if err != nil {
+			return fmt.Errorf("read controlled tool trajectory: %w", err)
+		}
+		summary, err := summarizeTrajectoryPages(pages)
+		if err != nil {
+			return fmt.Errorf("read controlled tool facts: %w", err)
+		}
+		callID, err := controlledToolResult(summary.facts, loopID)
+		if err != nil {
+			return err
+		}
+		values["tool_call_id"] = callID
+		values["tool_name"] = "query_entity"
+		baseline, ok := result.Details["baseline_tool_executions"].(float64)
+		if !ok {
+			return fmt.Errorf("controlled tool execution baseline missing")
+		}
+		snapshot, err := s.metrics.FetchSnapshot(ctx)
+		if err != nil {
+			return fmt.Errorf("read controlled tool execution metric: %w", err)
+		}
+		observed, found := metricWithLabel(snapshot, "semstreams_agentic_tools_executions_total", "tool_name", "query_entity")
+		values["metric_baseline"] = fmt.Sprintf("%g", baseline)
+		values["metric_observed"] = fmt.Sprintf("%g", observed)
+		values["metric_delta"] = fmt.Sprintf("%g", observed-baseline)
+		if !found || observed <= baseline {
+			return fmt.Errorf("controlled tool execution delta = %g from baseline %g (series present=%v), want positive",
+				observed-baseline, baseline, found)
+		}
+		result.Metrics["tool_executions"] = observed
+		result.Details["tool_execution_verified"] = true
+		return nil
+	}
+
 	// Check tool execution metrics
 	toolExecutions, err := s.metrics.SumMetricsByName(ctx, "semstreams_agentic_tools_executions_total")
 	if err != nil {
@@ -1083,9 +1238,102 @@ func (s *Scenario) verifyToolExecution(ctx context.Context, result *scenarios.Re
 	return nil
 }
 
-// verifyStreamingMetrics checks that the streaming path was exercised.
-// This is non-fatal — the core agentic flow is validated by earlier stages.
+// controlledToolResult uses the production trajectory reader's facts for the
+// submitted loop. Aggregate execution counters cannot supply call identity.
+func controlledToolResult(facts []agentic.TrajectoryFactV1, loopID string) (string, error) {
+	if loopID == "" {
+		return "", fmt.Errorf("controlled loop ID is empty")
+	}
+	digest := agentic.TrajectoryLoopDigest(loopID)
+	requested := make(map[string]bool)
+	for _, fact := range facts {
+		if fact.LoopDigest == digest && fact.Kind == agentic.TrajectoryKindToolRequested &&
+			fact.SourceKind == agentic.TrajectorySourceToolCall && fact.ToolPreview == "query_entity" &&
+			fact.Status == agentic.TrajectoryStatusRequested && fact.SourceCorrelation != "" {
+			requested[fact.SourceCorrelation] = true
+		}
+	}
+	for _, fact := range facts {
+		if fact.LoopDigest != digest || fact.Kind != agentic.TrajectoryKindToolCompleted ||
+			fact.SourceKind != agentic.TrajectorySourceToolCall || fact.ToolPreview != "query_entity" ||
+			!requested[fact.SourceCorrelation] {
+			continue
+		}
+		if fact.Status != agentic.TrajectoryStatusCompleted {
+			return "", fmt.Errorf("controlled tool call %q completed with status %q", fact.SourceCorrelation, fact.Status)
+		}
+		return fact.SourceCorrelation, nil
+	}
+	return "", fmt.Errorf("controlled loop %q has no matching successful query_entity request/result", loopID)
+}
+
+// verifyStreamingMetrics checks that the submitted request exercised streaming.
+// Legacy execution retains its historical diagnostic behavior.
 func (s *Scenario) verifyStreamingMetrics(ctx context.Context, result *scenarios.Result) error {
+	if s.evidenceEnabled() {
+		taskID, _ := result.Details["task_id"].(string)
+		loopID, _ := result.Details["loop_id"].(string)
+		values := map[string]string{"task_id": taskID, "loop_id": loopID, "model": agenticMetricsModel}
+		if scrapedAt, ok := result.Details["baseline_stream_scrape_at"].(string); ok {
+			values["baseline_scrape_at"] = scrapedAt
+		}
+		baseline, baselineOK := result.Details["baseline_stream_chunks"].(float64)
+		values["metric_baseline"] = fmt.Sprintf("%g", baseline)
+		var snapshot *client.MetricsSnapshot
+		var scrapeErr error
+		if taskID == "" || loopID == "" || result.Details["terminal_task_id"] != taskID ||
+			result.Details["terminal_loop_id"] != loopID {
+			scrapeErr = fmt.Errorf("streaming proof requires the submitted task/loop and matching terminal")
+		} else if !baselineOK {
+			scrapeErr = fmt.Errorf("controlled streaming baseline missing")
+		} else {
+			snapshot, scrapeErr = s.metrics.FetchSnapshot(ctx)
+			if scrapeErr != nil {
+				scrapeErr = fmt.Errorf("read controlled streaming metrics: %w", scrapeErr)
+			}
+		}
+
+		chunkErr := scrapeErr
+		if snapshot != nil {
+			chunks, found := metricWithLabel(snapshot, "semstreams_agentic_model_stream_chunks_total", "model", agenticMetricsModel)
+			delta := chunks - baseline
+			values["metric_observed"] = fmt.Sprintf("%g", chunks)
+			values["metric_delta"] = fmt.Sprintf("%g", delta)
+			if !found || delta <= 0 {
+				chunkErr = fmt.Errorf("controlled streaming chunks delta = %g from baseline %g (series present=%v), want positive",
+					delta, baseline, found)
+			} else {
+				result.Metrics["stream_chunks_total"] = chunks
+				result.Metrics["stream_chunks_delta"] = delta
+				result.Details["streaming_verified"] = true
+			}
+		}
+		chunkStatus, chunkReason := "passed", ""
+		if chunkErr != nil {
+			chunkStatus, chunkReason = "failed", chunkErr.Error()
+		}
+		chunkRecordErr := s.recordEvidence(result, agenticChunksCheck, chunkStatus, chunkReason, values)
+
+		ttftStatus, ttftReason := "passed", ""
+		ttftValues := map[string]string{"task_id": taskID, "loop_id": loopID, "model": agenticMetricsModel}
+		if scrapeErr != nil {
+			ttftStatus, ttftReason = "failed", fmt.Sprintf("TTFT metric unavailable: %v", scrapeErr)
+		} else {
+			ttftBaseline, ok := result.Details["baseline_stream_ttft"].(float64)
+			ttft, found := metricWithLabel(snapshot, "semstreams_agentic_model_stream_ttft_seconds_count", "model", agenticMetricsModel)
+			ttftValues["metric_baseline"] = fmt.Sprintf("%g", ttftBaseline)
+			ttftValues["metric_observed"] = fmt.Sprintf("%g", ttft)
+			ttftValues["metric_delta"] = fmt.Sprintf("%g", ttft-ttftBaseline)
+			if !ok || !found || ttft <= ttftBaseline {
+				ttftStatus, ttftReason = "failed", "TTFT metric has no controlled request observation"
+			} else {
+				result.Metrics["stream_ttft_count"] = ttft
+			}
+		}
+		ttftRecordErr := s.recordEvidence(result, agenticTTFTCheck, ttftStatus, ttftReason, ttftValues)
+		return errors.Join(chunkErr, chunkRecordErr, ttftRecordErr)
+	}
+
 	// Check streaming chunks counter
 	chunks, err := s.metrics.SumMetricsByName(ctx, "semstreams_agentic_model_stream_chunks_total")
 	if err != nil {

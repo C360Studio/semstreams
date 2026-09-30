@@ -94,10 +94,13 @@ func TestE2ETasksPropagateScenarioFailuresAndCoverAgenticTier(t *testing.T) {
 	}
 
 	assertCleanupBeforeUp(t, "Taskfile.yml e2e:tier", taskBlock(t, readFile(t, filepath.Join(root, "Taskfile.yml")), "e2e:tier"))
-	assertCleanupBeforeUp(t, "core default", taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/core.yml")), "default"))
-	assertCleanupBeforeUp(t, "structural default", taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/structural.yml")), "default"))
+	assertTrappedCleanupBeforeUp(t, "core default", taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/core.yml")), "default"),
+		"docker compose -f docker/compose/e2e.yml --profile fixtures", "docker compose -f docker/compose/e2e.yml",
+		"docker compose -f docker/compose/e2e.yml --profile fixtures")
+	assertTrappedCleanupBeforeUp(t, "structural default", taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/structural.yml")), "default"),
+		"docker compose -f docker/compose/tiered.yml --profile structural", "docker compose -f docker/compose/tiered.yml --profile structural")
 	statisticalTask := taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/statistical.yml")), "default")
-	const statisticalWrapper = "- bash scripts/e2e-statistical-up.sh"
+	const statisticalWrapper = "bash scripts/e2e-statistical-up.sh || return $?"
 	if strings.Count(statisticalTask, statisticalWrapper) != 1 {
 		t.Fatal("statistical default must invoke its compose-up wrapper exactly once")
 	}
@@ -109,27 +112,33 @@ func TestE2ETasksPropagateScenarioFailuresAndCoverAgenticTier(t *testing.T) {
 			continue
 		}
 		foundWrappedUp = true
-		// Check every wrapper startup path, including the no-log fallback, against the unchanged Task defer.
-		expanded := strings.Replace(statisticalTask, statisticalWrapper, "- "+command, 1)
-		assertCleanupBeforeUp(t, "statistical default", expanded)
+		// Check every wrapper startup path, including the no-log fallback, under the registered cleanup trap.
+		expanded := strings.Replace(statisticalTask, statisticalWrapper, command+" || return $?", 1)
+		assertTrappedCleanupBeforeUp(t, "statistical default", expanded,
+			"docker compose -f docker/compose/tiered.yml --profile statistical",
+			"docker compose -f docker/compose/tiered.yml --profile statistical")
 	}
 	if !foundWrappedUp {
 		t.Error("statistical compose-up wrapper does not contain a compose up command")
 	}
 	semanticTaskfile := readFile(t, filepath.Join(root, "taskfiles/e2e/semantic.yml"))
-	for _, taskName := range []string{"default", "fallback", "compare:statistical", "compare:semantic"} {
+	assertTrappedCleanupBeforeUp(t, "semantic default", taskBlock(t, semanticTaskfile, "default"),
+		"docker compose -f docker/compose/tiered.yml --profile semantic", "docker compose -f docker/compose/tiered.yml --profile semantic")
+	for _, taskName := range []string{"fallback", "compare:statistical", "compare:semantic"} {
 		assertCleanupBeforeUp(t, "semantic "+taskName, taskBlock(t, semanticTaskfile, taskName))
 	}
-	assertCleanupBeforeUp(t, "agentic default", taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/agentic.yml")), "default"))
+	assertTrappedCleanupBeforeUp(t, "agentic default", taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/agentic.yml")), "default"),
+		"docker compose -f docker/compose/agentic.yml", "docker compose -f docker/compose/agentic.yml")
 
 	rootTaskfile := readFile(t, filepath.Join(root, "Taskfile.yml"))
-	allTaskStart := strings.Index(rootTaskfile, "  e2e:all:")
-	if allTaskStart < 0 {
-		t.Fatal("Taskfile.yml does not define e2e:all")
+	if !strings.Contains(taskBlock(t, rootTaskfile, "e2e:all"), "- task: e2e:core-inference-agentic") {
+		t.Error("e2e:all does not run the required five-family composite")
 	}
-	allTask := rootTaskfile[allTaskStart:]
-	if !strings.Contains(allTask, "- task: e2e:agentic") {
-		t.Error("e2e:all does not run the agentic tier")
+	composite := taskBlock(t, rootTaskfile, "e2e:core-inference-agentic")
+	if !strings.Contains(composite, "for member in core structural statistical semantic agentic; do") ||
+		!strings.Contains(composite, `task "e2e:$member"`) ||
+		!strings.Contains(composite, `[ "$child_exit" -eq 0 ] || return "$child_exit"`) {
+		t.Error("required composite does not run and propagate all five family children")
 	}
 	if !strings.Contains(rootTaskfile, "- task: test:integration") {
 		t.Error("check:push does not reuse the -p 2 integration task")
@@ -217,6 +226,59 @@ func assertCleanupBeforeUp(t *testing.T, name, contents string) {
 		downTarget := strings.SplitN(deferCommand, " down ", 2)[0]
 		if upTarget != downTarget {
 			t.Errorf("%s defers cleanup for %q before starting %q", name, downTarget, upTarget)
+		}
+	}
+	if !foundUp {
+		t.Errorf("%s does not contain a compose up command", name)
+	}
+}
+
+func assertTrappedCleanupBeforeUp(t *testing.T, name, contents, cleanupTarget string, upTargets ...string) {
+	t.Helper()
+	finishAt := strings.Index(contents, "finish() {")
+	trapAt := strings.Index(contents, "trap finish EXIT")
+	runAt := strings.Index(contents, "run_body() {")
+	if finishAt < 0 || trapAt <= finishAt || runAt <= trapAt {
+		t.Errorf("%s does not register cleanup trap before run_body", name)
+		return
+	}
+	finish := contents[finishAt:trapAt]
+	for _, expected := range []string{
+		cleanupTarget + ` down -v --timeout 15`,
+		`|| cleanup_exit=$?`,
+		`e2e_report_finalize "$command_exit" "$cleanup_exit"`,
+		`if [ "$command_exit" -ne 0 ]; then exit "$command_exit"; fi`,
+		`if [ "$cleanup_exit" -ne 0 ]; then exit "$cleanup_exit"; fi`,
+		`if [ "$report_exit" -ne 0 ]; then exit "$report_exit"; fi`,
+	} {
+		if !strings.Contains(finish, expected) {
+			t.Errorf("%s cleanup/finalization does not retain %q", name, expected)
+		}
+	}
+	if !strings.Contains(contents[runAt:], `run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?`) {
+		t.Errorf("%s does not retain run_body failure for finalization", name)
+	}
+	if !strings.Contains(contents[runAt:], "\n        finish") {
+		t.Errorf("%s does not call finish after run_body", name)
+	}
+	foundUp := false
+	for _, line := range strings.Split(contents, "\n") {
+		if !strings.Contains(line, "docker compose") || !strings.Contains(line, " up ") {
+			continue
+		}
+		foundUp = true
+		if strings.Index(contents, line) < trapAt || !strings.Contains(line, "|| return $?") {
+			t.Errorf("%s does not propagate compose up failure under registered cleanup", name)
+		}
+		upTarget := strings.SplitN(strings.TrimSpace(line), " up ", 2)[0]
+		matched := false
+		for _, target := range upTargets {
+			if upTarget == target {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("%s starts %q outside the cleanup target", name, upTarget)
 		}
 	}
 	if !foundUp {

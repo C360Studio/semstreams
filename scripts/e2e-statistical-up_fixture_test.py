@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -131,6 +132,23 @@ if name == 'sysctl':
 raise SystemExit('UNEXPECTED executable: ' + name)
 '''
 
+REPORT_STUB = r'''#!PYTHON
+import json, os, pathlib, sys
+args = sys.argv[1:]
+if '--report-init' in args:
+    root = pathlib.Path.cwd()
+    path = root / 'test/e2e/results/initial.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"evidence_status":"unattested"}')
+    print(json.dumps({'run_id':'fixture-run','path':str(path)}))
+elif '--report-finalize' in args:
+    print(str(pathlib.Path.cwd() / 'test/e2e/results/initial.json'))
+elif '--report-child' in args:
+    print('fixture-child-member')
+else:
+    raise SystemExit('unexpected reporter action: ' + repr(args))
+'''
+
 
 class BindDiagnosticsTests(unittest.TestCase):
     def setUp(self):
@@ -140,7 +158,8 @@ class BindDiagnosticsTests(unittest.TestCase):
         self.bin = self.home / 'bin'
         self.bin.mkdir()
         # No inherited PATH means an omitted stub cannot fall through to real infrastructure.
-        for name in ('bash', 'sed', 'grep', 'tee', 'mktemp', 'rm', 'head', 'cat', 'sort', 'awk', 'jq', 'timeout', 'task'):
+        for name in ('bash', 'sed', 'grep', 'tee', 'mktemp', 'rm', 'head', 'cat', 'sort', 'awk', 'jq', 'timeout', 'task',
+                     'mkdir', 'dirname', 'basename', 'tail'):
             source = shutil.which(name)
             self.assertIsNotNone(source, f'fixture prerequisite missing: {name}')
             (self.bin / name).symlink_to(source)
@@ -157,13 +176,32 @@ class BindDiagnosticsTests(unittest.TestCase):
         wrapper = ROOT / 'scripts/e2e-statistical-up.sh'
         if wrapper.exists():
             shutil.copy2(wrapper, self.home / 'scripts' / wrapper.name)
+        shutil.copy2(ROOT / 'scripts/e2e-required-report.sh', self.home / 'scripts/e2e-required-report.sh')
+        (self.home / 'cmd/e2e').mkdir(parents=True)
+        reporter = self.home / 'cmd/e2e/e2e'
+        reporter.write_text(REPORT_STUB.replace('PYTHON', str(Path(shutil.which('python3')).resolve()), 1))
+        reporter.chmod(0o755)
+        (self.home / 'docker/compose').mkdir(parents=True)
+        (self.home / 'docker/compose/tiered.yml').write_text('services: {}')
+        (self.home / 'configs').mkdir()
+        (self.home / 'configs/statistical.json').write_text('{}')
+        (self.home / 'testdata/semantic').mkdir(parents=True)
+        (self.home / 'testdata/semantic/controlled.jsonl').write_text('{}\n')
         # Use the real task's commands/defer; replace only its unrelated dependencies and final scenario.
         task = (ROOT / 'taskfiles/e2e/statistical.yml').read_text()
         start = task.index('    deps:\n')
         end = task.index('    cmds:\n', start)
         task = task[:start] + task[end:]
-        task = task.replace('cd cmd/e2e && ./e2e --scenario tiered --variant statistical --output-dir ./test/e2e/results',
-                            'echo fixture-scenario')
+        task = task.replace('e2e_report_capture_app production semstreams-tiered-app || return $?',
+                            'echo fixture-capture')
+        task = re.sub(
+            r'"\$E2E_REPORT_BIN" --scenario tiered --variant statistical --output-dir "\$E2E_REPORT_DIR" \\\n'
+            r'\s+--evidence-input "\$child_input" > "\$child_output" 2>&1 \|\| child_exit=\$\?',
+            'echo fixture-scenario > "$child_output"',
+            task,
+            count=1,
+        )
+        self.assertIn('echo fixture-scenario > "$child_output"', task)
         (self.home / 'Taskfile.yml').write_text(task)
 
     def run_case(self, mode='bind', task=False, deadline=20, wait_ready=False):
@@ -226,7 +264,7 @@ class BindDiagnosticsTests(unittest.TestCase):
         self.assertIn('[BIND-DIAG] failed host port: 34222', result.stdout)
         self.assertIn('observed-holder', result.stdout)
         self.assertLess(result.stdout.index('observed-holder'), result.stdout.index('deferred teardown'))
-        self.assertNotIn('fixture-scenario', result.stdout)
+        self.assertNotIn('\nfixture-scenario\n', result.stdout)
         self.assertEqual(sum('up' in event for event in self.events), 1, self.events)
         self.assertEqual(sum('down' in event for event in self.events), 1, self.events)
         self.assertEqual(self.events[-1][-4:], ['down', '-v', '--timeout', '15'])
