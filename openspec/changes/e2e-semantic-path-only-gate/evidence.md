@@ -151,3 +151,18 @@ $ actionlint .github/workflows/e2e-ladder.yml; echo $?
 ```
 
 The job appearing once in the PR's ladder, its `[PATH-ONLY]` line, `[41/41]` and wall-clock are task 2.6 (CI facts).
+
+## § 7 Docs (task 2.5)
+
+```
+$ cmp CLAUDE.md AGENTS.md && go test -count=1 ./internal/agentprofiles/
+ok  	github.com/c360studio/semstreams/internal/agentprofiles	0.306s
+$ ! git grep -q 'Pending: wiring' -- test/e2e/README.md; echo $?
+0
+$ ! git grep -q 'does not yet run the' -- docs/contributing/02-e2e-tests.md; echo $?
+0
+```
+
+"~5 min" is the stated prediction; task 2.6 replaces it with the PR's measured wall-clock.
+Outside D8's sites and left unedited: three stale `~90s` semantic figures, `README.md:189`, `test/e2e/README.md:17`,
+`cmd/e2e/main.go:230` (the `--list` text).
