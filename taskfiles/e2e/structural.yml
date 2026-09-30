@@ -15,11 +15,6 @@ tasks:
       - |
         . scripts/e2e-required-report.sh
         e2e_report_begin structural structural e2e:structural || exit 1
-        e2e_report_add_file compose docker/compose/tiered.yml || exit 1
-        e2e_report_add_file config configs/e2e-structural.json || exit 1
-        for fixture in testdata/semantic/*.jsonl; do
-          e2e_report_add_file fixture "$fixture" || exit 1
-        done
         command_exit=0
         finish() {
           trap - EXIT
@@ -28,9 +23,18 @@ tasks:
           e2e_report_finalize "$command_exit" "$cleanup_exit"
           report_exit=$?
           cat "$E2E_REPORT_LOG"
-          if [ "$command_exit" -ne 0 ] || [ "$cleanup_exit" -ne 0 ] || [ "$report_exit" -ne 0 ]; then exit 1; fi
+          if [ "$command_exit" -ne 0 ]; then exit "$command_exit"; fi
+          if [ "$cleanup_exit" -ne 0 ]; then exit "$cleanup_exit"; fi
+          if [ "$report_exit" -ne 0 ]; then exit "$report_exit"; fi
         }
         trap finish EXIT
+        e2e_report_add_file compose docker/compose/tiered.yml || command_exit=$?
+        [ "$command_exit" -eq 0 ] && e2e_report_add_file config configs/e2e-structural.json || command_exit=1
+        if [ "$command_exit" -eq 0 ]; then
+          for fixture in testdata/semantic/*.jsonl; do
+            e2e_report_add_file fixture "$fixture" || { command_exit=1; break; }
+          done
+        fi
         run_body() {
           echo "[STRUCTURAL] Starting structural tier E2E test..."
           docker compose -f docker/compose/tiered.yml --profile structural up -d --wait --build || return $?
@@ -45,4 +49,7 @@ tasks:
           e2e_report_child structural "$child_output" "$child_exit" || return 1
           [ "$child_exit" -eq 0 ]
         }
-        run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?
+        if [ "$command_exit" -eq 0 ]; then
+          run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?
+        fi
+        finish

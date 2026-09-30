@@ -430,19 +430,22 @@ func createScenario(
 			flags.baseURL,
 			strings.TrimRight(flags.baseURL, "/")+"/graph-gateway/graphql",
 			config.CoreAuthorityStem,
+			flags.evidenceRunID, flags.evidenceMemberID,
 		)
 	case "core-minted-authority", "minted-authority":
 		// ADR-104: the deployment minted an entropy suffix onto platform.id at
 		// first boot and recorded it. Everything else in the e2e tree now READS
 		// that record; this stage is what proves the record is there and shaped
 		// the way the cross-repo contract says.
-		return scenarios.NewMintedAuthorityScenario(config.DefaultEndpoints.NATS, config.CoreAuthorityStem)
+		return scenarios.NewMintedAuthorityScenario(config.DefaultEndpoints.NATS, config.CoreAuthorityStem,
+			flags.evidenceRunID, flags.evidenceMemberID)
 	case "core-pre-identity-seed":
 		return scenarios.NewPreIdentityBucketScenario(
-			config.DefaultEndpoints.NATS, "seed", config.CoreAuthorityStem)
+			config.DefaultEndpoints.NATS, "seed", config.CoreAuthorityStem, "", "")
 	case "core-pre-identity-assert":
 		return scenarios.NewPreIdentityBucketScenario(
-			config.DefaultEndpoints.NATS, "assert", config.CoreAuthorityStem)
+			config.DefaultEndpoints.NATS, "assert", config.CoreAuthorityStem,
+			flags.evidenceRunID, flags.evidenceMemberID)
 	case "core-slow-consumer", "slow-consumer":
 		return scenarios.NewSlowConsumerAttributionScenario(scenarios.SlowConsumerAttributionConfig{
 			AppContainer:     "semstreams-e2e-slow-consumer-app",
@@ -486,6 +489,8 @@ func createScenario(
 	case "agentic":
 		cfg := agentic.DefaultConfig()
 		cfg.MetricsURL = flags.metricsURL
+		cfg.HTTPURL = flags.baseURL
+		cfg.EvidenceRunID, cfg.EvidenceMemberID = flags.evidenceRunID, flags.evidenceMemberID
 		return agentic.NewScenario(edgeClient, cfg)
 
 	// Deep-research scenario (rules-driven multi-agent research flow)

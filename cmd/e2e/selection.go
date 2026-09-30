@@ -84,12 +84,14 @@ func resolveScenarioSelection(input *cliFlags) (scenarioSelection, error) {
 			selection.flags.scenarioName = "core-minted-authority"
 			selection.members = []string{"core-minted-authority"}
 			selection.label = "core-minted-authority"
+			selection.required = true
 		case "core-pre-identity-seed":
 			selection.members = []string{"core-pre-identity-bucket-seed"}
 			selection.label = "core-pre-identity-bucket-seed"
 		case "core-pre-identity-assert":
 			selection.members = []string{"core-pre-identity-bucket-assert"}
 			selection.label = "core-pre-identity-bucket-assert"
+			selection.required = true
 		default:
 			selection.members = []string{name}
 			selection.label = name

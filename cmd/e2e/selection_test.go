@@ -26,9 +26,9 @@ func TestResolveScenarioSelectionPreservesScopeAndCallerOptions(t *testing.T) {
 		{name: "explicit statistical", scenario: "tiered", variant: "statistical", wantName: "tiered", wantLabel: "statistical", wantVariant: "statistical", wantMembers: []string{"tiered:statistical"}, required: true},
 		{name: "named structural", scenario: "structural", wantName: "tiered", wantLabel: "structural", wantVariant: "structural", wantMembers: []string{"tiered:structural"}, required: true},
 		{name: "health alias", scenario: "health", wantName: "health", wantLabel: "core-health", wantMembers: []string{"core-health"}, required: true},
-		{name: "minted authority alias", scenario: "minted-authority", wantName: "core-minted-authority", wantLabel: "core-minted-authority", wantMembers: []string{"core-minted-authority"}},
+		{name: "minted authority alias", scenario: "minted-authority", wantName: "core-minted-authority", wantLabel: "core-minted-authority", wantMembers: []string{"core-minted-authority"}, required: true},
 		{name: "preidentity seed", scenario: "core-pre-identity-seed", wantName: "core-pre-identity-seed", wantLabel: "core-pre-identity-bucket-seed", wantMembers: []string{"core-pre-identity-bucket-seed"}},
-		{name: "preidentity assert", scenario: "core-pre-identity-assert", wantName: "core-pre-identity-assert", wantLabel: "core-pre-identity-bucket-assert", wantMembers: []string{"core-pre-identity-bucket-assert"}},
+		{name: "preidentity assert", scenario: "core-pre-identity-assert", wantName: "core-pre-identity-assert", wantLabel: "core-pre-identity-bucket-assert", wantMembers: []string{"core-pre-identity-bucket-assert"}, required: true},
 		{name: "legacy", scenario: "lessons", wantName: "lessons", wantLabel: "lessons", wantMembers: []string{"lessons"}},
 		{name: "fallback diagnostic", scenario: "tiered", variant: "semantic-fallback", wantName: "tiered", wantLabel: "semantic-fallback", wantVariant: "semantic-fallback", wantMembers: []string{"tiered:semantic-fallback"}},
 	}

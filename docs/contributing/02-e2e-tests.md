@@ -179,7 +179,11 @@ final writes atomically replace that invocation's aggregate. Child members retai
 keeps partial observations and the missing set. Typed tier exports are analysis projections, not acceptance authority.
 Older reports remain readable as unattested.
 
-Run records bind selection, required members, exclusions, argv, absolute paths, UTC times, exit status and provenance.
+Run records bind selection, required members, exclusions, executed test/child arguments, absolute paths, UTC times,
+exit status and provenance. Task aggregates identify the resolved Task target; they explicitly mark original launcher
+arguments unavailable when those were not observed. For example, a report naming `e2e:core` does not claim to remember
+whether the caller added `--verbose` or `--parallel`. This declared launcher-history limit does not weaken required
+checks or permit missing test/application provenance.
 Provenance distinguishes source/dirty inputs, the runner executable, the actual application image/binary, and selected
 Compose/config/fixture/settings inputs. Retained manifests identify constituent files and digests. Unavailable identity
 has an explicit reason and prevents full proof; a guessed image tag or runner SHA cannot stand in for the application.
@@ -190,8 +194,9 @@ composite records that child's failure and missing report. After initialization,
 after cleanup, retaining both the original failure and any cleanup/write failure. Process or host death may leave an
 incomplete envelope. Incomplete artifacts never satisfy a required suite.
 
-Existing CI jobs retain available evidence even on failure. Artifact absence or upload failure remains visible. Direct
-remote inspection may retain useful observations while lacking application provenance; it remains incomplete proof.
+CI adoption must retain available evidence even on failure and expose artifact absence or upload failure. The current
+required-check change has not yet enabled those upload steps. Direct remote inspection may retain useful observations
+while lacking application provenance; it remains incomplete proof.
 Release candidate selection and tag authorization still belong to
 [release-candidate-proof](../../openspec/specs/release-candidate-proof/spec.md).
 

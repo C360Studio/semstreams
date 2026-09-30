@@ -692,6 +692,7 @@ var allowedEnvironmentKeys = map[string]bool{
 	"log_path": true, "log_sha256": true,
 	"artifact_manifest_path": true, "artifact_manifest_sha256": true,
 	"output_dir": true,
+	"command_scope": true, "outer_launcher_argv": true,
 }
 
 func validateEnvironmentKeys(env map[string]string) error {

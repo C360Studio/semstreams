@@ -12,8 +12,11 @@ e2e_report_begin() {
   E2E_REPORT_DIR=$(cd "$E2E_REPORT_DIR" && pwd -P) || return
   E2E_REPORT_FILES='[]'
   E2E_REPORT_APPS='[]'
+  # Task supplies a resolved target. The calling shell's original argv is not
+  # observable here and is recorded explicitly as unavailable by the reporter.
   initialized=$("$E2E_REPORT_BIN" --report-init --report-selection "$selection" \
     --output-dir "$E2E_REPORT_DIR" \
+    --report-parent-id "${E2E_REPORT_PARENT_ID:-}" --report-parent-slot "${E2E_REPORT_PARENT_SLOT:-}" \
     --report-argv-json "$(jq -nc --arg target "$invocation" '["task",$target]')") || return
   E2E_REPORT_RUN_ID=$(printf '%s' "$initialized" | jq -er '.run_id') || return
   E2E_REPORT_RUN_PATH=$(printf '%s' "$initialized" | jq -er '.path') || return
@@ -44,18 +47,22 @@ e2e_report_capture_app() {
 }
 
 e2e_report_write_input() {
-  local path=$1 selection=$2 parent_id=$3 parent_slot=$4 files=${5:-$E2E_REPORT_FILES}
+  local path=$1 selection=$2 parent_id=$3 parent_slot=$4 files=${5:-$E2E_REPORT_FILES} apps=${6:-$E2E_REPORT_APPS}
   jq -nc --arg output_dir "$E2E_REPORT_DIR" --arg selection "$selection" \
     --arg parent_id "$parent_id" --arg parent_member_id "$parent_slot" \
     --arg profiles "$E2E_REPORT_PROFILES" --argjson files "$files" \
-    --argjson app_phases "$E2E_REPORT_APPS" \
+    --argjson app_phases "$apps" \
     '{output_dir:$output_dir,selection:$selection,parent_id:$parent_id,parent_member_id:$parent_member_id,profiles:$profiles,files:$files,app_phases:$app_phases}' \
     > "$path"
 }
 
 e2e_report_child_input() {
-  local slot=$1 selection=$2 path="$E2E_REPORT_DIR/e2e-child-input-$E2E_REPORT_RUN_ID-$slot.json"
-  e2e_report_write_input "$path" "$selection" "$E2E_REPORT_RUN_ID" "$slot" || return
+  local slot=$1 selection=$2 phase=${3:-} apps=$E2E_REPORT_APPS path="$E2E_REPORT_DIR/e2e-child-input-$E2E_REPORT_RUN_ID-$slot.json"
+  if [ -n "$phase" ]; then
+    apps=$(printf '%s' "$E2E_REPORT_APPS" | jq -c --arg phase "$phase" '[.[] | select(.name == $phase)]') || return
+    [ "$(printf '%s' "$apps" | jq 'length')" -eq 1 ] || return 1
+  fi
+  e2e_report_write_input "$path" "$selection" "$E2E_REPORT_RUN_ID" "$slot" "$E2E_REPORT_FILES" "$apps" || return
   printf '%s\n' "$path"
 }
 
@@ -71,11 +78,16 @@ e2e_report_record() {
 }
 
 e2e_report_child() {
-  local slot=$1 output=$2 exit_code=$3 child_path
-  child_path=$(sed -n 's/^E2E_RESULT_PATH=//p' "$output" | tail -n 1) || return
+  local slot=$1 output=$2 exit_code=$3 child_argv_json=${4:-} child_path
+  if [ -n "$child_argv_json" ]; then
+    child_path=$(sed -n 's/^E2E_TASK_RESULT_PATH=//p' "$output" | tail -n 1) || return
+  else
+    child_path=$(sed -n 's/^E2E_RESULT_PATH=//p' "$output" | tail -n 1) || return
+  fi
   "$E2E_REPORT_BIN" --report-child --report-run-path "$E2E_REPORT_RUN_PATH" \
     --report-member "$slot" --report-child-path "$child_path" \
-    --report-child-exit "$exit_code" --report-log-path "$output"
+    --report-child-exit "$exit_code" --report-log-path "$output" \
+    --report-argv-json "$child_argv_json"
 }
 
 e2e_report_finalize() {
@@ -84,7 +96,8 @@ e2e_report_finalize() {
   files=$(printf '%s' "$E2E_REPORT_FILES" |
     jq -c --arg path "$E2E_REPORT_LOG" '. + [{role:"task_log",path:$path}]') || files=''
   if [ -n "$files" ]; then
-    e2e_report_write_input "$input" "$E2E_REPORT_SELECTION" "" "" "$files" || true
+    e2e_report_write_input "$input" "$E2E_REPORT_SELECTION" \
+      "${E2E_REPORT_PARENT_ID:-}" "${E2E_REPORT_PARENT_SLOT:-}" "$files" || true
   fi
   result=$("$E2E_REPORT_BIN" --report-finalize --report-run-path "$E2E_REPORT_RUN_PATH" \
     --report-command-exit "$command_exit" --report-cleanup-exit "$cleanup_exit" \

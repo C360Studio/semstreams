@@ -48,7 +48,7 @@ func handleTaskReportCommand(flags *cliFlags) (bool, int) {
 		}
 		var argv []string
 		if err := json.Unmarshal([]byte(flags.reportArgvJSON), &argv); err != nil || len(argv) == 0 {
-			fmt.Fprintln(os.Stderr, "E2E report initialization requires observed argv JSON array")
+			fmt.Fprintln(os.Stderr, "E2E report initialization requires resolved Task target argv JSON array")
 			return true, 1
 		}
 		for _, arg := range argv {
@@ -115,7 +115,7 @@ func handleTaskReportCommand(flags *cliFlags) (bool, int) {
 		return true, 1
 	}
 	path, err := recordTaskChild(flags.reportRunPath, flags.reportMemberID,
-		flags.reportChildPath, flags.reportChildExit, flags.reportLogPath)
+		flags.reportChildPath, flags.reportChildExit, flags.reportLogPath, flags.reportArgvJSON)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "E2E child report failed at %s: %s\n", path, err)
 		return true, 1
@@ -550,10 +550,15 @@ func resolveTaskReportScope(selection string) (taskReportScope, error) {
 		for _, id := range []string{
 			"core.shutdown.exit", "core.shutdown.log", "core.shutdown.listeners",
 			"core.early-cancel.exit", "core.early-cancel.no-services",
-			"core.preidentity.refusal", "core.preidentity.no-record",
+			"core.preidentity.refusal",
 		} {
 			scope.members = append(scope.members, shellReportMember(id))
 		}
+		noRecord, err := cliReportMember("core.preidentity.no-record", "core-pre-identity-assert")
+		if err != nil {
+			return taskReportScope{}, err
+		}
+		scope.members = append(scope.members, noRecord)
 		graph, err := cliReportMember("core.graph-roundtrip.identity", "core-graph-roundtrip")
 		if err != nil {
 			return taskReportScope{}, err
@@ -663,7 +668,7 @@ func initializeTaskReport(outputDir string, scope taskReportScope, parentID, par
 		return nil, "", fmt.Errorf("Task output directory must be absolute and clean")
 	}
 	if len(command) == 0 {
-		return nil, "", fmt.Errorf("Task invocation argv was not observed")
+		return nil, "", fmt.Errorf("resolved Task target argv is absent")
 	}
 	if (parentID == "") != (parentMemberID == "") {
 		return nil, "", fmt.Errorf("parent run and slot must be supplied together")
@@ -680,6 +685,10 @@ func initializeTaskReport(outputDir string, scope taskReportScope, parentID, par
 	run.ParentID, run.ParentMemberID = parentID, parentMemberID
 	run.Command = append([]string(nil), command...)
 	run.WorkingDir = wd
+	run.Environment = map[string]string{
+		"command_scope":       "resolved Task target",
+		"outer_launcher_argv": "unavailable: Task does not expose the calling shell argv",
+	}
 	for _, member := range scope.members {
 		declaration := scenarios.Result{ScenarioName: member.id}
 		if err := declaration.DeclareChecks(run.ID, member.id, member.checks); err != nil {
@@ -737,7 +746,7 @@ func recordTaskObservation(runPath string, observation scenarios.CheckObservatio
 // recordTaskChild observes the external process status and verifies the exact
 // child bytes against the expectation retained at parent initialization.
 // A failed verification is itself a failed parent observation, never a pass.
-func recordTaskChild(runPath, memberID, childPath string, childExit int, logPath string) (string, error) {
+func recordTaskChild(runPath, memberID, childPath string, childExit int, logPath, argvJSON string) (string, error) {
 	run, writer, err := loadInitializedTaskReport(runPath)
 	if err != nil {
 		return "", err
@@ -765,12 +774,27 @@ func recordTaskChild(runPath, memberID, childPath string, childExit int, logPath
 	evidence := map[string]string{
 		"child_path": childPath, "child_exit": fmt.Sprintf("%d", childExit), "log_path": logPath,
 	}
+	argvValid := true
+	if expected.RequireTaskStatuses {
+		var observedArgv []string
+		if err := json.Unmarshal([]byte(argvJSON), &observedArgv); err != nil ||
+			!slices.Equal(observedArgv, []string{"task", "e2e:" + memberID}) {
+			argvValid = false
+			evidence["child_argv_json"] = "unavailable: Task child argv was absent or differed"
+		} else {
+			canonical, _ := json.Marshal(observedArgv)
+			evidence["child_argv_json"] = string(canonical)
+		}
+	}
 	status, reason := "passed", ""
 	if childExit != 0 {
 		status, reason = "failed", fmt.Sprintf("child process exited %d", childExit)
 	} else if childPath == "" {
 		status, reason = "failed", "child report path is absent"
-	} else {
+	} else if !argvValid {
+		status, reason = "failed", "Task child argv is absent or differs from the selected command"
+	}
+	if status == "passed" {
 		verified := *expected
 		verified.ParentID = run.ID
 		artifact, verifyErr := writer.VerifyChild(childPath, verified)
@@ -823,6 +847,32 @@ func finalizeTaskReport(runPath string, commandExit, cleanupExit int,
 	if commandExit < 0 || cleanupExit < 0 {
 		problems = append(problems, fmt.Errorf("Task command and cleanup exits must be observed"))
 	}
+	for _, memberID := range initial.Config.RequiredMembers {
+		index := -1
+		for i := range terminal.Scenarios {
+			if terminal.Scenarios[i].MemberID == memberID {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			problems = append(problems, fmt.Errorf("initialized declaration missing member %q", memberID))
+			continue
+		}
+		member, loadErr := writer.LoadMember(initial, memberID)
+		if loadErr != nil {
+			terminal.Scenarios[index].Errors = append(terminal.Scenarios[index].Errors,
+				fmt.Sprintf("report member %q: %s", memberID, loadErr))
+			problems = append(problems, fmt.Errorf("loading report member %q: %w", memberID, loadErr))
+			continue
+		}
+		terminal.Scenarios[index] = *member
+	}
+	if initial.Config.Selection == "core-inference-agentic" {
+		if err := appendCompositeProvenance(initial, writer, terminal.Scenarios, &input); err != nil {
+			problems = append(problems, fmt.Errorf("composite child provenance: %w", err))
+		}
+	}
 	if input.OutputDir != initial.Environment["output_dir"] {
 		problems = append(problems, fmt.Errorf("manifest output location differs from initialized Task run"))
 	} else if input.Selection != initial.Config.Selection || input.ParentID != initial.ParentID ||
@@ -830,8 +880,10 @@ func finalizeTaskReport(runPath string, commandExit, cleanupExit int,
 		problems = append(problems, fmt.Errorf("manifest selection or parent slot differs from initialized Task run"))
 	} else {
 		input.EffectiveSettings = map[string]string{
-			"command_exit": fmt.Sprintf("%d", commandExit),
-			"cleanup_exit": fmt.Sprintf("%d", cleanupExit),
+			"command_exit":        fmt.Sprintf("%d", commandExit),
+			"cleanup_exit":        fmt.Sprintf("%d", cleanupExit),
+			"command_scope":       "resolved Task target",
+			"outer_launcher_argv": "unavailable: Task does not expose the calling shell argv",
 		}
 		manifest, prepareErr := buildReportManifest(input)
 		if prepareErr != nil {
@@ -859,27 +911,6 @@ func finalizeTaskReport(runPath string, commandExit, cleanupExit int,
 	}
 	if terminal.Environment["artifact_manifest_sha256"] == "" {
 		terminal.Environment["artifact_manifest_sha256"] = "unavailable: Task manifest could not be retained"
-	}
-	for _, memberID := range initial.Config.RequiredMembers {
-		index := -1
-		for i := range terminal.Scenarios {
-			if terminal.Scenarios[i].MemberID == memberID {
-				index = i
-				break
-			}
-		}
-		if index < 0 {
-			problems = append(problems, fmt.Errorf("initialized declaration missing member %q", memberID))
-			continue
-		}
-		member, loadErr := writer.LoadMember(initial, memberID)
-		if loadErr != nil {
-			terminal.Scenarios[index].Errors = append(terminal.Scenarios[index].Errors,
-				fmt.Sprintf("report member %q: %s", memberID, loadErr))
-			problems = append(problems, fmt.Errorf("loading report member %q: %w", memberID, loadErr))
-			continue
-		}
-		terminal.Scenarios[index] = *member
 	}
 	if commandExit >= 0 {
 		terminal.CommandExitCode = &commandExit
@@ -911,4 +942,93 @@ func finalizeTaskReport(runPath string, commandExit, cleanupExit int,
 		problems = append(problems, fmt.Errorf("required Task proof is incomplete"))
 	}
 	return final, errors.Join(problems...)
+}
+
+// appendCompositeProvenance imports only children that match the initialized
+// parent slots. Each referenced child report and manifest remains a retained
+// constituent; application phases are rechecked against their original bytes.
+func appendCompositeProvenance(parent *results.TestRun, writer *results.Writer,
+	members []scenarios.Result, input *reportManifestInput) error {
+	var problems []error
+	seenFiles := make(map[string]bool)
+	for _, file := range input.Files {
+		seenFiles[file.Role+"\x00"+file.Path] = true
+	}
+	for _, expected := range parent.Config.ChildExpectations {
+		var observed *scenarios.CheckObservation
+		for i := range members {
+			if members[i].MemberID == expected.ParentMemberID && len(members[i].CheckObservations) == 1 {
+				observed = &members[i].CheckObservations[0]
+				break
+			}
+		}
+		if observed == nil || observed.Status != "passed" {
+			problems = append(problems, fmt.Errorf("child %q has no passed verified observation", expected.ParentMemberID))
+			continue
+		}
+		childPath := observed.Evidence["child_path"]
+		if !filepath.IsAbs(childPath) {
+			childPath = filepath.Join(parent.Environment["output_dir"], childPath)
+		}
+		claim := expected
+		claim.ParentID = parent.ID
+		artifact, err := writer.VerifyChild(childPath, claim)
+		if err != nil || artifact.SHA256 != observed.Evidence["child_sha256"] {
+			problems = append(problems, fmt.Errorf("child %q report reference differs from verified bytes: %v",
+				expected.ParentMemberID, err))
+			continue
+		}
+		child, err := writer.LoadRun(childPath)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("reading child %q report: %w", expected.ParentMemberID, err))
+			continue
+		}
+		manifestPath := child.Environment["artifact_manifest_path"]
+		if !filepath.IsAbs(manifestPath) {
+			manifestPath = filepath.Join(child.Environment["output_dir"], manifestPath)
+		}
+		data, err := os.ReadFile(manifestPath)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("reading child %q manifest: %w", expected.ParentMemberID, err))
+			continue
+		}
+		var childManifest reportManifest
+		if err := json.Unmarshal(data, &childManifest); err != nil || len(childManifest.AppPhases) == 0 {
+			problems = append(problems, fmt.Errorf("child %q manifest has no usable application phases: %v",
+				expected.ParentMemberID, err))
+			continue
+		}
+		input.Files = append(input.Files,
+			reportManifestFileInput{Role: "artifact", Path: childPath},
+			reportManifestFileInput{Role: "artifact", Path: manifestPath})
+		for _, file := range childManifest.Files {
+			if file.Role != "compose" && file.Role != "config" && file.Role != "fixture" {
+				continue
+			}
+			digest, err := digestObservedFile(file.Path)
+			if err != nil || digest != file.SHA256 {
+				problems = append(problems, fmt.Errorf("child %q constituent %q changed: %v",
+					expected.ParentMemberID, file.Path, err))
+				continue
+			}
+			key := file.Role + "\x00" + file.Path
+			if !seenFiles[key] {
+				input.Files = append(input.Files, reportManifestFileInput{Role: file.Role, Path: file.Path})
+				seenFiles[key] = true
+			}
+		}
+		for _, app := range childManifest.AppPhases {
+			digest, err := digestObservedFile(app.BinaryPath)
+			if err != nil || digest != app.BinarySHA256 {
+				problems = append(problems, fmt.Errorf("child %q application phase %q binary changed: %v",
+					expected.ParentMemberID, app.Name, err))
+				continue
+			}
+			input.AppPhases = append(input.AppPhases, reportManifestAppInput{
+				Name: expected.ParentMemberID + "." + app.Name, ImageID: app.ImageID,
+				ImageDigest: app.ImageDigest, BinaryPath: app.BinaryPath, Build: app.Build,
+			})
+		}
+	}
+	return errors.Join(problems...)
 }

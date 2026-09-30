@@ -12,9 +12,6 @@ tasks:
       - |
         . scripts/e2e-required-report.sh
         e2e_report_begin core fixtures e2e:core || exit 1
-        e2e_report_add_file compose docker/compose/e2e.yml || exit 1
-        e2e_report_add_file config configs/protocol-flow.json || exit 1
-        e2e_report_add_file fixture cmd/e2e-semstreams/fixtures/register.go || exit 1
         command_exit=0
         finish() {
           trap - EXIT
@@ -23,9 +20,14 @@ tasks:
           e2e_report_finalize "$command_exit" "$cleanup_exit"
           report_exit=$?
           cat "$E2E_REPORT_LOG"
-          if [ "$command_exit" -ne 0 ] || [ "$cleanup_exit" -ne 0 ] || [ "$report_exit" -ne 0 ]; then exit 1; fi
+          if [ "$command_exit" -ne 0 ]; then exit "$command_exit"; fi
+          if [ "$cleanup_exit" -ne 0 ]; then exit "$cleanup_exit"; fi
+          if [ "$report_exit" -ne 0 ]; then exit "$report_exit"; fi
         }
         trap finish EXIT
+        e2e_report_add_file compose docker/compose/e2e.yml || command_exit=$?
+        [ "$command_exit" -eq 0 ] && e2e_report_add_file config configs/protocol-flow.json || command_exit=1
+        [ "$command_exit" -eq 0 ] && e2e_report_add_file fixture cmd/e2e-semstreams/fixtures/register.go || command_exit=1
         run_body() {
           echo "[E2E] Starting SemStreams E2E environment..."
           docker compose -f docker/compose/e2e.yml up -d --wait --build || return $?
@@ -174,14 +176,20 @@ tasks:
             early_app="semstreams-early-sigterm-app-$early_suffix"
 
             cleanup_early_boot() {
-              docker rm -f "$early_app" "$early_blackhole" >/dev/null 2>&1 || true
-              docker network rm "$early_network" >/dev/null 2>&1 || true
+              early_cleanup_status=0
+              docker rm -f "$early_app" "$early_blackhole" >/dev/null 2>&1 \
+                || { early_cleanup_status=$?; echo "[FAIL] Early-boot containers could not be removed"; }
+              docker network rm "$early_network" >/dev/null 2>&1 \
+                || { early_cleanup_status=$?; echo "[FAIL] Early-boot network could not be removed"; }
+              return "$early_cleanup_status"
             }
             fail_early_boot() {
               e2e_report_record "$current_check" failed "$1" "$expected" "${exit_code:-${running:-unavailable}}" || true
               echo "[FAIL] $1"
               docker logs "$early_app" 2>&1 || true
               docker logs "$early_blackhole" 2>&1 || true
+              trap - EXIT
+              cleanup_early_boot || echo "[FAIL] Early-boot cleanup also failed"
               exit 1
             }
             trap cleanup_early_boot EXIT
@@ -258,13 +266,15 @@ tasks:
               fail_early_boot "services started after early SIGTERM"
             fi
             e2e_report_record core.early-cancel.no-services passed "" "$expected" "context canceled; Starting all services absent" || fail_early_boot "no-services observation could not be retained"
+            trap - EXIT
+            cleanup_early_boot || { echo "[FAIL] Early-boot cleanup failed after the observations passed"; exit 1; }
             echo "[OK] Early SIGTERM canceled blocked NATS boot, exited 1, and fenced service startup"
           ) || return $?
           docker compose -f docker/compose/e2e.yml down -v --timeout 15 || return $?
           echo "[E2E] validate-pre-identity-bucket-refusal - booting into a bucket that predates identity minting..."
-          docker compose -f docker/compose/e2e.yml up -d --wait nats || return $? || return $?
-          cd cmd/e2e && ./e2e --scenario core-pre-identity-seed || return $?
-          docker compose -f docker/compose/e2e.yml up -d --no-deps semstreams || return $? || return $?
+          docker compose -f docker/compose/e2e.yml up -d --wait nats || return $?
+          (cd cmd/e2e && ./e2e --scenario core-pre-identity-seed) || return $?
+          docker compose -f docker/compose/e2e.yml up -d --no-deps semstreams || return $?
           (
             current_check=core.preidentity.refusal
             expected="nonzero refusal naming pre-identity bucket"
@@ -296,18 +306,24 @@ tasks:
               || fail_pre_identity "the refusal did not name the pre-identity bucket as the cause"
             e2e_report_record core.preidentity.refusal passed "" "$expected" "exit=$exit_code; refusal log present" || fail_pre_identity "refusal observation could not be retained"
 
-            (cd cmd/e2e && ./e2e --scenario core-pre-identity-assert) \
-              || fail_pre_identity "the refused boot left a platform_identity record behind"
+            child_input=$(e2e_report_child_input core.preidentity.no-record core-pre-identity-bucket-assert) \
+              || { echo "[FAIL] Could not prepare no-record child identity"; exit 1; }
+            child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-core.preidentity.no-record.stdout"
+            child_exit=0
+            (cd cmd/e2e && ./e2e --scenario core-pre-identity-assert --output-dir "$E2E_REPORT_DIR" \
+              --evidence-input "$child_input") > "$child_output" 2>&1 || child_exit=$?
+            cat "$child_output"
+            e2e_report_child core.preidentity.no-record "$child_output" "$child_exit" \
+              || { echo "[FAIL] No-record child failed or its required evidence was unavailable"; exit 1; }
+            [ "$child_exit" -eq 0 ] || { echo "[FAIL] Refused boot left a platform_identity record"; exit 1; }
             echo "[OK] A pre-identity bucket refuses LOUD, exits nonzero, and creates no identity record"
-            # The legacy assertion exit remains unattested for core.preidentity.no-record;
-            # the required member stays missing until the named observer is adopted.
           ) || return $?
           docker compose -f docker/compose/e2e.yml down -v --timeout 15 || return $?
           echo "[E2E] Phase 2 - graph round-trip probe against the e2e-target binary..."
-          docker compose -f docker/compose/e2e.yml --profile fixtures up -d --wait --build nats semstreams-fixtures || return $? || return $?
+          docker compose -f docker/compose/e2e.yml --profile fixtures up -d --wait --build nats semstreams-fixtures || return $?
           echo "[OK] e2e-target services are healthy"
           e2e_report_capture_app fixtures semstreams-e2e-fixtures-app || return $?
-          child_input=$(e2e_report_child_input core.graph-roundtrip.identity core-graph-roundtrip) || return $?
+          child_input=$(e2e_report_child_input core.graph-roundtrip.identity core-graph-roundtrip fixtures) || return $?
           child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-core.graph-roundtrip.identity.stdout"
           child_exit=0
           (cd cmd/e2e && ./e2e --scenario core-graph-roundtrip --output-dir "$E2E_REPORT_DIR" --evidence-input "$child_input") > "$child_output" 2>&1 || child_exit=$?
@@ -316,7 +332,10 @@ tasks:
           [ "$child_exit" -eq 0 ] || return "$child_exit"
           echo "[OK] graph round-trip probe passed against the e2e-target binary"
         }
-        run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?
+        if [ "$command_exit" -eq 0 ]; then
+          run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?
+        fi
+        finish
   debug:
     desc: Start E2E environment for debugging (leaves containers running)
     silent: false

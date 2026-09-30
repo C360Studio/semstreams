@@ -184,11 +184,18 @@ Failed partial observations SHALL be retained. Writer failures SHALL be visible 
 persistence. Unique member records and atomic aggregate writes SHALL prevent sibling/prior-run overwrite; no restart,
 resume or guaranteed final write after host/process death is implied.
 
-Evidence SHALL record exact argv, absolute working/output paths, UTC times, run/member IDs, source SHA and dirty
-status, patch/relevant-untracked-input digests where applicable, runner binary/build identity, observed application
+Evidence SHALL record exact executed E2E and owned child-command argv, absolute working/output paths, UTC times,
+run/member IDs, source SHA and dirty status, patch/relevant-untracked-input digests where applicable, runner
+binary/build identity, observed application
 image/binary identity, selected Compose/profile/config/fixture digests, effective nonsecret settings, exit/status,
 and log/artifact digests. Secrets SHALL NOT be retained. Unavailable provenance SHALL remain explicit, rather than
 using runner identity as application identity. Scripted dependencies and their proof scope SHALL be named.
+
+Task aggregates SHALL distinguish their resolved Task target from an observed original launcher command line.
+When original outer Task arguments are not observed, the report SHALL explicitly identify that launcher history as
+unavailable; it SHALL NOT label reconstructed arguments as exact. This launcher-history limit alone SHALL NOT prevent
+complete evidence when the required child execution, source, configuration, application and behavioral evidence is
+complete. Other unavailable required provenance SHALL still prevent complete proof.
 
 Existing CI jobs SHALL retain available run artifacts on failures as well as success and expose artifact absence.
 Log-only bootstrap and incomplete/crashed/legacy evidence SHALL NOT be accepted as complete required proof.
@@ -200,6 +207,14 @@ Release-candidate authorization SHALL remain governed by release-candidate-proof
 - **WHEN** a controlled execution failure occurs after some observations
 - **THEN** the final artifact retains those observations, the missing set and failure
 - **AND** the runner attempts serialization before returning the failed outcome.
+
+#### Scenario: Original Task launcher arguments are unavailable
+
+- **GIVEN** a Task wrapper knows the resolved suite but did not observe the original launcher arguments
+- **WHEN** it emits a report
+- **THEN** the resolved target and unavailable launcher history are explicitly distinguished
+- **AND** actual executed test/child commands and required source/configuration evidence remain recorded
+- **AND** that declared launcher-history limit alone does not change behavioral or evidence acceptance.
 
 #### Scenario: Application provenance is unavailable
 

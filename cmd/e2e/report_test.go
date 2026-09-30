@@ -42,6 +42,128 @@ func TestTaskReportScopeDeclaresCoreAtAssertionSites(t *testing.T) {
 	}
 }
 
+// spec: e2e-evidence / Run evidence binds one invocation
+func TestCompositeProvenanceUsesVerifiedChildBytes(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, contents string) string {
+		t.Helper()
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	member, err := taskChildReportMember("structural")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, parentPath, err := initializeTaskReport(root, taskReportScope{
+		selection: "fixture-composite", members: []taskReportMember{member},
+	}, "", "", []string{"task", "e2e:fixture-composite"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parent.Environment["command_scope"] != "resolved Task target" ||
+		parent.Environment["outer_launcher_argv"] == "" {
+		t.Fatalf("Task argv limitation was hidden: %+v", parent.Environment)
+	}
+	compose := write("compose.yml", "services: {}")
+	config := write("config.json", "{}")
+	fixture := write("fixture.jsonl", "{}")
+	appBinary := write("app.bin", "application bytes")
+	logPath := write("child.log", "child finished")
+	childManifest := reportManifest{
+		Files: []reportManifestFile{
+			{Role: "compose", Path: compose, SHA256: testDigest(t, compose)},
+			{Role: "config", Path: config, SHA256: testDigest(t, config)},
+			{Role: "fixture", Path: fixture, SHA256: testDigest(t, fixture)},
+		},
+		AppPhases: []reportManifestAppPhase{{
+			Name: "production", ImageID: "sha256:" + repeatHex('a'),
+			ImageDigest: "unavailable: locally built image has no registry digest",
+			BinaryPath:  appBinary, BinarySHA256: testDigest(t, appBinary), Build: "observed build",
+		}},
+	}
+	manifestBytes, err := json.Marshal(childManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := write("child-manifest.json", string(manifestBytes))
+	child := results.CreateTestRun(results.TestRunConfig{
+		Selection: "structural", RequireEvidence: true, RequireTaskStatuses: true,
+		RequiredMembers: []string{"structural"},
+	}, nil, nil, 0)
+	child.ParentID, child.ParentMemberID = parent.ID, "structural"
+	child.Command = []string{"task", "e2e:structural"}
+	child.WorkingDir = root
+	proof := scenarios.Result{ScenarioName: "structural"}
+	if err := proof.DeclareChecks(child.ID, "structural", []scenarios.CheckRequirement{{ID: "structural", Required: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := proof.RecordCheck(scenarios.CheckObservation{ID: "structural", RunID: child.ID,
+		MemberID: "structural", Status: "passed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := proof.FinalizeChecks(); err != nil {
+		t.Fatal(err)
+	}
+	child.Scenarios = []scenarios.Result{proof}
+	child.CompletedAt = child.StartedAt.Add(1)
+	zero := 0
+	child.ExitCode, child.CommandExitCode, child.CleanupExitCode = &zero, &zero, &zero
+	child.Environment = map[string]string{
+		"source_sha": "0123456789012345678901234567890123456789", "source_dirty": "false",
+		"source_patch_sha256":     "not_applicable: clean source",
+		"source_untracked_sha256": "not_applicable: clean source",
+		"runner_sha256":           repeatHex('b'), "runner_build": "go test",
+		"app_image_id":      childManifest.AppPhases[0].ImageID,
+		"app_image_digest":  childManifest.AppPhases[0].ImageDigest,
+		"app_binary_sha256": testDigest(t, appBinary), "app_build": "observed build",
+		"compose_sha256": testDigest(t, compose), "config_sha256": testDigest(t, config),
+		"fixture_sha256": testDigest(t, fixture), "profiles": "structural",
+		"effective_settings_sha256": repeatHex('c'),
+		"log_path":                  logPath, "log_sha256": testDigest(t, logPath),
+		"artifact_manifest_path": manifestPath, "artifact_manifest_sha256": testDigest(t, manifestPath),
+	}
+	childPath, err := results.NewWriter(root).WriteRun(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recordTaskChild(parentPath, "structural", childPath, 0, logPath,
+		`["task","e2e:structural"]`); err != nil {
+		loaded, _ := results.NewWriter(root).LoadRun(childPath)
+		t.Fatalf("%v; child=%+v", err, loaded)
+	}
+	observed, err := results.NewWriter(root).LoadMember(parent, "structural")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := reportManifestInput{OutputDir: root, Selection: "fixture-composite"}
+	if err := appendCompositeProvenance(parent, results.NewWriter(root), []scenarios.Result{*observed}, &input); err != nil {
+		t.Fatal(err)
+	}
+	if len(input.AppPhases) != 1 || input.AppPhases[0].Name != "structural.production" ||
+		len(input.Files) != 5 {
+		t.Fatalf("verified composite provenance lost child artifacts or constituents: %+v", input)
+	}
+	if err := os.WriteFile(appBinary, []byte("changed bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendCompositeProvenance(parent, results.NewWriter(root), []scenarios.Result{*observed},
+		&reportManifestInput{OutputDir: root, Selection: "fixture-composite"}); err == nil {
+		t.Fatal("changed child application bytes were accepted")
+	}
+}
+
+func testDigest(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
 func TestTaskReportScopeUsesCLIResolverForChildMembership(t *testing.T) {
 	for _, tc := range []struct {
 		task      string

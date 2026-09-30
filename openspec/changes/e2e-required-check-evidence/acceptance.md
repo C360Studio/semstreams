@@ -23,3 +23,17 @@ Claude's #1404 / #1188 remains active. Its local worktree was at `f98c6277` with
 change when checked. The shared agentic scenario, tier-authority and platform-identity files remain under that
 writer's active ownership. Begin the isolated Result/Writer/CLI work; reconcile the shared files before editing them.
 Heavy host gates remain serialized through existing ownership and runner controls.
+
+## Owner-approved launcher-history limit — 2026-09-30
+
+The owner approved the recommendation in this continuation: "per your recommendation is fine". The presented choice
+was to retain the selected suite, actual executed test/child commands, source/configuration hashes and results,
+while explicitly stating that original outer Task launcher arguments were not captured. The alternative was adding
+machinery to obtain complete launcher history, including Task flags such as verbose or parallel execution.
+
+Task aggregates may therefore identify a resolved Task target rather than claim reconstructed arguments are an
+observed original command line. The original launcher history must be explicitly unavailable when unobserved.
+This bounded exception does not make missing child execution, source, configuration or application identity complete,
+and it changes no required behavioral check or failure rule. The active delta and author guide carry the limit.
+The original accepted design and its digest remain an immutable historical checkpoint; this addendum supersedes only
+its demand for exact original outer Task argv.

@@ -11,9 +11,6 @@ tasks:
         task e2e:check-ports COMPOSE_FILES=docker/compose/e2e-slow-consumer.yml || exit 1
         . scripts/e2e-required-report.sh
         e2e_report_begin slow-consumer slow-consumer e2e:slow-consumer || exit 1
-        e2e_report_add_file compose docker/compose/e2e-slow-consumer.yml || exit 1
-        e2e_report_add_file config configs/protocol-flow.json || exit 1
-        e2e_report_add_file fixture testdata/semantic/sensors.jsonl || exit 1
         command_exit=0
         finish() {
           trap - EXIT
@@ -22,9 +19,14 @@ tasks:
           e2e_report_finalize "$command_exit" "$cleanup_exit"
           report_exit=$?
           cat "$E2E_REPORT_LOG"
-          if [ "$command_exit" -ne 0 ] || [ "$cleanup_exit" -ne 0 ] || [ "$report_exit" -ne 0 ]; then exit 1; fi
+          if [ "$command_exit" -ne 0 ]; then exit "$command_exit"; fi
+          if [ "$cleanup_exit" -ne 0 ]; then exit "$cleanup_exit"; fi
+          if [ "$report_exit" -ne 0 ]; then exit "$report_exit"; fi
         }
         trap finish EXIT
+        e2e_report_add_file compose docker/compose/e2e-slow-consumer.yml || command_exit=$?
+        [ "$command_exit" -eq 0 ] && e2e_report_add_file config configs/protocol-flow.json || command_exit=1
+        [ "$command_exit" -eq 0 ] && e2e_report_add_file fixture internal/e2eslowconsumer/probe.go || command_exit=1
         run_body() {
           docker compose -f docker/compose/e2e-slow-consumer.yml up -d --wait --build || return $?
           e2e_report_capture_app production semstreams-e2e-slow-consumer-app || return $?
@@ -38,4 +40,7 @@ tasks:
           e2e_report_child slow-consumer "$child_output" "$child_exit" || return 1
           [ "$child_exit" -eq 0 ]
         }
-        run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?
+        if [ "$command_exit" -eq 0 ]; then
+          run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?
+        fi
+        finish
