@@ -1,0 +1,48 @@
+=== RUN   TestCleanupAdmissionCILintWiring
+--- PASS: TestCleanupAdmissionCILintWiring (0.00s)
+=== RUN   TestCleanupAdmissionUniformWiring
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/lint.yml/default
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/lint.yml/cleanup-roots
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/test.yml/default
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/test.yml/race
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/test.yml/live
+=== RUN   TestCleanupAdmissionUniformWiring/taskfiles/test.yml/integration
+=== RUN   TestCleanupAdmissionUniformWiring/Taskfile.yml/check
+=== RUN   TestCleanupAdmissionUniformWiring/Taskfile.yml/check:push
+--- PASS: TestCleanupAdmissionUniformWiring (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/lint.yml/default (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/lint.yml/cleanup-roots (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/test.yml/default (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/test.yml/race (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/test.yml/live (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/taskfiles/test.yml/integration (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/Taskfile.yml/check (0.00s)
+    --- PASS: TestCleanupAdmissionUniformWiring/Taskfile.yml/check:push (0.00s)
+=== RUN   TestEarlyCIValidationAdmission
+--- PASS: TestEarlyCIValidationAdmission (0.00s)
+=== RUN   TestEarlyCIValidationStatus
+=== RUN   TestEarlyCIValidationStatus/healthy
+=== RUN   TestEarlyCIValidationStatus/failed_prerequisite
+=== RUN   TestEarlyCIValidationStatus/cancelled_prerequisite
+=== RUN   TestEarlyCIValidationStatus/skipped_Test
+=== RUN   TestEarlyCIValidationStatus/missing_prerequisite
+=== RUN   TestEarlyCIValidationStatus/unknown_prerequisite
+=== RUN   TestEarlyCIValidationStatus/failed_independent_job
+--- PASS: TestEarlyCIValidationStatus (0.02s)
+    --- PASS: TestEarlyCIValidationStatus/healthy (0.00s)
+    --- PASS: TestEarlyCIValidationStatus/failed_prerequisite (0.00s)
+    --- PASS: TestEarlyCIValidationStatus/cancelled_prerequisite (0.00s)
+    --- PASS: TestEarlyCIValidationStatus/skipped_Test (0.00s)
+    --- PASS: TestEarlyCIValidationStatus/missing_prerequisite (0.00s)
+    --- PASS: TestEarlyCIValidationStatus/unknown_prerequisite (0.00s)
+    --- PASS: TestEarlyCIValidationStatus/failed_independent_job (0.00s)
+=== RUN   TestEarlyCheckPushValidationAdmission
+=== RUN   TestEarlyCheckPushValidationAdmission/invalid
+=== RUN   TestEarlyCheckPushValidationAdmission/valid
+--- PASS: TestEarlyCheckPushValidationAdmission (0.93s)
+    --- PASS: TestEarlyCheckPushValidationAdmission/invalid (0.24s)
+    --- PASS: TestEarlyCheckPushValidationAdmission/valid (0.69s)
+=== RUN   TestIntegrationRunner_TaskAndCIConverge
+--- PASS: TestIntegrationRunner_TaskAndCIConverge (0.00s)
+PASS
+ok  	github.com/c360studio/semstreams/test/testinfra	1.172s

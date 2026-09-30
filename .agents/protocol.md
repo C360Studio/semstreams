@@ -11,11 +11,22 @@ memory. Each question has one home, and each home is a `gh` or `task` query.
 | What is wanted, what kind, is it decided | GitHub issue + labels (`type:` / `area:` / `class:` / `status:` / `horizon:`) | `status:needs-decision` is the owner's docket; a ruling is posted as an issue comment and the label removed. `status:blocked` names its blocker in a comment. |
 | What gates the next tag | GitHub milestone named for the intended version | Membership is the gate: in or out; an unruled item is out. `horizon:pre-v1` means before v1.0.0, not before the next tag. |
 | An epic | A tracking issue labeled `type:epic` whose body carries a task list of `#n` children | GitHub renders the progress; there is no separate epic document. |
-| Who has claimed what | A **draft PR** opened at the start of the work, `Closes #n` in its body; the branch prefix names the agent (`claude/…`, `codex/…`) | No draft PR, no claim. Design-phase work claims the same way — the OpenSpec proposal is its first commit. Expect that first push to fail CI on the Lint job's last step, `Validate OpenSpec changes and specs (strict)`: a change with no delta is refused, and the red clears when the first delta lands — that is the one expected red on a claim push; any other red on that run is real. A stop-point goes in the PR description. |
+| Who has claimed what | A **draft PR** opened at the start of the work, `Closes #n` in its body; the branch prefix names the agent (`claude/…`, `codex/…`) | No draft PR, no claim. Design-phase work claims the same way — the OpenSpec proposal is its first commit. An empty, implementation-free claim commit may use `[skip ci]`; implementation publication must run CI normally. If a claim includes a delta-less OpenSpec change, `OpenSpec Validation` refuses it before Test admission. That expected claim-stage refusal never waives an implementation failure. A stop-point goes in the PR description. |
 | Target state and task truth | The OpenSpec change inside that PR; `task openspec:queue` reads its holds | The archive (`openspec archive <id>` + spec sync) is the landing PR's last commit, reviewed with the code; the ruleset-enforced merge is the CI-green proof. No task may assert a post-merge fact ("CI green", "merge-ready") — such a task strands the change. |
 | Why | An ADR, or the owner's ruling comment on the issue | — |
 
-Rituals:
+## Routine test-pattern adoption
+
+For test-only adoption of an established, accepted recipe, use one recipe reference, a compact exceptions list,
+implementation, focused checks and one independent implementation review. The exceptions list accounts for the
+changed fixtures' owners and deliberate lifecycle probes; it is not another repository inventory.
+Do not require separate inventory/options/design-review rounds or a spec delta merely to restate an unchanged
+contract. New contract behavior still needs a compact OpenSpec delta. Different shutdown semantics, uncertain
+ownership or production changes leave this routine path and receive the applicable design review.
+Required verification and merge gates still apply. Reviewers may request evidence for a concrete exception or defect,
+not repeat justification of the accepted recipe.
+
+## Work lifecycle
 
 - **Start:** `gh issue list --milestone <m> --state open` · `gh pr list` (drafts are claims — skip them) ·
   `task openspec:queue` · `gh run list --branch main --limit 3` · `gh issue list --label status:needs-decision`.

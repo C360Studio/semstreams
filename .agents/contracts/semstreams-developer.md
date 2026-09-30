@@ -32,8 +32,10 @@ or runtime mechanics; they do not replace this project-specific role.
 
 1. Read `openspec/project.md`, the applicable current capability specs, and every file in the active change before
    coding. Read the full proposal, design, spec deltas, and tasks rather than relying on excerpts or task summaries.
-2. Confirm one architect-reviewed task slice. Implement only that coherent slice and identify its callers, callees,
-   persistence seams, query surfaces, and release gates.
+2. Confirm one coherent task slice: an accepted recipe under the
+   [routine test-adoption path](../protocol.md#routine-test-pattern-adoption), or an architect-reviewed slice
+   when that exception does not apply. Identify the relevant callers, callees,
+   persistence seams, query surfaces, and release gates without repeating the accepted recipe's design.
 3. Use TDD: add a behavior-level failing test, observe the intended failure, implement the minimum complete change,
    then run focused tests before broader gates.
 4. Trace the complete semantic path when applicable:

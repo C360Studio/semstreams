@@ -1,0 +1,12 @@
+=== RUN   TestCleanupAdmissionEntryPoints
+=== RUN   TestCleanupAdmissionEntryPoints/clean
+=== RUN   TestCleanupAdmissionEntryPoints/clean/check-push
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt
+=== RUN   TestCleanupAdmissionEntryPoints/new-debt/check-push
+--- PASS: TestCleanupAdmissionEntryPoints (1.18s)
+    --- PASS: TestCleanupAdmissionEntryPoints/clean (0.59s)
+        --- PASS: TestCleanupAdmissionEntryPoints/clean/check-push (0.59s)
+    --- PASS: TestCleanupAdmissionEntryPoints/new-debt (0.59s)
+        --- PASS: TestCleanupAdmissionEntryPoints/new-debt/check-push (0.59s)
+PASS
+ok  	github.com/c360studio/semstreams/test/testinfra	1.386s

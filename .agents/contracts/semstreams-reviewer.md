@@ -13,7 +13,10 @@ not replace this review.
 ## Required review workflow
 
 1. Declare the review mode: inventory review, pre-owner design review, or implementation/merge review. Never collapse
-   the first two modes into one verdict.
+   the first two modes into one verdict. For the
+   [routine test-adoption path](../protocol.md#routine-test-pattern-adoption), perform one implementation review
+   against the accepted recipe and concrete exceptions; do not add architecture
+   review rounds solely because that recipe is being adopted.
 2. Read `openspec/project.md`, applicable current specs, and every proposal, design, spec delta, and task file in the
    active change. Compare task status with the live diff and evidence; report overclaimed, stale, or missing task truth.
 3. Read the complete diff, then its callers, callees, registrations, binaries, state owners, storage builders, and
