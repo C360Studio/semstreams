@@ -28,8 +28,8 @@ Branch: `codex/gh1222-required-e2e-proof`. Worktree:
 `/Users/coby/.codex/worktrees/e2e-required-proof/semstreams`.
 The exact 78-path paused implementation is committed locally at
 `4b8204ba0da9a579bfb1ca869b646c36d3110b98`, on the original base through `3dc4ccbe`.
-Draft PR #1406 remains at remote claim head `12ae633381b8b8b26c333efe5f5c8691cfa47fb4`.
-The implementation is still unpushed because its full push gates have not run. Local access is required.
+Draft PR #1406 was opened at claim head `12ae633381b8b8b26c333efe5f5c8691cfa47fb4`.
+Implementation publication requires the full push gate; the PR records the current published checkpoint and gate result.
 A separate verified recovery archive preserves all 150 captured files, including ignored evidence logs, and a Git
 bundle preserves the local commits; their manifest is retained in this chat's `recovery-1222` artifact directory.
 
@@ -105,7 +105,10 @@ The five-family composite ran at clean checkpoint `6b495b77` with unchanged sour
 controlled tool call completed with status `failed`; streaming proof was consequently missing. This remains a failed
 composite. A separate corrected agentic Task now passes: the mock queries the exact model-endpoint entity already
 verified in the active deployment, replacing its unseeded fixed sensor ID. The seven-file fixture correction has
-independent approval; strict tool success remains required. The full push gate has not run.
+independent approval; strict tool success remains required. The separate slow-consumer Task also passed at
+`75aa4509` in 20.751 seconds, with complete required reports and unchanged source hashes. The initial full push
+gate stopped on an unresolved fixture cleanup method value; the one-line typed-call correction passes the cleanup
+guard. Full push-gate attempts and outcomes are retained separately and summarized in the PR.
 
 Before the two-key provenance allowlist extension, Result/Writer passed four native fuzz targets with bounded three-second exploration, and the
 Result observation target also passed exploration. Strict OpenSpec validation passed all 60 items; all 485 spec
@@ -122,8 +125,7 @@ agentic scenario, tier-authority and platform-identity behavior before editing t
 Claude's #1117 / PR #1425 retains semantic CI ownership; this claim retains #1222 required-check evidence.
 No transfer of that adjacent work is implied.
 
-Remaining work includes authorized CI retention, separate slow-consumer proof, full push gates, final verification
-reconciliation
+Remaining work includes authorized CI retention, final full-gate/verification reconciliation
 and archive/spec synchronization.
 The historical #1397 issue is closed. Required-job recurrence #1421 remains open and has no waiver for this PR. Earlier GREEN and claim-head hosted checks do not prove
 this dirty implementation. No implementation-complete or merge-ready claim is made.

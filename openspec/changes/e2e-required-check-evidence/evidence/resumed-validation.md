@@ -73,8 +73,22 @@ The reviewer accepted the retained four-family application proof plus this corre
 per-family assembled evidence. The scoped fixture/reporting corrections do not require repeating the unchanged
 semantic application path. This is not an all-green composite claim.
 
+## Slow-consumer and push-gate checkpoint
+
+At clean `75aa4509`, `task e2e:slow-consumer` passed in 20.751 seconds with unchanged source hashes. Task run
+`run-1790769316666097000-15933-1` and child `run-1790769335409984000-16037-1` both report complete required
+proof, all scenarios passed and zero errors/warnings. The Task removed its stack. Artifacts and the exact source
+receipt are retained in `continuation/e2e-slow-consumer/`.
+
+The first `task check:push` attempt at that source exited 201 after 25.007 seconds at the cleanup guard:
+`evidence_stage_test.go` registered an unresolved `responder.Close` method value. A one-line explicit typed-call
+closure preserves the same cleanup operation and order, and the existing cleanup guard passes. This is a fixture
+representation correction, not a guard exemption or an observed runtime leak. The failed gate log remains in
+`continuation/check-push/`; later attempts use separate directories so the original failure is not overwritten.
+Strict OpenSpec validation passed 60 items, and all 488 current property citations resolve.
+
 ## Remaining proof
 
-The separate adopted slow-consumer Task and full push gate have not run on this continuation. CI retention is still awaiting explicit upload
+The PR checkpoint records the final full push-gate result for its published source. CI retention is still awaiting explicit upload
 authorization after automatic approval rejected the prepared workflow edit. Earlier bounded Writer mutation
 deferrals remain unchanged. No merge-readiness, full implementation completion or issue closure is claimed.

@@ -119,7 +119,7 @@ func newAgenticToolStageFixture(t *testing.T, loopID string, facts []agentic.Tra
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(responder.Close)
+	t.Cleanup(func() { responder.Close() })
 	page := agentic.TrajectoryPage{
 		SchemaVersion: agentic.TrajectorySchemaV1, LoopID: loopID, Coverage: "observed",
 		Facts: facts, ObservedTotals: agentic.TrajectoryObservedTotals{Facts: uint64(len(facts))},
