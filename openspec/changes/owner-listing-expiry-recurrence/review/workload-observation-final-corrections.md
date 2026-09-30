@@ -17,3 +17,14 @@ Canonical reviewer: `semstreams-reviewer` (`gh1421_inventory_review`). Source an
 
 The architect accepted this narrow metadata treatment; scope-reconciliation.md records the baseline-file exception
 explicitly. Non-lifecycle classification does not prove bounded logging or native watcher completion.
+
+## Context-first mechanical correction
+
+The canonical reviewer approved the signature and both caller argument reorderings after revive caught the style error.
+Final observer SHA is `085c691b168ae5061fd30b4758809019b5609f5fa1c28d6bfc9aa17013ae82a3`; harness SHA is
+`c3fc655f1750b5ceb5105d1f1cede1f878f88e8cb27fde9cbbb2993771a18c33`. All six ordinary observer race groups passed
+(package 1.516s), and pinned package revive passed. Resolution refresh SHA
+`ca54c2da71445ed9d8c8747f9463e70589be7b67fb4552b35dd1501bba00ce8a` changes only the three affected declaration
+fingerprints. The site identities, classifications and other dependencies remain unchanged. The historical native and
+publication-mutation evidence remains applicable; no additional diagnostic run was made. The canonical guard still
+verifies the refreshed declaration evidence in required preflight.

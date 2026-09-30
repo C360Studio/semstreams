@@ -5484,17 +5484,17 @@
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadAttemptScope",
-          "fingerprint": "bded3309c8e52541a5d4de40566c6e238a280bb5f9a09da6ae8d51c89613f083"
+          "fingerprint": "101c77be083b5193efb66280565917f8354cadc9e48a2b533377c65306db2690"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "TestOwnerLoadObserverFailNowRetainsPriorAndFailed",
-          "fingerprint": "556444df1433d7c47e21344c3f108fbdbaa013df541d20e2e006943cf187f6b3"
+          "fingerprint": "63228f6ddaecaaa4623e37f9da1d02aa8151a2df83045ea7812fb3720ab1ce64"
         },
         {
           "path": "processor/graph-index/owner_filter_load_integration_test.go",
           "declaration": "measureOwnerLoadFilter",
-          "fingerprint": "834c9ea84d0efdccfe80bc34585f2d4820281aafb656ac9089c6fa8eb36a0912"
+          "fingerprint": "100f67234126c187e64c3931c7360f813f4da98e67f4e4cea9156a7cc7601d83"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
@@ -5536,12 +5536,12 @@
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "TestOwnerLoadObserverFailNowRetainsPriorAndFailed",
-          "fingerprint": "556444df1433d7c47e21344c3f108fbdbaa013df541d20e2e006943cf187f6b3"
+          "fingerprint": "63228f6ddaecaaa4623e37f9da1d02aa8151a2df83045ea7812fb3720ab1ce64"
         },
         {
           "path": "processor/graph-index/owner_filter_load_integration_test.go",
           "declaration": "measureOwnerLoadFilter",
-          "fingerprint": "834c9ea84d0efdccfe80bc34585f2d4820281aafb656ac9089c6fa8eb36a0912"
+          "fingerprint": "100f67234126c187e64c3931c7360f813f4da98e67f4e4cea9156a7cc7601d83"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",

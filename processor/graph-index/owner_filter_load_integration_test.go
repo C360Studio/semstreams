@@ -498,7 +498,7 @@ func measureOwnerLoadFilter(
 	}, func() {
 		for repetition := 0; repetition < profile.repetitions; repetition++ {
 			started := time.Now()
-			observationErr := ownerLoadAttemptScope(observer, ctx, repetition, filter, started,
+			observationErr := ownerLoadAttemptScope(ctx, observer, repetition, filter, started,
 				func(err error) {
 					t.Errorf("phase=predicate-forward-observation repetition=%d cleanup=%v", repetition, err)
 				},

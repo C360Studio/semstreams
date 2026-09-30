@@ -1,0 +1,9 @@
+{
+  "command_unit": "go test -race -count=1 -run '^TestOwnerLoadObserver' -v ./processor/graph-index",
+  "command_lint": "go tool revive -config revive.toml -formatter friendly ./processor/graph-index/...",
+  "unit_exit": 0,
+  "lint_exit": 0,
+  "archive_sha256": "370da07b07f70ea0f8525059bb57c4513c4d48095c84ba26c7b2feb9bd2efde7",
+  "source_observer": "085c691b168ae5061fd30b4758809019b5609f5fa1c28d6bfc9aa17013ae82a3",
+  "source_harness": "c3fc655f1750b5ceb5105d1f1cede1f878f88e8cb27fde9cbbb2993771a18c33"
+}

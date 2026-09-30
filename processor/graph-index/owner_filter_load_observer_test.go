@@ -207,7 +207,7 @@ func (o *ownerLoadObserver) snapshot() ([]ownerLoadAttempt, error) {
 
 // The per-attempt finalizer is installed before production native construction.
 // It runs once on ordinary return and on require.FailNow/runtime.Goexit.
-func ownerLoadAttemptScope(o *ownerLoadObserver, parent context.Context, repetition int, filter string,
+func ownerLoadAttemptScope(parent context.Context, o *ownerLoadObserver, repetition int, filter string,
 	started time.Time, reportCleanup func(error), body func()) (retErr error) {
 	if o == nil {
 		body()
@@ -530,7 +530,7 @@ func TestOwnerLoadObserverFailNowRetainsPriorAndFailed(t *testing.T) {
 					defer cancel()
 				}
 				started := time.Now()
-				cleanupErr := ownerLoadAttemptScope(observer, callCtx, repetition, "diag.>", started,
+				cleanupErr := ownerLoadAttemptScope(callCtx, observer, repetition, "diag.>", started,
 					func(err error) { collector.Errorf("cleanup: %v", err) }, func() {
 						keys, err := store.KeysByFilter(callCtx, "diag.>")
 						observer.operationReturned(time.Now(), keys, err)
