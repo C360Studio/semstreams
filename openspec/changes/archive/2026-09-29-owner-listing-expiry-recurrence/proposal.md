@@ -8,7 +8,7 @@ concurrent phase. The caller context was live, the configured framework KV defau
 returned a typed deadline error after 10.001209581 seconds. The 39-entry graph-query cleanup batch remains preserved
 in #1433 / #1434 while this observed required-job failure takes priority under #1417.
 
-## Evidence and scope
+## What Changes
 
 This change delivers persistent, bounded failure diagnostics for the actual repeated predicate-forward owner-load
 workload. Historical cause attribution and production repair remain open on #1421; completing this diagnostic change
