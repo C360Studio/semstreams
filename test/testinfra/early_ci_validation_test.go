@@ -18,7 +18,7 @@ type earlyCIJob struct {
 	Needs           []string `yaml:"needs"`
 	If              string   `yaml:"if"`
 	ContinueOnError any      `yaml:"continue-on-error"`
-	Steps []struct {
+	Steps           []struct {
 		Uses            string            `yaml:"uses"`
 		Run             string            `yaml:"run"`
 		With            map[string]string `yaml:"with"`
