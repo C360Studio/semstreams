@@ -22,12 +22,40 @@ tasks:
         vars: { COMPOSE_FILES: "docker/compose/agentic.yml" }
       - ":build:e2e"
     cmds:
-      - echo "[AGENTIC] Starting agentic tier E2E test..."
-      - defer: docker compose -f docker/compose/agentic.yml down -v --timeout 15
-      - docker compose -f docker/compose/agentic.yml up -d --wait --build
-      - echo "[OK] Services are healthy (NATS + mock-llm + semstreams)"
-      - echo "[AGENTIC] Running agentic tier scenario..."
-      - cd cmd/e2e && ./e2e --scenario agentic --output-dir ./test/e2e/results --metrics-url http://localhost:39090
+      - |
+        . scripts/e2e-required-report.sh
+        e2e_report_begin agentic agentic e2e:agentic || exit 1
+        e2e_report_add_file compose docker/compose/agentic.yml || exit 1
+        e2e_report_add_file config configs/agentic.json || exit 1
+        for fixture in testdata/semantic/*.jsonl; do
+          e2e_report_add_file fixture "$fixture" || exit 1
+        done
+        command_exit=0
+        finish() {
+          trap - EXIT
+          cleanup_exit=0
+          docker compose -f docker/compose/agentic.yml down -v --timeout 15 >> "$E2E_REPORT_LOG" 2>&1 || cleanup_exit=$?
+          e2e_report_finalize "$command_exit" "$cleanup_exit"
+          report_exit=$?
+          cat "$E2E_REPORT_LOG"
+          if [ "$command_exit" -ne 0 ] || [ "$cleanup_exit" -ne 0 ] || [ "$report_exit" -ne 0 ]; then exit 1; fi
+        }
+        trap finish EXIT
+        run_body() {
+          echo "[AGENTIC] Starting agentic tier E2E test..."
+          docker compose -f docker/compose/agentic.yml up -d --wait --build || return $?
+          echo "[OK] Services are healthy (NATS + mock-llm + semstreams)"
+          e2e_report_capture_app production semstreams-agentic-app || return $?
+          child_input=$(e2e_report_child_input agentic agentic) || return $?
+          child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-agentic.stdout"
+          child_exit=0
+          "$E2E_REPORT_BIN" --scenario agentic --output-dir "$E2E_REPORT_DIR" \
+            --metrics-url http://localhost:39090 --evidence-input "$child_input" > "$child_output" 2>&1 || child_exit=$?
+          cat "$child_output"
+          e2e_report_child agentic "$child_output" "$child_exit" || return 1
+          [ "$child_exit" -eq 0 ]
+        }
+        run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?
 
   up:
     desc: Start agentic tier services without running tests

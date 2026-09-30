@@ -1,0 +1,11 @@
+# #1222 manifest persistence seam
+
+Accepted design SHA a31a5c690da763b124a7d1e1727836e57a270f943b5b61576216d7f386b9b48c requires a retained constituent manifest referenced by Environment.artifact_manifest_path/sha256. Actual Task/CLI producer and parent verification establish retained bytes/digests; historical LoadRun does not reopen original machine paths. The manifest identifies selected files and distinct core production/fixture app phases, never guessed runner-as-app identity or secrets.
+
+Existing results.Writer owns run/member/child filesystem persistence. Newly reconciled ChildArtifact is { RunID, Path, SHA256 }, VerifyChild returns it; WriteMember/LoadMember handle Results. The report developer identified that none of these writes the required manifest. report-finalize can prepare a private canonical typed manifest from Task-supplied path/image observations and recompute file digests; it should not add a second filesystem owner.
+
+Developer proposal: Writer.WriteArtifact(run *TestRun, name string, data []byte) (path, sha256 string, error), fixed reporter-owned name, atomic no-clobber. Alternative specific WriteManifest. Root preference: smallest specific manifest persistence operation, named correlated return, no general artifact service. Do not implement this unresolved export yet.
+
+Bounded question: using existing Writer helpers and accepted lifetime, specify minimal manifest persistence signature, exact validation ownership and snapshot/terminal behavior. Determine whether a narrower extension to existing WriteRun avoids a sibling responsibility. Account for CLI/Task log files produced by shell capture without claiming Writer authenticates authorship. Caller must not invent output path or run ID. No changes to accepted proof scope, Task execution authority or required provenance rules. Need present consumers and independent review, not new architecture inventory of the entire E2E tree.
+
+Worktree /Users/coby/.codex/worktrees/e2e-required-proof/semstreams at fe6e2cc03e16f5db47e293f55939548572f204cc with active edits. Writer Task API is in progress by result_fixes; report.go/report_test.go by task_reporting. No edits or tests by architect. Read accepted design, current handoff and task-report-api-clarification first. Output advice in /private/tmp/semstreams-1222-manifest-shape-advice.md.

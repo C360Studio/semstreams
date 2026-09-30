@@ -6,9 +6,36 @@ tasks:
     silent: false
     deps: [":build:e2e"]
     cmds:
-      - defer: docker compose -f docker/compose/e2e-slow-consumer.yml down -v --timeout 15
-      - docker compose -f docker/compose/e2e-slow-consumer.yml down -v --timeout 15
-      - docker compose -f docker/compose/e2e-slow-consumer.yml up -d --wait --build
-      - >-
-        cd cmd/e2e && ./e2e --scenario core-slow-consumer
-        --base-url http://localhost:38090 --metrics-url http://localhost:39100
+      - |
+        docker compose -f docker/compose/e2e-slow-consumer.yml down -v --timeout 15 || exit 1
+        task e2e:check-ports COMPOSE_FILES=docker/compose/e2e-slow-consumer.yml || exit 1
+        . scripts/e2e-required-report.sh
+        e2e_report_begin slow-consumer slow-consumer e2e:slow-consumer || exit 1
+        e2e_report_add_file compose docker/compose/e2e-slow-consumer.yml || exit 1
+        e2e_report_add_file config configs/protocol-flow.json || exit 1
+        e2e_report_add_file fixture testdata/semantic/sensors.jsonl || exit 1
+        command_exit=0
+        finish() {
+          trap - EXIT
+          cleanup_exit=0
+          docker compose -f docker/compose/e2e-slow-consumer.yml down -v --timeout 15 >> "$E2E_REPORT_LOG" 2>&1 || cleanup_exit=$?
+          e2e_report_finalize "$command_exit" "$cleanup_exit"
+          report_exit=$?
+          cat "$E2E_REPORT_LOG"
+          if [ "$command_exit" -ne 0 ] || [ "$cleanup_exit" -ne 0 ] || [ "$report_exit" -ne 0 ]; then exit 1; fi
+        }
+        trap finish EXIT
+        run_body() {
+          docker compose -f docker/compose/e2e-slow-consumer.yml up -d --wait --build || return $?
+          e2e_report_capture_app production semstreams-e2e-slow-consumer-app || return $?
+          child_input=$(e2e_report_child_input slow-consumer core-slow-consumer) || return $?
+          child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-slow-consumer.stdout"
+          child_exit=0
+          (cd cmd/e2e && ./e2e --scenario core-slow-consumer --base-url http://localhost:38090 \
+            --metrics-url http://localhost:39100 --output-dir "$E2E_REPORT_DIR" \
+            --evidence-input "$child_input") > "$child_output" 2>&1 || child_exit=$?
+          cat "$child_output"
+          e2e_report_child slow-consumer "$child_output" "$child_exit" || return 1
+          [ "$child_exit" -eq 0 ]
+        }
+        run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?

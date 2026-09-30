@@ -40,6 +40,9 @@ var (
 func main() {
 	// Parse command-line flags
 	flags := parseCommandLineFlags()
+	if handled, exitCode := handleTaskReportCommand(flags); handled {
+		os.Exit(exitCode)
+	}
 
 	// Handle version and list commands
 	if handleVersionCommand(flags.showVersion) {
@@ -90,12 +93,32 @@ func main() {
 
 // cliFlags holds parsed command-line flags
 type cliFlags struct {
-	scenarioName  string
-	verbose       bool
-	baseURL       string
-	udpEndpoint   string
-	showVersion   bool
-	listScenarios bool
+	scenarioName            string
+	reportInit              bool
+	reportRecord            bool
+	reportChild             bool
+	reportFinalize          bool
+	reportSelection         string
+	reportRunPath           string
+	reportInputPath         string
+	reportMemberID          string
+	reportChildPath         string
+	reportChildExit         int
+	reportLogPath           string
+	reportParentID          string
+	reportParentSlot        string
+	reportArgvJSON          string
+	reportManifestInputPath string
+	reportCommandExit       int
+	reportCleanupExit       int
+	evidenceInputPath       string
+	evidenceRunID           string // assigned by the runner, never parsed from caller flags
+	evidenceMemberID        string // assigned from the resolved selected member
+	verbose                 bool
+	baseURL                 string
+	udpEndpoint             string
+	showVersion             bool
+	listScenarios           bool
 	// Tiered test variant flags
 	variant      string // "structural", "statistical", or "semantic"
 	outputDir    string // Directory for results output
@@ -127,6 +150,24 @@ func parseCommandLineFlags() *cliFlags {
 
 	flag.StringVar(&flags.scenarioName, "scenario", "",
 		"Run specific scenario (core-health, core-dataflow, core-graph-roundtrip, lessons, or 'all')")
+	flag.BoolVar(&flags.reportInit, "report-init", false, "Initialize one selected Task evidence run after its prerequisites")
+	flag.BoolVar(&flags.reportRecord, "report-record", false, "Retain one typed Task check observation")
+	flag.BoolVar(&flags.reportChild, "report-child", false, "Verify and retain one selected child report")
+	flag.BoolVar(&flags.reportFinalize, "report-finalize", false, "Finalize one Task report after cleanup and log closure")
+	flag.StringVar(&flags.reportSelection, "report-selection", "", "Fixed adopted Task selection for report initialization")
+	flag.StringVar(&flags.reportRunPath, "report-run-path", "", "Absolute initialized Task aggregate path")
+	flag.StringVar(&flags.reportInputPath, "report-input", "", "Path to one typed check observation JSON")
+	flag.StringVar(&flags.reportMemberID, "report-member", "", "Selected parent member slot for child reporting")
+	flag.StringVar(&flags.reportChildPath, "report-child-path", "", "Observed child aggregate path, if any")
+	flag.IntVar(&flags.reportChildExit, "report-child-exit", -1, "Observed child process exit code")
+	flag.StringVar(&flags.reportLogPath, "report-log-path", "", "Available Task lifecycle log path")
+	flag.StringVar(&flags.reportParentID, "report-parent-id", "", "Observed parent Task run ID")
+	flag.StringVar(&flags.reportParentSlot, "report-parent-slot", "", "Exact declared parent member slot")
+	flag.StringVar(&flags.reportArgvJSON, "report-argv-json", "", "JSON array of observed owning Task argv")
+	flag.StringVar(&flags.reportManifestInputPath, "report-manifest-input", "", "Path to typed observed manifest constituents")
+	flag.IntVar(&flags.reportCommandExit, "report-command-exit", -1, "Observed Task command exit code")
+	flag.IntVar(&flags.reportCleanupExit, "report-cleanup-exit", -1, "Observed Task cleanup exit code")
+	flag.StringVar(&flags.evidenceInputPath, "evidence-input", "", "Typed observed application and constituent facts for required CLI evidence")
 	flag.BoolVar(&flags.verbose, "verbose", false, "Enable verbose logging")
 	flag.StringVar(&flags.baseURL, "base-url", config.DefaultEndpoints.HTTP, "SemStreams HTTP endpoint (edge)")
 	flag.StringVar(&flags.udpEndpoint, "udp-endpoint", config.DefaultEndpoints.UDP, "UDP test endpoint")
@@ -187,6 +228,16 @@ func parseCommandLineFlags() *cliFlags {
 	}
 
 	flag.Parse()
+	baseURLProvided := os.Getenv("SEMSTREAMS_BASE_URL") != ""
+	flag.Visit(func(selected *flag.Flag) {
+		if selected.Name == "base-url" {
+			baseURLProvided = true
+		}
+	})
+	if !baseURLProvided && (flags.scenarioName == "semantic" ||
+		flags.scenarioName == "tiered" && flags.variant == "semantic") {
+		flags.baseURL = "http://localhost:38180"
+	}
 	return flags
 }
 
@@ -210,6 +261,8 @@ func handleListCommand(listScenarios bool) bool {
 	}
 
 	fmt.Println("Available E2E Tasks (task e2e:<tier>):")
+	fmt.Println("")
+	fmt.Println("  CLI --scenario all (or default) runs core-health and core-dataflow only")
 	fmt.Println("")
 	fmt.Println("  e2e:core        - Platform boots, data flows (~10s)")
 	fmt.Println("  e2e:structural  - Rules + structural inference (~30s)")
@@ -310,28 +363,30 @@ func runScenarios(
 		"base_url", flags.baseURL,
 		"udp_endpoint", flags.udpEndpoint,
 	)
+	selection, err := resolveScenarioSelection(flags)
+	if err != nil {
+		logger.Error("Invalid scenario selection", "error", err)
+		return 1
+	}
+	run := results.CreateTestRun(results.TestRunConfig{Selection: selection.label}, nil, nil, 0)
+	selection.flags.evidenceRunID = run.ID
 
-	if flags.scenarioName == "" || flags.scenarioName == "all" {
-		logger.Info("Running all core scenarios...")
-		return runAllScenarios(ctx, logger, edgeClient, flags.udpEndpoint)
-	} else if flags.scenarioName == "semantic" {
-		logger.Info("Running all semantic scenarios...")
-		return runSemanticScenarios(ctx, logger, edgeClient, flags.udpEndpoint)
-	} else if flags.scenarioName == "rules" {
-		logger.Info("Running all rule processor scenarios...")
-		return runRulesScenarios(ctx, logger, edgeClient, flags.udpEndpoint)
+	if selection.flags.scenarioName == "all" {
+		logger.Info("Running core scenarios...")
+		return runAllScenarios(ctx, logger, edgeClient, selection, run)
 	}
 
 	// Run specific scenario
-	scenario := createScenario(edgeClient, flags)
+	selection.flags.evidenceMemberID = selection.members[0]
+	scenario := createScenario(edgeClient, &selection.flags)
 	if scenario == nil {
 		logger.Error("Unknown scenario", "name", flags.scenarioName)
 		fmt.Println("\nRun with --list to see all available scenarios")
 		return 1
 	}
 
-	logger.Info("Running scenario", "name", flags.scenarioName)
-	return runScenario(ctx, logger, scenario, flags)
+	logger.Info("Running scenario", "name", selection.flags.scenarioName)
+	return runSelectedScenarios(ctx, logger, selection, run, []scenarios.Scenario{scenario})
 }
 
 // createScenario creates a specific scenario by name.
@@ -341,9 +396,7 @@ func runScenarios(
 //   - statistical → BM25 embeddings, no external ML
 //   - semantic    → neural embeddings + LLM summaries
 //
-// Legacy variant names are supported for backwards compatibility:
-//   - core → statistical
-//   - ml   → semantic
+// The resolver rejects unknown variants before this constructor is called.
 func createScenario(
 	edgeClient *client.ObservabilityClient,
 	flags *cliFlags,
@@ -351,7 +404,9 @@ func createScenario(
 	switch flags.scenarioName {
 	// Core scenarios
 	case "core-health", "health":
-		return scenarios.NewCoreHealthScenario(edgeClient, nil)
+		cfg := scenarios.DefaultCoreHealthConfig()
+		cfg.EvidenceRunID, cfg.EvidenceMemberID = flags.evidenceRunID, flags.evidenceMemberID
+		return scenarios.NewCoreHealthScenario(edgeClient, cfg)
 	case "core-dataflow", "dataflow":
 		// Create WebSocket client for status stream verification
 		var wsClient *client.WebSocketClient
@@ -360,7 +415,9 @@ func createScenario(
 			wsURL = flags.baseURL // Default to same base URL
 		}
 		wsClient = client.NewWebSocketClient(wsURL)
-		return scenarios.NewCoreDataflowScenario(edgeClient, wsClient, flags.udpEndpoint, nil)
+		cfg := scenarios.DefaultCoreDataflowConfig()
+		cfg.EvidenceRunID, cfg.EvidenceMemberID = flags.evidenceRunID, flags.evidenceMemberID
+		return scenarios.NewCoreDataflowScenario(edgeClient, wsClient, flags.udpEndpoint, cfg)
 	case "core-graph-roundtrip", "graph-roundtrip":
 		// The core stack runs configs/protocol-flow.json. Its platform.org /
 		// platform.id are the STEM of the authority the graph accepts (ADR-102
@@ -388,8 +445,10 @@ func createScenario(
 			config.DefaultEndpoints.NATS, "assert", config.CoreAuthorityStem)
 	case "core-slow-consumer", "slow-consumer":
 		return scenarios.NewSlowConsumerAttributionScenario(scenarios.SlowConsumerAttributionConfig{
-			AppContainer: "semstreams-e2e-slow-consumer-app",
-			MetricsURL:   flags.metricsURL,
+			AppContainer:     "semstreams-e2e-slow-consumer-app",
+			MetricsURL:       flags.metricsURL,
+			EvidenceRunID:    flags.evidenceRunID,
+			EvidenceMemberID: flags.evidenceMemberID,
 		})
 	// Tiered scenario (unified: structural, statistical, semantic)
 	case "tiered", "structural", "statistical", "semantic":
@@ -398,6 +457,7 @@ func createScenario(
 		cfg.ServiceManagerURL = flags.baseURL
 		cfg.GatewayURL = flags.baseURL + "/api-gateway"
 		cfg.OutputDir = flags.outputDir
+		cfg.EvidenceRunID, cfg.EvidenceMemberID = flags.evidenceRunID, flags.evidenceMemberID
 		// Set variant from flag or scenario name
 		cfg.Variant = flags.variant
 		if cfg.Variant == "" {
@@ -406,9 +466,9 @@ func createScenario(
 				cfg.Variant = flags.scenarioName
 			}
 		}
-		// Set GraphQL URL based on variant — via ServiceManager shared mux
+		// GraphQL shares the selected ServiceManager mux, including caller endpoints.
+		cfg.GraphQLURL = strings.TrimRight(flags.baseURL, "/") + "/graph-gateway/graphql"
 		if cfg.Variant == "semantic" {
-			cfg.GraphQLURL = "http://localhost:38180/graph-gateway/graphql"
 			// Semantic tier has the slowest entity-load pipeline:
 			// neural embeddings, multiple ML services (semembed +
 			// 3 seminstruct instances), and the longest file-loader
@@ -419,8 +479,6 @@ func createScenario(
 			// entity load on idle hosts is still well under 5s, so
 			// this only matters on contended hosts.
 			cfg.ValidationTimeout = 120 * time.Second
-		} else {
-			cfg.GraphQLURL = "http://localhost:38080/graph-gateway/graphql"
 		}
 		return scenarios.NewTieredScenario(edgeClient, flags.udpEndpoint, cfg)
 
@@ -506,42 +564,7 @@ func newThroughputScenario(flags *cliFlags) scenarios.Scenario {
 	return throughput.NewScenario(flags.metricsURL, flags.udpEndpoint, cfg)
 }
 
-// runScenario executes a single scenario
-func runScenario(ctx context.Context, logger *slog.Logger, scenario scenarios.Scenario, flags *cliFlags) int {
-	logger.Info("Setting up scenario", "name", scenario.Name())
-
-	if err := scenario.Setup(ctx); err != nil {
-		logger.Error("Scenario setup failed", "error", err)
-		return 1
-	}
-
-	logger.Info("Executing scenario", "name", scenario.Name())
-	result, err := scenario.Execute(ctx)
-
-	// Always cleanup
-	logger.Info("Tearing down scenario", "name", scenario.Name())
-	if teardownErr := scenario.Teardown(ctx); teardownErr != nil {
-		logger.Warn("Teardown failed", "error", teardownErr)
-	}
-
-	if err != nil {
-		logger.Error("Scenario failed", "error", err, "assertions_run", assertionsRun(result))
-		return 1
-	}
-
-	if !result.Success {
-		logger.Error("Scenario completed with failure",
-			"error", result.Error,
-			"duration", result.Duration,
-			"assertions_run", result.AssertionsRun)
-		return 1
-	}
-
-	logger.Info("Scenario completed successfully",
-		"duration", result.Duration,
-		"metrics", result.Metrics,
-		"assertions_run", result.AssertionsRun)
-
+func saveScenarioAnalysis(logger *slog.Logger, result *scenarios.Result, flags *cliFlags, exitCode int) {
 	// Save structured results if output directory is specified and results exist
 	if flags.outputDir != "" && result.Structured != nil {
 		filepath, err := scenarios.SaveStructuredResults(result.Structured, flags.outputDir)
@@ -551,7 +574,10 @@ func runScenario(ctx context.Context, logger *slog.Logger, scenario scenarios.Sc
 			logger.Info("Saved structured results", "file", filepath)
 		}
 
-		// Also save raw Prometheus metrics dump
+		// Also save raw Prometheus metrics dump after a successful scenario.
+		if exitCode != 0 {
+			return
+		}
 		variant := flags.variant
 		if variant == "" {
 			variant = flags.scenarioName
@@ -563,15 +589,6 @@ func runScenario(ctx context.Context, logger *slog.Logger, scenario scenarios.Sc
 			logger.Info("Saved metrics dump", "file", metricsPath)
 		}
 	}
-
-	return 0
-}
-
-func assertionsRun(result *scenarios.Result) int {
-	if result == nil {
-		return 0
-	}
-	return result.AssertionsRun
 }
 
 // saveMetricsDump fetches raw Prometheus metrics and saves them to a file
@@ -602,129 +619,37 @@ func runAllScenarios(
 	ctx context.Context,
 	logger *slog.Logger,
 	obsClient *client.ObservabilityClient,
-	udpEndpoint string,
+	selection scenarioSelection,
+	run *results.TestRun,
 ) int {
+	flags := &selection.flags
+	if len(selection.members) != 2 {
+		logger.Error("Core selection must contain exactly health and dataflow")
+		return 1
+	}
 	// Create WebSocket client for dataflow scenario
-	// When running all scenarios, we use the default HTTP endpoint for WebSocket
-	wsClient := client.NewWebSocketClient(config.DefaultEndpoints.HTTP)
+	wsURL := flags.wsStatusURL
+	if wsURL == "" {
+		wsURL = flags.baseURL
+	}
+	wsClient := client.NewWebSocketClient(wsURL)
 
-	// `all` is every scenario the PRODUCTION binary serves. The graph
+	// CLI `all` is the two core scenarios in this selection. The graph
 	// round-trip probe is not among them: it births a synthetic type
 	// (test.fixture.v1) that only the e2e binary registers (ADR-103 — a
 	// production-target tier stamps only what the production binary
 	// registers), so `task e2e:core` runs it as its second phase against the
 	// e2e-target app (`--scenario core-graph-roundtrip`).
+	healthConfig := scenarios.DefaultCoreHealthConfig()
+	healthConfig.EvidenceRunID, healthConfig.EvidenceMemberID = run.ID, selection.members[0]
+	dataflowConfig := scenarios.DefaultCoreDataflowConfig()
+	dataflowConfig.EvidenceRunID, dataflowConfig.EvidenceMemberID = run.ID, selection.members[1]
 	tests := []scenarios.Scenario{
-		scenarios.NewCoreHealthScenario(obsClient, nil),
-		scenarios.NewCoreDataflowScenario(obsClient, wsClient, udpEndpoint, nil),
+		scenarios.NewCoreHealthScenario(obsClient, healthConfig),
+		scenarios.NewCoreDataflowScenario(obsClient, wsClient, flags.udpEndpoint, dataflowConfig),
 	}
 
-	passed := 0
-	failed := 0
-
-	for _, scenario := range tests {
-		logger.Info("Running scenario", "name", scenario.Name())
-		exitCode := runScenario(ctx, logger, scenario, &cliFlags{})
-
-		if exitCode == 0 {
-			passed++
-			logger.Info("Scenario PASSED", "name", scenario.Name())
-		} else {
-			failed++
-			logger.Error("Scenario FAILED", "name", scenario.Name())
-		}
-	}
-
-	logger.Info("Test suite complete",
-		"passed", passed,
-		"failed", failed,
-		"total", len(tests))
-
-	if failed > 0 {
-		return 1
-	}
-	return 0
-}
-
-// runSemanticScenarios executes all semantic scenarios
-func runSemanticScenarios(
-	ctx context.Context,
-	logger *slog.Logger,
-	obsClient *client.ObservabilityClient,
-	udpEndpoint string,
-) int {
-	// Run tiered scenario (covers all semantic functionality)
-	cfg := scenarios.DefaultTieredConfig()
-	tests := []scenarios.Scenario{
-		scenarios.NewTieredScenario(obsClient, udpEndpoint, cfg),
-	}
-
-	passed := 0
-	failed := 0
-
-	for _, scenario := range tests {
-		logger.Info("Running semantic scenario", "name", scenario.Name())
-		exitCode := runScenario(ctx, logger, scenario, &cliFlags{})
-
-		if exitCode == 0 {
-			passed++
-			logger.Info("Semantic scenario PASSED", "name", scenario.Name())
-		} else {
-			failed++
-			logger.Error("Semantic scenario FAILED", "name", scenario.Name())
-		}
-	}
-
-	logger.Info("Semantic test suite complete",
-		"passed", passed,
-		"failed", failed,
-		"total", len(tests))
-
-	if failed > 0 {
-		return 1
-	}
-	return 0
-}
-
-// runRulesScenarios executes structural tier (rules-only) scenario
-func runRulesScenarios(
-	ctx context.Context,
-	logger *slog.Logger,
-	obsClient *client.ObservabilityClient,
-	udpEndpoint string,
-) int {
-	// Run tiered scenario with structural variant
-	cfg := scenarios.DefaultTieredConfig()
-	cfg.Variant = "structural"
-	tests := []scenarios.Scenario{
-		scenarios.NewTieredScenario(obsClient, udpEndpoint, cfg),
-	}
-
-	passed := 0
-	failed := 0
-
-	for _, scenario := range tests {
-		logger.Info("Running structural tier scenario", "name", scenario.Name())
-		exitCode := runScenario(ctx, logger, scenario, &cliFlags{})
-
-		if exitCode == 0 {
-			passed++
-			logger.Info("Structural tier scenario PASSED", "name", scenario.Name())
-		} else {
-			failed++
-			logger.Error("Structural tier scenario FAILED", "name", scenario.Name())
-		}
-	}
-
-	logger.Info("Structural tier test suite complete",
-		"passed", passed,
-		"failed", failed,
-		"total", len(tests))
-
-	if failed > 0 {
-		return 1
-	}
-	return 0
+	return runSelectedScenarios(ctx, logger, selection, run, tests)
 }
 
 // handleCompareCommand generates comparison report from existing results

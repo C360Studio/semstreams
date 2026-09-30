@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/test/e2e/client"
@@ -22,10 +24,19 @@ type CoreDataflowScenario struct {
 	client      *client.ObservabilityClient
 	udpAddr     string
 	config      *CoreDataflowConfig
+	sentInputs  map[int]coreSentInput
+}
+
+type coreSentInput struct {
+	Value     int
+	Timestamp int64
 }
 
 // CoreDataflowConfig contains configuration for dataflow test
 type CoreDataflowConfig struct {
+	EvidenceRunID    string `json:"evidence_run_id,omitempty"`
+	EvidenceMemberID string `json:"evidence_member_id,omitempty"`
+
 	// Test data configuration
 	MessageCount    int           `json:"message_count"`
 	MessageInterval time.Duration `json:"message_interval"`
@@ -45,7 +56,7 @@ func DefaultCoreDataflowConfig() *CoreDataflowConfig {
 		MessageCount:     10,
 		MessageInterval:  100 * time.Millisecond,
 		ValidationDelay:  5 * time.Second,
-		MinProcessed:     5, // At least half should make it through filter
+		MinProcessed:     5, // Minimum distinct run-correlated pass-through records
 		WebSocketTimeout: 30 * time.Second,
 		TestFlowID:       "e2e-test-flow",
 	}
@@ -85,6 +96,15 @@ func (s *CoreDataflowScenario) Description() string {
 	return s.description
 }
 
+// CheckRequirements declares the three independent pass-through comparisons.
+func (s *CoreDataflowScenario) CheckRequirements() []CheckRequirement {
+	return []CheckRequirement{
+		{ID: "core-dataflow.pass-through-count", Required: true},
+		{ID: "core-dataflow.pass-through-content", Required: true},
+		{ID: "core-dataflow.pass-through-identity", Required: true},
+	}
+}
+
 // Setup prepares the scenario
 func (s *CoreDataflowScenario) Setup(_ context.Context) error {
 	// Verify UDP endpoint is reachable
@@ -107,6 +127,11 @@ func (s *CoreDataflowScenario) Execute(ctx context.Context) (*Result, error) {
 		Details:      make(map[string]any),
 		Errors:       []string{},
 		Warnings:     []string{},
+	}
+	if s.config.EvidenceRunID != "" || s.config.EvidenceMemberID != "" {
+		if err := result.DeclareChecks(s.config.EvidenceRunID, s.config.EvidenceMemberID, s.CheckRequirements()); err != nil {
+			return result, err
+		}
 	}
 
 	// Track execution stages
@@ -213,13 +238,16 @@ func (s *CoreDataflowScenario) executeSendData(ctx context.Context, result *Resu
 
 	// Send test messages
 	messagesSent := 0
+	s.sentInputs = make(map[int]coreSentInput, s.config.MessageCount)
 	for i := 0; i < s.config.MessageCount; i++ {
+		expected := coreSentInput{Value: i * 10, Timestamp: time.Now().Unix()}
 		// Create GenericJSON test message
 		testMsg := map[string]any{
 			"type":      "test",
-			"value":     i * 10, // Values: 0, 10, 20, 30... (some will pass filter > 50)
-			"timestamp": time.Now().Unix(),
+			"value":     expected.Value,
+			"timestamp": expected.Timestamp,
 			"sequence":  i,
+			"run_id":    s.config.EvidenceRunID,
 		}
 
 		msgBytes, err := json.Marshal(testMsg)
@@ -234,6 +262,7 @@ func (s *CoreDataflowScenario) executeSendData(ctx context.Context, result *Resu
 		}
 
 		messagesSent++
+		s.sentInputs[i] = expected
 
 		// Wait between messages
 		select {
@@ -261,117 +290,127 @@ func (s *CoreDataflowScenario) executeValidateProcessing(ctx context.Context, re
 	containerName := "semstreams-e2e-app"
 	filePattern := "/tmp/streamkit-test*.jsonl"
 
-	// Check file output - the file component writes to /tmp/streamkit-test*.jsonl
+	// The count is diagnostic until run-correlated content is inspected.
 	lineCount, err := s.client.CountFileOutputLines(ctx, containerName, filePattern)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("File check failed: %v", err))
-		return s.executeValidateComponentsOnly(ctx, result)
+		s.failPassThroughChecks(result, fmt.Sprintf("file output count failed: %v", err))
+		return fmt.Errorf("file output count failed: %w", err)
 	}
-
 	result.Metrics["file_lines_written"] = lineCount
-
-	// Validate minimum messages made it through the pipeline
-	if lineCount < s.config.MinProcessed {
-		result.Errors = append(result.Errors,
-			fmt.Sprintf("Only %d lines in file output, expected at least %d", lineCount, s.config.MinProcessed))
-		return fmt.Errorf("insufficient output: %d lines < %d minimum", lineCount, s.config.MinProcessed)
+	// Read the complete output of this fresh E2E container. A fixed head limit
+	// could hide the current run behind output from earlier invocations.
+	lines, err := s.client.GetFileOutputLines(ctx, containerName, filePattern, 0)
+	if err != nil || len(lines) == 0 || (lineCount == 0 && len(lines) > 0) {
+		reason := fmt.Sprintf("file output retrieval unavailable: count=%d lines=%d error=%v", lineCount, len(lines), err)
+		s.failPassThroughChecks(result, reason)
+		return fmt.Errorf("%s", reason)
 	}
-
-	// Content validation: verify JSON structure and filter behavior
-	contentIssues := s.validateOutputContent(ctx, result, containerName, filePattern)
-	if len(contentIssues) > 0 {
-		for _, issue := range contentIssues {
-			result.Warnings = append(result.Warnings, issue)
-		}
+	validated := validateCorePassThrough(lines, s.config.EvidenceRunID, s.sentInputs)
+	result.Metrics["run_output_selected"] = validated.Selected
+	result.Metrics["run_output_distinct_valid"] = validated.Distinct
+	if validated.Selected == 0 {
+		validated.ContentIssues = append(validated.ContentIssues, "no output selected for this run")
+		validated.IdentityIssues = append(validated.IdentityIssues, "no output selected for this run")
 	}
-
-	result.Details["file_validation"] = fmt.Sprintf(
-		"Verified %d lines written to file output (minimum: %d)",
-		lineCount, s.config.MinProcessed)
-
+	countReason := ""
+	if validated.Distinct < s.config.MinProcessed {
+		countReason = fmt.Sprintf("%d distinct valid sent sequences below minimum %d", validated.Distinct, s.config.MinProcessed)
+	}
+	evidence := map[string]string{
+		"run_id": s.config.EvidenceRunID, "selected": strconv.Itoa(validated.Selected),
+		"distinct_valid": strconv.Itoa(validated.Distinct), "minimum": strconv.Itoa(s.config.MinProcessed),
+		"successfully_sent": strconv.Itoa(len(s.sentInputs)),
+	}
+	s.recordPassThroughCheck(result, "core-dataflow.pass-through-count", countReason, evidence)
+	s.recordPassThroughCheck(result, "core-dataflow.pass-through-content", strings.Join(validated.ContentIssues, "; "), evidence)
+	s.recordPassThroughCheck(result, "core-dataflow.pass-through-identity", strings.Join(validated.IdentityIssues, "; "), evidence)
+	if countReason != "" || len(validated.ContentIssues) > 0 || len(validated.IdentityIssues) > 0 {
+		return fmt.Errorf("pass-through output invalid: count=%q content=%v identity=%v", countReason, validated.ContentIssues, validated.IdentityIssues)
+	}
+	result.Details["file_validation"] = fmt.Sprintf("Verified %d distinct correct records for run %s (minimum: %d)",
+		validated.Distinct, s.config.EvidenceRunID, s.config.MinProcessed)
 	return nil
 }
 
-// validateOutputContent validates the content of file output lines
-func (s *CoreDataflowScenario) validateOutputContent(
-	ctx context.Context,
-	result *Result,
-	containerName, filePattern string,
-) []string {
-	var issues []string
+type coreOutputValidation struct {
+	Selected       int
+	Distinct       int
+	ContentIssues  []string
+	IdentityIssues []string
+}
 
-	// Get actual lines for content validation (limit to 20 for performance)
-	lines, err := s.client.GetFileOutputLines(ctx, containerName, filePattern, 20)
-	if err != nil || len(lines) == 0 {
-		issues = append(issues, "Could not retrieve file output lines for content validation")
-		return issues
+// validateCorePassThrough checks the actual BaseMessage payload written by the
+// file component. Its oracle is the successfully sent input set, not a filter
+// threshold or an aggregate count from unrelated runs.
+func validateCorePassThrough(lines []string, runID string, sent map[int]coreSentInput) coreOutputValidation {
+	var outcome coreOutputValidation
+	if runID == "" {
+		outcome.IdentityIssues = append(outcome.IdentityIssues, "run identity unavailable")
+		return outcome
 	}
-
-	validJSON := 0
-	invalidJSON := 0
-	hasValueField := 0
-	valuesAboveFilter := 0 // Values that passed the filter (> 50)
-
+	seen := make(map[int]bool, len(sent))
 	for _, line := range lines {
-		if line == "" {
+		if !strings.Contains(line, runID) {
 			continue
 		}
-
-		var msg map[string]any
-		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			invalidJSON++
+		outcome.Selected++
+		var wire struct {
+			Payload struct {
+				Data struct {
+					RunID     *string `json:"run_id"`
+					Sequence  *int    `json:"sequence"`
+					Value     *int    `json:"value"`
+					Timestamp *int64  `json:"timestamp"`
+					Type      *string `json:"type"`
+				} `json:"data"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(line), &wire); err != nil {
+			outcome.ContentIssues = append(outcome.ContentIssues, fmt.Sprintf("selected output is malformed JSON: %v", err))
+			outcome.IdentityIssues = append(outcome.IdentityIssues, "selected output identity could not be compared: malformed JSON")
 			continue
 		}
-		validJSON++
-
-		// Check for expected fields
-		if val, ok := msg["value"]; ok {
-			hasValueField++
-			// Verify filter behavior: values should be > 50 if filter is active
-			if numVal, ok := val.(float64); ok && numVal > 50 {
-				valuesAboveFilter++
-			}
+		data := wire.Payload.Data
+		if data.RunID == nil || *data.RunID != runID || data.Sequence == nil {
+			outcome.IdentityIssues = append(outcome.IdentityIssues, "selected output has foreign or missing run/sequence identity")
+			outcome.ContentIssues = append(outcome.ContentIssues, "selected output content could not be compared: run/sequence identity unavailable")
+			continue
+		}
+		expected, ok := sent[*data.Sequence]
+		if !ok {
+			outcome.IdentityIssues = append(outcome.IdentityIssues, fmt.Sprintf("sequence %d was not successfully sent", *data.Sequence))
+			outcome.ContentIssues = append(outcome.ContentIssues, fmt.Sprintf("sequence %d content could not be compared: no sent input", *data.Sequence))
+			continue
+		}
+		if data.Value == nil || *data.Value != expected.Value || data.Timestamp == nil || *data.Timestamp != expected.Timestamp || data.Type == nil || *data.Type != "test" {
+			outcome.ContentIssues = append(outcome.ContentIssues, fmt.Sprintf("sequence %d differs from sent type/value/timestamp", *data.Sequence))
+			continue
+		}
+		if !seen[*data.Sequence] {
+			seen[*data.Sequence] = true
+			outcome.Distinct++
 		}
 	}
-
-	result.Metrics["content_valid_json"] = validJSON
-	result.Metrics["content_invalid_json"] = invalidJSON
-	result.Metrics["content_has_value_field"] = hasValueField
-	result.Metrics["content_values_above_filter"] = valuesAboveFilter
-
-	result.Details["content_validation"] = map[string]any{
-		"lines_checked":       len(lines),
-		"valid_json":          validJSON,
-		"invalid_json":        invalidJSON,
-		"has_value_field":     hasValueField,
-		"values_above_filter": valuesAboveFilter,
-	}
-
-	if invalidJSON > 0 {
-		issues = append(issues, fmt.Sprintf("%d/%d lines had invalid JSON", invalidJSON, len(lines)))
-	}
-
-	if hasValueField == 0 && validJSON > 0 {
-		issues = append(issues, "No output messages have 'value' field - may indicate mapping issue")
-	}
-
-	return issues
+	return outcome
 }
 
-// executeValidateComponentsOnly is a fallback validation that only checks component health
-func (s *CoreDataflowScenario) executeValidateComponentsOnly(ctx context.Context, result *Result) error {
-	components, err := s.client.GetComponents(ctx)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("Failed to get components: %v", err))
-		return fmt.Errorf("component query failed: %w", err)
+func (s *CoreDataflowScenario) failPassThroughChecks(result *Result, reason string) {
+	for _, check := range s.CheckRequirements() {
+		s.recordPassThroughCheck(result, check.ID, reason, nil)
 	}
+	result.Errors = append(result.Errors, reason)
+}
 
-	result.Metrics["component_count"] = len(components)
-	result.Details["validation"] = fmt.Sprintf(
-		"Fallback validation: %d components running (file check unavailable)",
-		len(components))
-
-	// In fallback mode, we just verify components are running
-	// This is weaker validation but allows test to pass when docker exec isn't available
-	return nil
+func (s *CoreDataflowScenario) recordPassThroughCheck(result *Result, id, reason string, evidence map[string]string) {
+	if result.RunID == "" {
+		return
+	}
+	status := "passed"
+	if reason != "" {
+		status = "failed"
+	}
+	_ = result.RecordCheck(CheckObservation{
+		ID: id, RunID: result.RunID, MemberID: result.MemberID,
+		Status: status, Reason: reason, Evidence: evidence,
+	})
 }

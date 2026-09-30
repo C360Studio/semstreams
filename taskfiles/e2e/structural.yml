@@ -12,9 +12,37 @@ tasks:
         vars: { COMPOSE_FILES: "docker/compose/tiered.yml", PROFILES: "structural" }
       - ":build:e2e"
     cmds:
-      - echo "[STRUCTURAL] Starting structural tier E2E test..."
-      - defer: docker compose -f docker/compose/tiered.yml --profile structural down -v --timeout 15
-      - docker compose -f docker/compose/tiered.yml --profile structural up -d --wait --build
-      - echo "[OK] Services are healthy (rules + graph)"
-      - echo "[STRUCTURAL] Running structural tier scenario..."
-      - cd cmd/e2e && ./e2e --scenario tiered --variant structural --output-dir ./test/e2e/results
+      - |
+        . scripts/e2e-required-report.sh
+        e2e_report_begin structural structural e2e:structural || exit 1
+        e2e_report_add_file compose docker/compose/tiered.yml || exit 1
+        e2e_report_add_file config configs/e2e-structural.json || exit 1
+        for fixture in testdata/semantic/*.jsonl; do
+          e2e_report_add_file fixture "$fixture" || exit 1
+        done
+        command_exit=0
+        finish() {
+          trap - EXIT
+          cleanup_exit=0
+          docker compose -f docker/compose/tiered.yml --profile structural down -v --timeout 15 >> "$E2E_REPORT_LOG" 2>&1 || cleanup_exit=$?
+          e2e_report_finalize "$command_exit" "$cleanup_exit"
+          report_exit=$?
+          cat "$E2E_REPORT_LOG"
+          if [ "$command_exit" -ne 0 ] || [ "$cleanup_exit" -ne 0 ] || [ "$report_exit" -ne 0 ]; then exit 1; fi
+        }
+        trap finish EXIT
+        run_body() {
+          echo "[STRUCTURAL] Starting structural tier E2E test..."
+          docker compose -f docker/compose/tiered.yml --profile structural up -d --wait --build || return $?
+          echo "[OK] Services are healthy (rules + graph)"
+          e2e_report_capture_app production semstreams-tiered-app-structural || return $?
+          child_input=$(e2e_report_child_input structural structural) || return $?
+          child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-structural.stdout"
+          child_exit=0
+          "$E2E_REPORT_BIN" --scenario tiered --variant structural --output-dir "$E2E_REPORT_DIR" \
+            --evidence-input "$child_input" > "$child_output" 2>&1 || child_exit=$?
+          cat "$child_output"
+          e2e_report_child structural "$child_output" "$child_exit" || return 1
+          [ "$child_exit" -eq 0 ]
+        }
+        run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?

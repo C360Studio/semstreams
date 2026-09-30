@@ -37,7 +37,17 @@ func (s *TieredScenario) executeVerifySearchQuality(ctx context.Context, result 
 
 	// Record results in legacy format for backward compatibility
 	s.recordSearchQualityResultsFromStats(result, stats)
-
+	if result.RunID != "" {
+		observation := s.controlledSearchObservation(stats)
+		observation.ID = s.config.Variant + ".controlled-search.identity"
+		observation.RunID, observation.MemberID = result.RunID, result.MemberID
+		if err := result.RecordCheck(observation); err != nil {
+			return err
+		}
+		if observation.Status != "passed" {
+			return fmt.Errorf("%s: %s", observation.ID, observation.Reason)
+		}
+	}
 	return nil
 }
 
@@ -496,8 +506,13 @@ func (s *TieredScenario) validateSemanticRequirements(result *Result) error {
 	}
 
 	// Check semembed availability
-	if avail, ok := result.Details["semembed_available"].(bool); !ok || !avail {
-		return fmt.Errorf("semantic tier requires semembed: semembed_available=%v", avail)
+	avail, ok := result.Details["semembed_available"].(bool)
+	var semembedErr error
+	if !ok || !avail {
+		semembedErr = fmt.Errorf("semantic tier requires semembed: semembed_available=%v", avail)
+	}
+	if err := s.recordTieredCheck(result, "semantic.semembed", semembedErr, map[string]string{"available": fmt.Sprint(avail)}); err != nil {
+		return err
 	}
 
 	// Check search functionality (known answer tests must pass)

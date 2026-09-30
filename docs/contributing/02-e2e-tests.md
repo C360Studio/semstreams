@@ -4,23 +4,28 @@ E2E tests validate SemStreams functionality in realistic deployment scenarios us
 
 ## Philosophy
 
-E2E tests follow the **Observer Pattern**: they run against real services in Docker containers, not mocks. Tests observe system behavior from the outside, just like production monitoring would.
+E2E tests observe the assembled application through its real HTTP, NATS, graph and file boundaries.
+Some dependencies, including the agentic model, use scripted fixtures. Each run must identify those fixtures and
+the behavior they exercise; passing a scripted model flow does not establish live model quality.
 
 ### Key Principles
 
 1. **Real Services**: Tests use actual NATS, graph processors, and embedding services
 2. **Container Isolation**: Each test suite runs in isolated Docker Compose environments
 3. **Observable Validation**: Tests query endpoints and KV buckets to verify behavior
-4. **Graceful Degradation**: Tests validate fallback behavior when services are unavailable
+4. **Explicit scope**: Required checks fail when observation is unavailable; declared diagnostics retain their outcome.
+5. **Independent expectations**: Compare consumer-visible results with identities and values retained from inputs.
 
 ## Quick Reference
 
 ```bash
-# The four tiers this page details; `task --list` shows every tier task
+# Individual tiers; `task --list` shows every tier task
 task e2e:core        # Platform boots, data flows (~10s)
 task e2e:structural  # Rules + PathRAG (~30s)
 task e2e:statistical # BM25 + community detection (~60s)
 task e2e:semantic    # Neural embeddings + LLM (~90s)
+task e2e:agentic     # Scripted model, tools, streaming and recovery
+task e2e:core-inference-agentic # Core + structural + statistical + semantic + agentic
 
 # Cleanup
 task e2e:clean
@@ -42,8 +47,8 @@ Platform boots, data flows. Validates basic health and dataflow.
 **Coverage**:
 - UDP input component
 - JSON processors (filter, map)
-- Output components (file, HTTP POST, WebSocket)
-- Data transformation validation
+- Component health for configured outputs (file, HTTP POST, WebSocket); dataflow proof observes the file sink
+- Run-correlated pass-through count, content and identity under `configs/protocol-flow.json`
 
 ### Structural (`task e2e:structural`)
 
@@ -69,7 +74,7 @@ BM25 + community detection. No external ML services required.
 | ~60s | BM25 embeddings + LPA communities | NATS only |
 
 **Coverage**:
-- All structural tier coverage
+- Shared graph-path checks selected for the statistical variant; structural zero-ML checks remain separate
 - BM25 embedding generation
 - Community detection (Label Propagation)
 - Keyword search
@@ -84,21 +89,111 @@ Neural embeddings + LLM. Full ML stack validation.
 | ~90s | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
 
 **Coverage**:
-- All statistical tier coverage
+- Shared graph-path checks selected for the semantic variant; this does not substitute for every statistical check
 - Neural embeddings (via SemEmbed)
-- LLM summary quality
-- Semantic search relevance
+- Controlled semantic query identity
+- Summary and partition quality diagnostics; these are not model-quality acceptance thresholds
 
-## Assertion Strategy
+## Named Required Evidence
 
-| Tier | What We Assert | What We DON'T Assert |
-|------|----------------|---------------------|
-| **Core** | Health endpoints, data flows | - |
-| **Structural** | Entities in KV, predicates indexed, anomaly flags in index, PathRAG edges | LLM response quality |
-| **Statistical** | Above + BM25 embeddings, communities detected | LLM summaries |
-| **Semantic** | Above + LLM summary quality, semantic search relevance | - |
+A complete report proves only its declared required set for that invocation. It does not claim that every capability
+or every historical assertion in a tier has been audited. Existing fatal checks remain fatal when a scenario adopts
+named evidence. Aggregate success, a nonzero assertion count and a callback returning nil are insufficient on their own.
 
-**Key insight**: Anomaly worker can run at structural tier with LLM, but we only assert on *index state* (flag exists), not LLM reasoning. LLM output assertions wait until semantic tier.
+The `e2e-evidence` capability contract governs declarations, observation identity, finalization and persistence.
+The [testing policy](01-testing.md#testing-discipline) governs independent expectations and sensitivity evidence.
+
+### Selection and Scope
+
+| Selection | Named proof scope |
+|---|---|
+| CLI default / `--scenario all` | Core health and core dataflow only |
+| `task e2e:core` | Core scenarios plus readiness, heartbeat, authority, shutdown, early cancellation, refusal and graph identity |
+| Structural | Required components, graph identity, zero embedding execution and zero clustering runs |
+| Statistical | Required components, graph identity and controlled search fixture identity |
+| Semantic | Required components, graph identity, SemEmbed availability and controlled query identity |
+| Agentic | Matching terminal task/loop, tool request/result and streaming chunks |
+| Slow-consumer | Each existing attribution condition, retained as an individual required check |
+
+`task e2e:core-inference-agentic` runs core, structural, statistical, semantic and agentic in sequence. `e2e:all`
+is its alias and prints that scope. The composite excludes slow-consumer (which has its own CI job), lessons,
+research-graph direct/execute, deep-research, CRUD-tools, ops, lifecycle, throughput, heavy/fallback semantic variants
+and the live OpenAI adapter. An exclusion does not remove a separate CI or release obligation.
+
+CLI `semantic` selects the semantic variant explicitly; `rules` selects structural. Both use the same resolver and
+preserve caller flags as `tiered --variant ...`. Unknown selections and variants fail. Legacy scenarios outside the
+adopted set retain execution behavior and are reported as **unattested**; their old counts cannot fill a required member.
+
+### Author a Required Check
+
+Declare stable check IDs and required/diagnostic classification before setup or observation. Keep the declaration in
+one scenario-owned method used by both the runner and scenario. Pass run/member identity through explicit scenario
+configuration. Repeated intentional rounds need distinct declared IDs; recording the same ID twice is an error.
+
+At each observation site:
+
+1. Retain the expected identity and value from the controlled input or governing contract.
+2. Read the actual consumer-visible result and compare it with that expectation.
+3. Record `passed`, `failed` or `skipped` for the declared ID, with the run/member identity and bounded evidence.
+4. Preserve errors and partial observations for finalization, including observation transport failures.
+
+Evidence contains expected/observed summaries, identities and artifact references, never secrets or full payloads.
+A failed or skipped observation carries a reason. Shell assertions record their comparison at the assertion site;
+a banner or successful shell block is not an observation. The report command only records and finalizes evidence;
+Task owns command order, processes and cleanup.
+
+The shared `Result` finalizer rejects empty required sets, undeclared or duplicate observations, mismatched identities,
+and missing, skipped or failed required checks. Recording errors stay fatal even if a caller ignores an error return.
+`AssertionsRun` counts evaluated required observations (passed plus failed); it excludes diagnostics, missing and
+skipped checks. It is supplemental to the named set. Setup, execution, validation, cleanup and required-write errors
+also prevent success. Domain metadata is projected after that final outcome.
+
+Diagnostics are explicit observations with their real outcome. Agentic TTFT, B0 thematic quality and B2 partition
+co-location remain diagnostics. Their failure neither fills a required obligation nor becomes a passed measurement.
+Required streaming chunks remain distinct from diagnostic TTFT.
+
+### Keep the Oracle Independent
+
+Core's current filter criteria and mappings are empty. Retain each successfully sent run marker, sequence and value;
+require at least `MinProcessed` distinct sent IDs in that run's output and validate every selected record against its
+sent value. Duplicate lines cannot increase the distinct count. Retrieval failure cannot substitute component health.
+This proves a minimum of correct pass-through output, without claiming complete UDP delivery, filtering, exactly-once
+output or ordering.
+
+For statistical/semantic search, derive expected entity IDs from a controlled submitted fixture and compare them with
+the actual query response. Recomputing search statistics from the response does not establish the expected identity.
+For agentic checks, bind terminal/tool evidence to the submitted task, loop and request. A process-wide counter alone
+cannot establish attribution; a controlled baseline/delta needs isolated execution and matching request evidence.
+Structural zero clustering means no clustering execution, not an empty store of community records.
+
+Challenge both observation and propagation. Healthy controls need counterparts for absent output, foreign identity,
+transport error and skipped observation. For acceptance logic, exercise omission, duplicate/conflicting observations,
+empty membership, cleanup failure and write failure. Use the policy's bounded properties and compiled mutations to
+show that the intended assertion detects the plausible fault. A shell stub proves wrapper exit handling; assembled
+E2E runs supply application behavior evidence.
+
+### Read and Retain a Run
+
+The existing `TestRun` writer owns versioned run records. Each invocation has a unique run ID and file; initial and
+final writes atomically replace that invocation's aggregate. Child members retain distinct identities. A failed run
+keeps partial observations and the missing set. Typed tier exports are analysis projections, not acceptance authority.
+Older reports remain readable as unattested.
+
+Run records bind selection, required members, exclusions, argv, absolute paths, UTC times, exit status and provenance.
+Provenance distinguishes source/dirty inputs, the runner executable, the actual application image/binary, and selected
+Compose/config/fixture/settings inputs. Retained manifests identify constituent files and digests. Unavailable identity
+has an explicit reason and prevents full proof; a guessed image tag or runner SHA cannot stand in for the application.
+
+Reporting starts after the existing build and port-preflight prerequisites, including cleanup before probing ports.
+A direct task that fails before initialization has outer status/logs only; no JSON is promised. An already initialized
+composite records that child's failure and missing report. After initialization, controlled exits attempt final evidence
+after cleanup, retaining both the original failure and any cleanup/write failure. Process or host death may leave an
+incomplete envelope. Incomplete artifacts never satisfy a required suite.
+
+Existing CI jobs retain available evidence even on failure. Artifact absence or upload failure remains visible. Direct
+remote inspection may retain useful observations while lacking application provenance; it remains incomplete proof.
+Release candidate selection and tag authorization still belong to
+[release-candidate-proof](../../openspec/specs/release-candidate-proof/spec.md).
 
 ## Test Selection Guide
 
@@ -121,7 +216,7 @@ task e2e:structural
 
 ### Pre-Merge
 
-Full CI validation (no ML dependencies):
+Example local selection for changes spanning core and graph paths (no ML dependencies):
 
 ```bash
 task e2e:core
@@ -162,7 +257,7 @@ task build:e2e
 cd cmd/e2e && ./e2e --list
 
 # Run specific scenario
-cd cmd/e2e && ./e2e --scenario tiered --variant core
+cd cmd/e2e && ./e2e --scenario tiered --variant statistical
 
 # With verbose output
 cd cmd/e2e && ./e2e --scenario tiered --verbose
@@ -297,29 +392,17 @@ Check graph processor logs for errors. Increase timeout if processing is slow.
 
 ## CI Integration
 
-### PR Checks
+The [E2E Ladder workflow](../../.github/workflows/e2e-ladder.yml) runs statistical and slow-consumer as separate jobs
+on pull requests and explicit workflow dispatch. Both retain available run evidence on success and failure.
+This describes current scheduling; the five-family local composite does not add CI jobs.
 
-```yaml
-steps:
-  - task e2e:core
-  - task e2e:structural
-```
+A statistical run does not establish core shutdown/cancellation proof, structural zero-ML absence, or agentic proof.
+Select additional local tiers according to the changed path and existing release obligations. Functional E2E is not
+scheduled nightly. Semantic CI is tracked in #1117; agentic/CRUD CI and proof retain #769/#1128 ownership.
 
-### Main Branch
-
-```yaml
-steps:
-  - task e2e:core
-  - task e2e:structural
-  - task e2e:statistical
-```
-
-### Release
-
-```yaml
-steps:
-  - task e2e:semantic
-```
+Release selection, exact candidate identity and required evidence belong to
+[release-candidate-proof](../../openspec/specs/release-candidate-proof/spec.md). One semantic run or a locally green
+composite does not by itself authorize a release.
 
 ## Breaking Changes Require an E2E Tier Before Merge
 
@@ -349,7 +432,8 @@ grep -rn "iotsensor\." cmd/   # Or whichever package was migrated
 
 If only `cmd/e2e-semstreams` has it, the framework binary is half-migrated. Follow the
 [payload registration checklist](../../.agents/skills/new-payload/SKILL.md). The per-PR ladder does not yet run the
-semantic or agentic tier on a `!` PR; the per-PR gate is gh#1117, the nightly run gh#769.
+semantic or agentic tier on a `!` PR. Semantic CI remains #1117; agentic/CRUD CI and proof remain #769/#1128.
+Those open items do not waive the relevant local E2E requirement before landing.
 
 ## External Dependencies
 

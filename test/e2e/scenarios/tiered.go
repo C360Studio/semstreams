@@ -72,6 +72,8 @@ type TieredScenario struct {
 
 // TieredConfig contains configuration for tiered E2E tests
 type TieredConfig struct {
+	EvidenceRunID    string `json:"evidence_run_id,omitempty"`
+	EvidenceMemberID string `json:"evidence_member_id,omitempty"`
 	// Variant configuration
 	Variant string `json:"variant"` // "structural", "statistical", "semantic"
 
@@ -436,7 +438,28 @@ func (s *TieredScenario) executeGraphRoundTrip(ctx context.Context, result *Resu
 	}
 	probe := NewGraphRoundTripProbe(s.natsClient, s.msgLogger, s.config.GraphQLURL,
 		config.TierAuthorityStem(variant))
-	return probe.Run(ctx, result)
+	err := probe.Run(ctx, result)
+	evidence := map[string]string{}
+	if detail, ok := result.Details["graph_roundtrip"].(map[string]any); ok {
+		if entityID, ok := detail["entity_id"].(string); ok {
+			evidence["entity_id"] = entityID
+		}
+		if traceID, ok := detail["trace_id"].(string); ok {
+			evidence["trace_id"] = traceID
+		}
+	}
+	if err == nil {
+		if len(evidence["trace_id"]) < 12 {
+			err = fmt.Errorf("graph-roundtrip trace identity is absent")
+		} else {
+			expected := s.effectiveAuthority + ".graph.core.canary." + evidence["trace_id"][:12]
+			evidence["expected_entity_id"] = expected
+			if evidence["entity_id"] != expected {
+				err = fmt.Errorf("graph-roundtrip entity identity %q, want %q", evidence["entity_id"], expected)
+			}
+		}
+	}
+	return s.recordTieredCheck(result, variant+".graph-roundtrip.identity", err, evidence)
 }
 
 // executeStages runs all stages with progress logging.
@@ -537,6 +560,13 @@ func (s *TieredScenario) Execute(ctx context.Context) (*Result, error) {
 	}
 
 	variant := s.config.Variant
+	// The known fallback variant remains an execution-only legacy selection.
+	// Other variants with supplied proof identity must validate their catalog.
+	if variant != "semantic-fallback" && (s.config.EvidenceRunID != "" || s.config.EvidenceMemberID != "") {
+		if err := result.DeclareChecks(s.config.EvidenceRunID, s.config.EvidenceMemberID, s.CheckRequirements()); err != nil {
+			return result, err
+		}
+	}
 	if variant == "" {
 		info := s.detectVariantAndProvider(result)
 		variant = info.variant

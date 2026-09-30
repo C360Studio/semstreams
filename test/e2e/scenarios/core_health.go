@@ -19,6 +19,9 @@ type CoreHealthScenario struct {
 
 // CoreHealthConfig contains configuration for core health check
 type CoreHealthConfig struct {
+	EvidenceRunID    string `json:"evidence_run_id,omitempty"`
+	EvidenceMemberID string `json:"evidence_member_id,omitempty"`
+
 	// Validation thresholds
 	RequireAllHealthy    bool `json:"require_all_healthy"`
 	MinHealthyComponents int  `json:"min_healthy_components"`
@@ -73,6 +76,11 @@ func (s *CoreHealthScenario) Description() string {
 	return s.description
 }
 
+// CheckRequirements declares the configured component-health comparison.
+func (s *CoreHealthScenario) CheckRequirements() []CheckRequirement {
+	return []CheckRequirement{{ID: "core-health.components", Required: true}}
+}
+
 // Setup prepares the scenario (no-op for health check)
 func (s *CoreHealthScenario) Setup(_ context.Context) error {
 	// Health check doesn't need setup
@@ -89,6 +97,11 @@ func (s *CoreHealthScenario) Execute(ctx context.Context) (*Result, error) {
 		Details:      make(map[string]any),
 		Errors:       []string{},
 		Warnings:     []string{},
+	}
+	if s.config.EvidenceRunID != "" || s.config.EvidenceMemberID != "" {
+		if err := result.DeclareChecks(s.config.EvidenceRunID, s.config.EvidenceMemberID, s.CheckRequirements()); err != nil {
+			return result, err
+		}
 	}
 
 	// Track execution stages
@@ -166,6 +179,7 @@ func (s *CoreHealthScenario) executeComponentHealth(ctx context.Context, result 
 	components, err := s.client.GetComponents(ctx)
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("Failed to get components: %v", err))
+		s.recordComponentHealth(result, false, fmt.Sprintf("component query failed: %v", err), nil)
 		return fmt.Errorf("component health check failed: %w", err)
 	}
 
@@ -196,6 +210,7 @@ func (s *CoreHealthScenario) executeComponentHealth(ctx context.Context, result 
 	if len(missingComponents) > 0 {
 		result.Errors = append(result.Errors,
 			fmt.Sprintf("Missing required core components: %v", missingComponents))
+		s.recordComponentHealth(result, false, fmt.Sprintf("missing required components: %v", missingComponents), nil)
 		return fmt.Errorf("missing required components: %v", missingComponents)
 	}
 
@@ -204,6 +219,7 @@ func (s *CoreHealthScenario) executeComponentHealth(ctx context.Context, result 
 		result.Errors = append(result.Errors,
 			fmt.Sprintf("Only %d/%d components healthy (minimum: %d)",
 				healthyCount, len(components), s.config.MinHealthyComponents))
+		s.recordComponentHealth(result, false, fmt.Sprintf("healthy count %d below minimum %d", healthyCount, s.config.MinHealthyComponents), nil)
 		return fmt.Errorf("insufficient healthy components: %d < %d",
 			healthyCount, s.config.MinHealthyComponents)
 	}
@@ -229,9 +245,28 @@ func (s *CoreHealthScenario) executeComponentHealth(ctx context.Context, result 
 		if len(unhealthyComponents) > 0 {
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("Unhealthy required components: %v", unhealthyComponents))
+			s.recordComponentHealth(result, false, fmt.Sprintf("unhealthy required components: %v", unhealthyComponents), nil)
 			return fmt.Errorf("unhealthy required components: %v", unhealthyComponents)
 		}
 	}
+	s.recordComponentHealth(result, true, "", map[string]string{
+		"healthy_components":  fmt.Sprint(healthyCount),
+		"required_components": fmt.Sprint(s.config.RequiredComponents),
+	})
 
 	return nil
+}
+
+func (s *CoreHealthScenario) recordComponentHealth(result *Result, passed bool, reason string, evidence map[string]string) {
+	if result.RunID == "" {
+		return
+	}
+	status := "failed"
+	if passed {
+		status = "passed"
+	}
+	_ = result.RecordCheck(CheckObservation{
+		ID: "core-health.components", RunID: result.RunID, MemberID: result.MemberID,
+		Status: status, Reason: reason, Evidence: evidence,
+	})
 }

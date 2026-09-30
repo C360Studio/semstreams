@@ -12,9 +12,37 @@ tasks:
         vars: { COMPOSE_FILES: "docker/compose/tiered.yml", PROFILES: "statistical" }
       - ":build:e2e"
     cmds:
-      - echo "[STATISTICAL] Starting statistical tier E2E test (BM25, no external ML)..."
-      - defer: docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
-      - bash scripts/e2e-statistical-up.sh
-      - echo "[OK] Statistical services are healthy (BM25 mode)"
-      - echo "[STATISTICAL] Running statistical tier scenario..."
-      - cd cmd/e2e && ./e2e --scenario tiered --variant statistical --output-dir ./test/e2e/results
+      - |
+        . scripts/e2e-required-report.sh
+        e2e_report_begin statistical statistical e2e:statistical || exit 1
+        e2e_report_add_file compose docker/compose/tiered.yml || exit 1
+        e2e_report_add_file config configs/statistical.json || exit 1
+        for fixture in testdata/semantic/*.jsonl; do
+          e2e_report_add_file fixture "$fixture" || exit 1
+        done
+        command_exit=0
+        finish() {
+          trap - EXIT
+          cleanup_exit=0
+          docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15 >> "$E2E_REPORT_LOG" 2>&1 || cleanup_exit=$?
+          e2e_report_finalize "$command_exit" "$cleanup_exit"
+          report_exit=$?
+          cat "$E2E_REPORT_LOG"
+          if [ "$command_exit" -ne 0 ] || [ "$cleanup_exit" -ne 0 ] || [ "$report_exit" -ne 0 ]; then exit 1; fi
+        }
+        trap finish EXIT
+        run_body() {
+          echo "[STATISTICAL] Starting statistical tier E2E test (BM25, no external ML)..."
+          bash scripts/e2e-statistical-up.sh || return $?
+          echo "[OK] Statistical services are healthy (BM25 mode)"
+          e2e_report_capture_app production semstreams-tiered-app || return $?
+          child_input=$(e2e_report_child_input statistical statistical) || return $?
+          child_output="$E2E_REPORT_DIR/e2e-child-$E2E_REPORT_RUN_ID-statistical.stdout"
+          child_exit=0
+          "$E2E_REPORT_BIN" --scenario tiered --variant statistical --output-dir "$E2E_REPORT_DIR" \
+            --evidence-input "$child_input" > "$child_output" 2>&1 || child_exit=$?
+          cat "$child_output"
+          e2e_report_child statistical "$child_output" "$child_exit" || return 1
+          [ "$child_exit" -eq 0 ]
+        }
+        run_body >> "$E2E_REPORT_LOG" 2>&1 || command_exit=$?
