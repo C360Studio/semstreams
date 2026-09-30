@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime"
 	"sync"
 	"testing"
@@ -24,6 +25,7 @@ type ownerLoadAttempt struct {
 	operationEntry, constructionEntry, constructionReturn, stopEntry, stopReturn, operationReturn time.Time
 	childDeadline                                                                                 time.Time
 	constructionErr, stopErr, operationErr                                                        error
+	returnedWatcher                                                                               bool
 	keyCount                                                                                      int
 	nilKeys, deadlineErr, canceledErr                                                             bool
 	callbackStart, snapshotStart, snapshotEnd                                                     time.Time
@@ -80,7 +82,7 @@ func (a ownerLoadAttempt) constructionState() string {
 	return "returned"
 }
 func (a ownerLoadAttempt) stopState() string {
-	if a.constructionReturn.IsZero() || a.constructionErr != nil {
+	if a.constructionReturn.IsZero() || !a.returnedWatcher {
 		return "not_applicable"
 	}
 	if a.stopEntry.IsZero() {
@@ -190,8 +192,8 @@ func (o *ownerLoadObserver) finishOwned(terminal context.Context) error {
 	if rec.operationReturn.IsZero() {
 		o.issues = append(o.issues, fmt.Errorf("attempt %d missed operation return", idx))
 	}
-	if !rec.constructionReturn.IsZero() && rec.constructionErr == nil && rec.stopReturn.IsZero() {
-		o.issues = append(o.issues, fmt.Errorf("attempt %d constructed lister without delegated Stop return", idx))
+	if rec.returnedWatcher && rec.stopReturn.IsZero() {
+		o.issues = append(o.issues, fmt.Errorf("attempt %d constructed watcher without delegated Stop return", idx))
 	}
 	o.active = -1
 	return errors.Join(o.issues...)
@@ -240,7 +242,7 @@ type ownerLoadObservedBucket struct {
 	observer *ownerLoadObserver
 }
 
-func (b *ownerLoadObservedBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+func (b *ownerLoadObservedBucket) WatchFiltered(ctx context.Context, filters []string, opts ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
 	o := b.observer
 	o.mu.Lock()
 	idx := o.active
@@ -256,7 +258,7 @@ func (b *ownerLoadObservedBucket) ListKeysFiltered(ctx context.Context, filters 
 	}
 	o.mu.Unlock()
 	if idx < 0 {
-		return b.KeyValue.ListKeysFiltered(ctx, filters...)
+		return b.KeyValue.WatchFiltered(ctx, filters, opts...)
 	}
 
 	done := make(chan struct{})
@@ -265,15 +267,18 @@ func (b *ownerLoadObservedBucket) ListKeysFiltered(ctx context.Context, filters 
 	o.callbackStop, o.callbackDone = stop, done
 	o.mu.Unlock()
 
-	native, err := b.KeyValue.ListKeysFiltered(ctx, filters...)
+	native, err := b.KeyValue.WatchFiltered(ctx, filters, opts...)
 	o.mu.Lock()
 	rec := &o.records[idx]
-	rec.constructionReturn, rec.constructionErr = time.Now(), err
+	rec.constructionReturn, rec.constructionErr, rec.returnedWatcher = time.Now(), err, native != nil
 	o.mu.Unlock()
-	if err != nil {
+	if err != nil && native == nil {
 		return nil, err
 	}
-	return &ownerLoadObservedLister{KeyLister: native, observer: o, idx: idx}, nil
+	if native == nil {
+		return nil, nil
+	}
+	return &ownerLoadObservedWatcher{KeyWatcher: native, observer: o, idx: idx}, err
 }
 
 func (o *ownerLoadObserver) captureDeadline(ctx context.Context, idx int, done chan struct{}) {
@@ -313,17 +318,17 @@ func (o *ownerLoadObserver) captureDeadline(ctx context.Context, idx int, done c
 	o.mu.Unlock()
 }
 
-type ownerLoadObservedLister struct {
-	jetstream.KeyLister // Embedded Keys returns the identical native channel.
-	observer            *ownerLoadObserver
-	idx                 int
+type ownerLoadObservedWatcher struct {
+	jetstream.KeyWatcher // Embedded Updates returns the identical native channel.
+	observer             *ownerLoadObserver
+	idx                  int
 }
 
-func (l *ownerLoadObservedLister) Stop() error {
+func (l *ownerLoadObservedWatcher) Stop() error {
 	l.observer.mu.Lock()
 	l.observer.records[l.idx].stopEntry = time.Now()
 	l.observer.mu.Unlock()
-	err := l.KeyLister.Stop() // Production alone invokes this synchronously; preserve its error.
+	err := l.KeyWatcher.Stop() // Production alone invokes this synchronously; preserve its error.
 	l.observer.mu.Lock()
 	rec := &l.observer.records[l.idx]
 	rec.stopReturn, rec.stopErr = time.Now(), err
@@ -346,11 +351,11 @@ func ownerLoadObservationTimestamp(at time.Time, absent string) string {
 }
 
 func formatOwnerLoadAttempt(a ownerLoadAttempt) string {
-	return fmt.Sprintf("repetition=%d operation=%s construction=%s construction_from_entry=%s construction_duration=%s child_deadline=%s construction_error=%v collection_to_stop=%s stop=%s stop_duration=%s stop_error=%v return_from_entry=%s keys=%d nil_keys=%t operation_error=%v deadline_error=%t canceled_error=%t callback_joined=%t snapshot_order=%s callback_start=%s snapshot_start=%s snapshot_end=%s child_error=%v child_cause=%v phase_before=%s phase_after=%s return_before=%t return_after=%t stack_truncated=%t\n%s",
+	return fmt.Sprintf("repetition=%d operation=%s construction=%s construction_from_entry=%s construction_duration=%s child_deadline=%s construction_error=%v returned_watcher=%t collection_to_stop=%s stop=%s stop_duration=%s stop_error=%v return_from_entry=%s keys=%d nil_keys=%t operation_error=%v deadline_error=%t canceled_error=%t callback_joined=%t snapshot_order=%s callback_start=%s snapshot_start=%s snapshot_end=%s child_error=%v child_cause=%v phase_before=%s phase_after=%s return_before=%t return_after=%t stack_truncated=%t\n%s",
 		a.repetition, a.phase(), a.constructionState(),
 		ownerLoadObservationOffset(a.operationEntry, a.constructionEntry, "not_entered"),
 		ownerLoadObservationOffset(a.constructionEntry, a.constructionReturn, "not_entered"),
-		ownerLoadObservationTimestamp(a.childDeadline, "not_entered"), a.constructionErr,
+		ownerLoadObservationTimestamp(a.childDeadline, "not_entered"), a.constructionErr, a.returnedWatcher,
 		ownerLoadObservationOffset(a.constructionReturn, a.stopEntry, "not_applicable"),
 		a.stopState(), ownerLoadObservationOffset(a.stopEntry, a.stopReturn, "not_entered"), a.stopErr,
 		ownerLoadObservationOffset(a.operationEntry, a.operationReturn, "entered_without_observed_return"),
@@ -361,49 +366,55 @@ func formatOwnerLoadAttempt(a ownerLoadAttempt) string {
 		a.stackTruncated, a.stack)
 }
 
-type ownerLoadFakeLister struct {
-	keys    <-chan string
+type ownerLoadFakeWatcher struct {
+	updates <-chan jetstream.KeyValueEntry
 	stopErr error
 	stops   int
 }
 
-func (l *ownerLoadFakeLister) Keys() <-chan string { return l.keys }
-func (l *ownerLoadFakeLister) Stop() error         { l.stops++; return l.stopErr }
+func (w *ownerLoadFakeWatcher) Updates() <-chan jetstream.KeyValueEntry { return w.updates }
+func (w *ownerLoadFakeWatcher) Stop() error                             { w.stops++; return w.stopErr }
+
+type ownerLoadFakeEntry struct {
+	jetstream.KeyValueEntry
+	key string
+}
+
+func (e ownerLoadFakeEntry) Key() string { return e.key }
 
 type ownerLoadFakeBucket struct {
 	jetstream.KeyValue
-	gotCtx     context.Context
-	gotFilters []string
-	calls      int
-	lister     jetstream.KeyLister
-	err        error
-	makeLister func() jetstream.KeyLister
+	gotCtx      context.Context
+	gotFilters  []string
+	gotOpts     []jetstream.WatchOpt
+	calls       int
+	watcher     jetstream.KeyWatcher
+	err         error
+	makeWatcher func() jetstream.KeyWatcher
 }
 
-func (b *ownerLoadFakeBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+func (b *ownerLoadFakeBucket) WatchFiltered(ctx context.Context, filters []string, opts ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
 	b.gotCtx, b.gotFilters = ctx, append([]string(nil), filters...)
+	b.gotOpts = append([]jetstream.WatchOpt(nil), opts...)
 	b.calls++
-	if b.err != nil {
-		return nil, b.err
+	if b.makeWatcher != nil {
+		return b.makeWatcher(), b.err
 	}
-	if b.makeLister != nil {
-		return b.makeLister(), nil
-	}
-	return b.lister, nil
+	return b.watcher, b.err
 }
-func ownerLoadClosedKeys(keys ...string) <-chan string {
-	ch := make(chan string, len(keys))
+func ownerLoadClosedUpdates(keys ...string) <-chan jetstream.KeyValueEntry {
+	ch := make(chan jetstream.KeyValueEntry, len(keys)+1)
 	for _, key := range keys {
-		ch <- key
+		ch <- ownerLoadFakeEntry{key: key}
 	}
+	ch <- nil // Native initial-snapshot completion marker.
 	close(ch)
 	return ch
 }
 
 func TestOwnerLoadObserverTransparentSuccess(t *testing.T) {
-	stopErr := errors.New("native Stop result")
-	native := &ownerLoadFakeLister{keys: ownerLoadClosedKeys("diag.one"), stopErr: stopErr}
-	raw := &ownerLoadFakeBucket{lister: native}
+	native := &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates("diag.one")}
+	raw := &ownerLoadFakeBucket{watcher: native}
 	observer := newOwnerLoadObserver()
 	decorator := &ownerLoadObservedBucket{KeyValue: raw, observer: observer}
 	caller := t.Context()
@@ -418,6 +429,7 @@ func TestOwnerLoadObserverTransparentSuccess(t *testing.T) {
 	require.Equal(t, []string{"diag.one"}, keys)
 	require.Equal(t, 1, raw.calls)
 	require.Equal(t, []string{"diag.>"}, raw.gotFilters)
+	require.Len(t, raw.gotOpts, 2)
 	require.NotSame(t, caller, raw.gotCtx)
 	deadline, ok := raw.gotCtx.Deadline()
 	require.True(t, ok)
@@ -429,7 +441,7 @@ func TestOwnerLoadObserverTransparentSuccess(t *testing.T) {
 	require.NoError(t, integrity)
 	require.Len(t, records, 1)
 	require.Equal(t, deadline, records[0].childDeadline)
-	require.ErrorIs(t, records[0].stopErr, stopErr)
+	require.NoError(t, records[0].stopErr)
 	require.Equal(t, "returned", records[0].constructionState())
 	require.Equal(t, "returned", records[0].stopState())
 	require.True(t, records[0].callbackJoined)
@@ -439,10 +451,15 @@ func TestOwnerLoadObserverTransparentSuccess(t *testing.T) {
 	second := newOwnerLoadObserver()
 	require.NoError(t, second.begin(0, "diag.>", time.Now()))
 	secondDecorator := &ownerLoadObservedBucket{KeyValue: raw, observer: second}
-	lister, err := secondDecorator.ListKeysFiltered(caller, "diag.>")
+	opts := []jetstream.WatchOpt{jetstream.IgnoreDeletes(), jetstream.MetaOnly()}
+	watcher, err := secondDecorator.WatchFiltered(caller, []string{"diag.>"}, opts...)
 	require.NoError(t, err)
-	require.Equal(t, native.keys, lister.Keys())
-	require.ErrorIs(t, lister.Stop(), stopErr)
+	require.Equal(t, native.updates, watcher.Updates())
+	require.Same(t, caller, raw.gotCtx)
+	for i := range opts {
+		require.Equal(t, reflect.ValueOf(opts[i]).Pointer(), reflect.ValueOf(raw.gotOpts[i]).Pointer())
+	}
+	require.NoError(t, watcher.Stop())
 	second.operationReturned(time.Now(), nil, nil)
 	require.NoError(t, second.finish(caller))
 }
@@ -466,9 +483,25 @@ func TestOwnerLoadObserverConstructorFailureAndExpiry(t *testing.T) {
 		require.Equal(t, "not_applicable", records[0].stopState())
 		require.ErrorIs(t, records[0].constructionErr, cause)
 	})
+	t.Run("missing_watcher", func(t *testing.T) {
+		raw := &ownerLoadFakeBucket{}
+		observer := newOwnerLoadObserver()
+		require.NoError(t, observer.begin(0, "diag.>", time.Now()))
+		store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
+		keys, err := store.KeysByFilter(t.Context(), "diag.>")
+		observer.operationReturned(time.Now(), keys, err)
+		require.NoError(t, observer.finish(t.Context()))
+		require.Nil(t, keys)
+		require.ErrorContains(t, err, "missing watcher")
+		records, integrity := observer.snapshot()
+		require.NoError(t, integrity)
+		require.Len(t, records, 1)
+		require.False(t, records[0].returnedWatcher)
+		require.Equal(t, "not_applicable", records[0].stopState())
+	})
 	t.Run("expired_partial_input", func(t *testing.T) {
-		native := &ownerLoadFakeLister{keys: ownerLoadClosedKeys("diag.partial")}
-		raw := &ownerLoadFakeBucket{lister: native}
+		native := &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates("diag.partial")}
+		raw := &ownerLoadFakeBucket{watcher: native}
 		observer := newOwnerLoadObserver()
 		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Nanosecond))
 		defer cancel()
@@ -487,6 +520,63 @@ func TestOwnerLoadObserverConstructorFailureAndExpiry(t *testing.T) {
 	})
 }
 
+func TestOwnerLoadObserverPreservesStopError(t *testing.T) {
+	stopErr := errors.New("native Stop result")
+	native := &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates("diag.one"), stopErr: stopErr}
+	raw := &ownerLoadFakeBucket{watcher: native}
+	observer := newOwnerLoadObserver()
+	require.NoError(t, observer.begin(0, "diag.>", time.Now()))
+	store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
+	keys, err := store.KeysByFilter(t.Context(), "diag.>")
+	observer.operationReturned(time.Now(), keys, err)
+	require.NoError(t, observer.finish(t.Context()))
+	require.Nil(t, keys)
+	require.ErrorIs(t, err, stopErr)
+	require.Equal(t, 1, native.stops)
+	records, integrity := observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 1)
+	require.ErrorIs(t, records[0].stopErr, stopErr)
+	require.ErrorIs(t, records[0].operationErr, stopErr)
+}
+
+func TestOwnerLoadObserverReturnedWatcherWithConstructorError(t *testing.T) {
+	cause := errors.New("constructor returned watcher with error")
+	native := &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates("diag.partial")}
+	raw := &ownerLoadFakeBucket{watcher: native, err: cause}
+	observer := newOwnerLoadObserver()
+	require.NoError(t, observer.begin(0, "diag.>", time.Now()))
+	store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
+	keys, err := store.KeysByFilter(t.Context(), "diag.>")
+	observer.operationReturned(time.Now(), keys, err)
+	require.NoError(t, observer.finish(t.Context()))
+	require.Nil(t, keys)
+	require.ErrorIs(t, err, cause)
+	require.Equal(t, 1, native.stops, "production must Stop the returned watcher")
+	records, integrity := observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 1)
+	require.ErrorIs(t, records[0].constructionErr, cause)
+	require.True(t, records[0].returnedWatcher)
+	require.Equal(t, "returned", records[0].stopState())
+
+	// A direct decorated call proves neither the constructor error nor the
+	// native Updates channel is replaced before production receives them.
+	directNative := &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates("diag.partial")}
+	directRaw := &ownerLoadFakeBucket{watcher: directNative, err: cause}
+	directObserver := newOwnerLoadObserver()
+	require.NoError(t, directObserver.begin(0, "diag.>", time.Now()))
+	decorated, directErr := (&ownerLoadObservedBucket{KeyValue: directRaw, observer: directObserver}).WatchFiltered(
+		t.Context(), []string{"diag.>"}, jetstream.IgnoreDeletes(), jetstream.MetaOnly())
+	require.ErrorIs(t, directErr, cause)
+	require.NotNil(t, decorated)
+	require.Equal(t, directNative.updates, decorated.Updates())
+	require.NoError(t, decorated.Stop())
+	directObserver.operationReturned(time.Now(), nil, directErr)
+	require.NoError(t, directObserver.finish(t.Context()))
+	require.Equal(t, 1, directNative.stops)
+}
+
 func TestOwnerLoadObserverFailNowRetainsPriorAndFailed(t *testing.T) {
 	observer := newOwnerLoadObserver()
 	beforeSnapshotEntered := make(chan struct{})
@@ -500,7 +590,7 @@ func TestOwnerLoadObserverFailNowRetainsPriorAndFailed(t *testing.T) {
 			close(finalizerEntered)
 		}
 	}
-	raw := &ownerLoadFakeBucket{makeLister: func() jetstream.KeyLister { return &ownerLoadFakeLister{keys: ownerLoadClosedKeys("diag.one")} }}
+	raw := &ownerLoadFakeBucket{makeWatcher: func() jetstream.KeyWatcher { return &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates("diag.one")} }}
 	store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
 	collector := new(assert.CollectT)
 	published := make(chan []ownerLoadAttempt, 1)
@@ -610,14 +700,14 @@ func TestOwnerLoadObserverSnapshotOrdering(t *testing.T) {
 			} else {
 				observer.capture = func(dst []byte) int { close(entered); <-release; return copy(dst, "synthetic stack") }
 			}
-			native := &ownerLoadFakeLister{keys: ownerLoadClosedKeys()}
-			raw := &ownerLoadFakeBucket{lister: native}
+			native := &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates()}
+			raw := &ownerLoadFakeBucket{watcher: native}
 			ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Nanosecond))
 			defer cancel()
 			require.NoError(t, observer.begin(0, "diag.>", time.Now()))
-			lister, err := (&ownerLoadObservedBucket{KeyValue: raw, observer: observer}).ListKeysFiltered(ctx, "diag.>")
+			watcher, err := (&ownerLoadObservedBucket{KeyValue: raw, observer: observer}).WatchFiltered(ctx, []string{"diag.>"}, jetstream.IgnoreDeletes(), jetstream.MetaOnly())
 			require.NoError(t, err)
-			require.NoError(t, lister.Stop())
+			require.NoError(t, watcher.Stop())
 			select {
 			case <-entered:
 			case <-time.After(2 * time.Second):
@@ -696,9 +786,9 @@ func TestOwnerLoadObserverAfterStopAndCaptureBoundary(t *testing.T) {
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Nanosecond))
 	defer cancel()
 	require.NoError(t, observer.begin(0, "diag.>", time.Now()))
-	native := &ownerLoadFakeLister{keys: ownerLoadClosedKeys()}
-	raw := &ownerLoadFakeBucket{lister: native}
-	lister, err := (&ownerLoadObservedBucket{KeyValue: raw, observer: observer}).ListKeysFiltered(ctx, "diag.>")
+	native := &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates()}
+	raw := &ownerLoadFakeBucket{watcher: native}
+	watcher, err := (&ownerLoadObservedBucket{KeyValue: raw, observer: observer}).WatchFiltered(ctx, []string{"diag.>"}, jetstream.IgnoreDeletes(), jetstream.MetaOnly())
 	require.NoError(t, err)
 	defer func() {
 		releaseOnce.Do(func() { close(release) })
@@ -713,7 +803,7 @@ func TestOwnerLoadObserverAfterStopAndCaptureBoundary(t *testing.T) {
 			}
 		}
 	}()
-	require.NoError(t, lister.Stop())
+	require.NoError(t, watcher.Stop())
 	select {
 	case <-afterCapture:
 	case <-time.After(2 * time.Second):

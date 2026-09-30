@@ -797,7 +797,7 @@ func TestOwnerLoadObserverExactActivation(t *testing.T) {
 	require.Nil(t, ownerLoadMeasurementObserver(ci, ownerLoadFixture{name: "name", observer: observer}, true))
 	require.Nil(t, ownerLoadMeasurementObserver(ci, ownerLoadFixture{name: "incoming", observer: observer}, true))
 	require.Nil(t, ownerLoadMeasurementObserver(ownerLoadFullProfile(), fixture, true))
-	raw := &ownerLoadFakeBucket{makeLister: func() jetstream.KeyLister { return &ownerLoadFakeLister{keys: ownerLoadClosedKeys("diag.one")} }}
+	raw := &ownerLoadFakeBucket{makeWatcher: func() jetstream.KeyWatcher { return &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates("diag.one")} }}
 	store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
 	measureOwnerLoadFilter(t, t.Context(), store, "PREDICATE", "predicate-forward", "diag.>", ci, 1, ownerLoadMeasurementObserver(ci, fixture, true))
 	records, integrity := observer.snapshot()

@@ -1,25 +1,30 @@
 # Tasks
 
-## Inventory and experiment design
+## Completed diagnostic
 
-- [x] Inventory the new smoke failure and shared ownership path; receive independent INVENTORY PASS.
-- [x] Compare options and independently review the bounded, transparent abort experiment.
-- [x] Select the test-only experiment within the current authorized reliability work; preserve historical evidence.
+- [x] Inventory the smoke failure and shared ownership path; receive independent INVENTORY PASS.
+- [x] Compare options, independently review and select the bounded transparent abort experiment.
+- [x] Implement the private diagnostic and focused ordinary proofs without changing production behavior.
+- [x] Pass independent source review and classifier sensitivity checks with exact restoration evidence.
+- [x] Execute the sole admitted canonical native command and retain the complete preparation/execution ledger.
+- [x] Independently review outcomes, including the false-green propagation defect and completion limits.
+- [x] Remove compiled diagnostic files after exact source/evidence retention and independent durability review.
 
-## Preparation and evidence
+## Production repair
 
-- [x] Implement private diagnostic and focused ordinary proofs without changing production behavior.
-- [x] Pass independent source review, including ambiguous witness refusal, bounded stdout/stderr and cleanup reserve.
-- [x] Run focused proofs and required classifier sensitivity mutation with exact backup/restoration evidence.
-- [x] Admit one canonical native command after source review and sensitivity proof; ledger85/300s,215s remaining.
-- [x] Retain and independently review outcomes; distinguish native completion from process containment.
+- [x] Inventory the smallest shared listing cleanup repair and receive independent INVENTORY PASS.
+- [x] Resolve independent design review findings; select the v2 private-path/error/budget contract.
+- [x] Materialize the accepted scope and full normative spec deltas before implementation.
+- [x] Add a public NewKVStore regression and retain its intended terminal-ownership RED before implementation.
+- [x] Implement native watcher collection/finalization and reconcile directly reached full-bucket test adapters.
+- [x] Reconcile the owner-load observer and its ordinary proofs without taking native delivery ownership.
+- [x] Pass focused race histories, including virtual-time expiry and unchanged minimal-reader compatibility.
+- [x] Remove the production completion obligation in a controlled mutation; retain intended failure and exact restore.
+- [x] Obtain independent implementation review covering source, failure propagation and native validation ownership.
+- [x] Run and record one focused post-repair native validation with real time, through the canonical runner.
+- [ ] HOLD: complete applicable final gates and record actual durations and remaining evidence limits.
+- [ ] Complete final task/spec reconciliation, archive as final content commit and obtain narrow archive review.
 
-## Disposition
-
-- [ ] HOLD: inventory and review the smallest shared listing cleanup repair against the observed terminal defect.
-- [x] Remove temporary compiled diagnostic after preserving and independently verifying exact source/evidence.
-- [ ] Reconcile any accepted implementation and spec scope after the repair inventory/design gate.
-- [ ] Complete applicable final gates and archive/spec review for the final scope.
-
-The sole native command is admitted after source approval and sensitivity evidence. No second native pass, CI rerun
-or merge is authorized by this experiment. Missing witnesses, ambiguity or exhausted allowance stops execution.
+The completed diagnostic permits no second experimental pass. The post-repair native regression is a separate
+validation of changed production behavior. A failure stops progression to broad gates until its evidence is resolved.
+No task asserts hosted CI approval, issue closure or a transferable merge waiver.

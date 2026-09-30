@@ -599,7 +599,7 @@ func (kv *KVStore) KeysByFilter(ctx context.Context, pattern string) ([]string, 
 	stopErr := watcher.Stop()
 	terminalCtx, cancelTerminal := context.WithTimeout(context.WithoutCancel(ctx), filteredWatcherDrainTimeout)
 	defer cancelTerminal()
-	closed := false
+	closed := true // mutation: skip terminal delivery drain
 	var cleanupErr error
 drain:
 	for !closed {

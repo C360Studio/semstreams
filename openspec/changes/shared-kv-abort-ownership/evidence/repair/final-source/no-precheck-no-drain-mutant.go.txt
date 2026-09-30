@@ -566,12 +566,6 @@ func (kv *KVStore) KeysByFilter(ctx context.Context, pattern string) ([]string, 
 	if primaryErr == nil {
 	collect:
 		for {
-			// A constructor can return after cancellation while Updates is
-			// already readable. Cancellation takes precedence at that boundary.
-			if err := ctx.Err(); err != nil {
-				primaryErr = err
-				break collect
-			}
 			select {
 			case <-ctx.Done():
 				primaryErr = ctx.Err()
@@ -599,7 +593,7 @@ func (kv *KVStore) KeysByFilter(ctx context.Context, pattern string) ([]string, 
 	stopErr := watcher.Stop()
 	terminalCtx, cancelTerminal := context.WithTimeout(context.WithoutCancel(ctx), filteredWatcherDrainTimeout)
 	defer cancelTerminal()
-	closed := false
+	closed := true // supplemental mutation: skip delivery drain
 	var cleanupErr error
 drain:
 	for !closed {

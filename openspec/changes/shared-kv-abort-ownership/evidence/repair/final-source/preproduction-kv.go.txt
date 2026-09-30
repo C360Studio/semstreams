@@ -11,7 +11,6 @@ import (
 
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/retry"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -526,95 +525,30 @@ func (kv *KVStore) KeysByPrefix(ctx context.Context, prefix string) ([]string, e
 	return kv.KeysByFilter(ctx, prefix+">")
 }
 
-// filteredWatcherDrainTimeout bounds delivery cleanup after synchronous Stop.
-// It is separate from the configured listing deadline.
-const filteredWatcherDrainTimeout = 5 * time.Second
-
-var (
-	errFilteredWatcherSnapshotIncomplete = errors.New("filtered watcher closed before initial snapshot completed")
-	errFilteredWatcherDeliveryIncomplete = errors.New("filtered watcher delivery did not close after Stop")
-)
-
 // KeysByFilter returns all keys matching an exact NATS subject filter. Unlike
 // KeysByPrefix, this supports fixed-position wildcards such as
 // "*.org.platform.system.domain.type.instance" (ADR-102 canonical order).
-// A returned native watcher owns delivery until its Updates channel closes;
-// cancellation must not turn a partial owner snapshot into successful keys.
+//
+// A filtered key listing is a correctness boundary for derived-index
+// reconciliation. The NATS KeyLister closes its channel when ctx is cancelled,
+// but it does not expose a terminal error. Callers must therefore reject the
+// collected slice when the context expires; returning it as success would turn a
+// partial owner snapshot into authoritative truth.
 func (kv *KVStore) KeysByFilter(ctx context.Context, pattern string) ([]string, error) {
-	if ctx == nil {
-		return nil, errors.New("kv keys by filter: nil context")
-	}
 	ctx, cancel := kv.applyTimeout(ctx)
 	defer cancel()
 
-	watcher, constructErr := kv.bucket.WatchFiltered(ctx, []string{pattern}, jetstream.IgnoreDeletes(), jetstream.MetaOnly())
-	if watcher == nil {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("kv keys by filter %q: %w", pattern, err)
-		}
-		if constructErr == jetstream.ErrNoKeysFound {
+	lister, err := kv.bucket.ListKeysFiltered(ctx, pattern)
+	if err != nil {
+		// Handle empty bucket case
+		if err == jetstream.ErrNoKeysFound {
 			return nil, nil
 		}
-		if constructErr != nil {
-			return nil, fmt.Errorf("kv keys by filter %q: %w", pattern, constructErr)
-		}
-		return nil, fmt.Errorf("kv keys by filter %q: missing watcher", pattern)
+		return nil, fmt.Errorf("kv keys by filter %q: %w", pattern, err)
 	}
 
-	var keys []string
-	primaryErr := constructErr
-	if primaryErr == nil {
-	collect:
-		for {
-			// A constructor can return after cancellation while Updates is
-			// already readable. Cancellation takes precedence at that boundary.
-			if err := ctx.Err(); err != nil {
-				primaryErr = err
-				break collect
-			}
-			select {
-			case <-ctx.Done():
-				primaryErr = ctx.Err()
-				break collect
-			case entry, ok := <-watcher.Updates():
-				if !ok {
-					primaryErr = ctx.Err()
-					if primaryErr == nil {
-						primaryErr = errFilteredWatcherSnapshotIncomplete
-					}
-					break collect
-				}
-				if entry == nil {
-					primaryErr = ctx.Err()
-					break collect
-				}
-				keys = append(keys, entry.Key())
-			}
-		}
-	}
-
-	// Stop is contextless in the native SDK. Its return is observed before the
-	// separate bounded drain begins; neither a goroutine nor a timeout can
-	// preempt the Stop call itself.
-	stopErr := watcher.Stop()
-	terminalCtx, cancelTerminal := context.WithTimeout(context.WithoutCancel(ctx), filteredWatcherDrainTimeout)
-	defer cancelTerminal()
-	closed := false
-	var cleanupErr error
-drain:
-	for !closed {
-		select {
-		case _, ok := <-watcher.Updates():
-			closed = !ok
-		case <-terminalCtx.Done():
-			cleanupErr = errFilteredWatcherDeliveryIncomplete
-			break drain
-		}
-	}
-	if stopErr != nil && (!closed || (!errors.Is(stopErr, nats.ErrBadSubscription) && !errors.Is(stopErr, nats.ErrConnectionClosed))) {
-		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("filtered watcher Stop: %w", stopErr))
-	}
-	if err := errors.Join(primaryErr, cleanupErr); err != nil {
+	keys, err := collectFilteredKeys(ctx, lister)
+	if err != nil {
 		return nil, fmt.Errorf("kv keys by filter %q: %w", pattern, err)
 	}
 	return keys, nil

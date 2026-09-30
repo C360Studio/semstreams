@@ -5484,12 +5484,12 @@
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadAttemptScope",
-          "fingerprint": "101c77be083b5193efb66280565917f8354cadc9e48a2b533377c65306db2690"
+          "fingerprint": "90182d58d1d1460828ab97a1dc151a60111ff045cee572b2813762f49f42d69a"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "TestOwnerLoadObserverFailNowRetainsPriorAndFailed",
-          "fingerprint": "63228f6ddaecaaa4623e37f9da1d02aa8151a2df83045ea7812fb3720ab1ce64"
+          "fingerprint": "aad9a669caf2751c790aae83abdc57c0ef3b55e0cdc4e2de00bfbd09db81a54d"
         },
         {
           "path": "processor/graph-index/owner_filter_load_integration_test.go",
@@ -5499,17 +5499,17 @@
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadObserver.finish",
-          "fingerprint": "c4c711173952c04f5df01e7cf6066bf27e698924ca66dcb17166d1cba11d8755"
+          "fingerprint": "49b644810a3838b658f94d566c2e43394bd0aa37b48a1e22778d263bcfee91ef"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadObserver.finishWithTerminal",
-          "fingerprint": "0a82d162d5626d99a7679ba410026336eacd69c006eff890a58e616af21ed976"
+          "fingerprint": "8895a17f8e45564a716293572462162301a0971e47be91dbb0e01c9eea3d7225"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadObserver.finishOwned",
-          "fingerprint": "beb155841886f2d03cbfb364937840f987be270d2b3f8e47b9b53506a585faba"
+          "fingerprint": "b508c609fee39a9490a220a6fb04fc3555ea0a1e53fa7d3222792464a6f2f5c8"
         },
         {
           "fingerprint": "5d40ce19aacf55d0dd8552b1f59fccccb394a536b63a9c51c7abad8f974e181d",
@@ -5531,12 +5531,12 @@
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadObservationScope",
-          "fingerprint": "ab8bcf15e21f44a4f5119d30c93172324d213d1aa244f6740499ebf0348770ac"
+          "fingerprint": "06be88fb9b7104057e8b319834ad46ad8b694ac13ff9bedad69e988a923d159a"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "TestOwnerLoadObserverFailNowRetainsPriorAndFailed",
-          "fingerprint": "63228f6ddaecaaa4623e37f9da1d02aa8151a2df83045ea7812fb3720ab1ce64"
+          "fingerprint": "aad9a669caf2751c790aae83abdc57c0ef3b55e0cdc4e2de00bfbd09db81a54d"
         },
         {
           "path": "processor/graph-index/owner_filter_load_integration_test.go",
@@ -5546,42 +5546,42 @@
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "formatOwnerLoadAttempt",
-          "fingerprint": "12a37ac83c9512108a02ac0bd2ad39f34f7c3a8790c2c7e6111d98aa956f0567"
+          "fingerprint": "d72ab0159a1a1293d8a6f500838830c3a8fbd44ee12b51570139c231b59dcf36"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadObservationOffset",
-          "fingerprint": "8a5af8b5bcd3788b821b5075b4d3e4e3d6ec5fce37a17b793d97d8bf23e1ea34"
+          "fingerprint": "484a21acfdae6f135bed65291b181d85bba7305bf86f0ea78620c56e8a3c922f"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadObservationTimestamp",
-          "fingerprint": "81c2ccc6d90ca3bb0c0198abd035cca916e2b1e9a6ba3e3cf0c9b6936c932ae2"
+          "fingerprint": "3f9cc81325b553a0bd5fe0aa224b93b91bbf5500ed930ae67f5f1a2c4be5847a"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadObserver.snapshot",
-          "fingerprint": "231798e470b7b8416ca4829ea6c4ac3a9a3202267cece79ca2dc4c14daf6c214"
+          "fingerprint": "973f413eeb2d22d57bc8aa7197ee327c03773bcd6b60dc72d02dc0c4f6b3baa9"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadAttempt.phase",
-          "fingerprint": "0c3c3e539a99bb12233a5622bb268b31939dd293ba64ac2c615a3040c547d3a6"
+          "fingerprint": "f80c2805fc4f8b296f59940ff6a5c67ece5adb6697061c2df5d0741a0b244f66"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadAttempt.snapshotOrder",
-          "fingerprint": "08a5888c7e3739e618ad01cba2e3a281b2a3759d139971e6c1169dd1be7c6ee1"
+          "fingerprint": "1759a5adb4c71ea3f431a333d1f295b24f0e861b47e71132e2155646c1c07fc0"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadAttempt.constructionState",
-          "fingerprint": "7c688c8cb379220026428905278675e2715e1f325fa6ace0668397ca43f1b263"
+          "fingerprint": "ce8040ef804d108c7a8376ad0896c1b5f56032d05701c225016595d279d65979"
         },
         {
           "path": "processor/graph-index/owner_filter_load_observer_test.go",
           "declaration": "ownerLoadAttempt.stopState",
-          "fingerprint": "dc61f635dab0913e35530f076d0eabdc14032ecb1747f1241b6878fdb1660ea2"
+          "fingerprint": "bf72859dfa4b2c9ef79b9c26162a007aa78ed32a9c19509752219f2d597279c3"
         },
         {
           "fingerprint": "5d40ce19aacf55d0dd8552b1f59fccccb394a536b63a9c51c7abad8f974e181d",
