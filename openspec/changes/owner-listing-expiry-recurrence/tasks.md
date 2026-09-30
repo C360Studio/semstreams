@@ -4,7 +4,9 @@
 - [x] Independently review and accept the bounded two-case measurement design (review/experiment-design-review-final.md).
 - [x] Execute the accepted diagnostic once, retain focused proof and native evidence, and independently review its limits
   (review/measurement-evidence-final.md).
-- [ ] Review an evidence-supported next experiment or repair design before expanding implementation.
+- [x] Independently review and accept the actual-workload observation design
+  (review/workload-observation-design-review.md).
+- [ ] Implement the five-call observer, prove transparency/retention/ownership, and review one real-workload pass.
 - [ ] Establish the failing mechanism and implement the reviewed repair without changing deadline or success semantics.
 - [ ] Prove failure sensitivity and actual owned-work completion; pass focused race/native and required gate stages.
 - [ ] Resolve independent implementation findings and reconcile the incident's supported disposition.

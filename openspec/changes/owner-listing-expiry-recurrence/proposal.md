@@ -21,8 +21,11 @@ The reduced two-case measurement design passed independent review at SHA-256
 `5e1e18c10f1d0aacda7d6b95e1042e44cc0c73d97862ce772997e2b891afd1f4`; root accepted the bounded diagnostic slice.
 The focused checks, selected attribution mutation and single native measurement pass are complete and independently
 reviewed (review/measurement-evidence-final.md). The pass did not reproduce CI's additional interval.
-The next design question is phase/Stop evidence from the actual repeated predicate-forward workload; additional
-synthetic fault machinery and production repair remain unsupported by these observations.
+The actual-workload observation design passed independent review at SHA-256
+`77a7dbc61d54a536ab5056f0ee9f0a01a03957746dde37c23f47a4db09cde81e`. The next slice adds private phase/Stop
+evidence to the five initial CI predicate-forward calls, preserving their native channel, workload and failure
+semantics. It includes focused proof and one real-workload pass. Additional synthetic fault machinery and production
+repair remain unsupported by the current observations.
 Production changes require measured cause and independent design/implementation review. Preserve the real framework
 five-second deadline, workloads, latency assertions and error propagation. No blind repetition, retry-to-green,
 timeout increase or weakened success criterion is authorized.
