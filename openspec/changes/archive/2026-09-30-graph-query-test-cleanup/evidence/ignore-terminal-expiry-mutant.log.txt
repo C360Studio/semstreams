@@ -1,0 +1,18 @@
+command: go test -race -count=1 -run ^TestGraphQueryOwnerTerminalExpiryAndIndependentAuthority$ -v ./processor/graph-query
+exit: 1
+wall_seconds: 2.377
+=== RUN   TestGraphQueryOwnerTerminalExpiryAndIndependentAuthority
+1999/12/31 18:00:00 INFO graph-query coordinator initialized
+1999/12/31 18:00:00 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+1999/12/31 18:00:00 INFO graph-query coordinator started
+1999/12/31 18:00:00 ERROR community summary view supervisor has no catalog reader opener
+1999/12/31 18:00:00 ERROR community generation supervisor has no catalog reader opener
+1999/12/31 18:00:06 INFO graph-query coordinator stopped
+    test_owner_proof_test.go:142: 
+        	Error Trace:	/Users/coby/.codex/worktrees/gh1421-owner-load/semstreams/processor/graph-query/test_owner_proof_test.go:142
+        	Error:      	Expected error with "context deadline exceeded" in chain but got nil.
+        	Test:       	TestGraphQueryOwnerTerminalExpiryAndIndependentAuthority
+--- FAIL: TestGraphQueryOwnerTerminalExpiryAndIndependentAuthority (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/graph-query	0.417s
+FAIL

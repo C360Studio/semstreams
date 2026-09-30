@@ -1,0 +1,21 @@
+command: go test -race -count=1 -run ^TestGraphQueryOwnerAssertionExitAndCleanupErrors/cleanup-error$ -v ./processor/graph-query
+exit: 1
+wall_seconds: 3.365
+=== RUN   TestGraphQueryOwnerAssertionExitAndCleanupErrors
+=== RUN   TestGraphQueryOwnerAssertionExitAndCleanupErrors/cleanup-error
+    test_owner_proof_test.go:55: child exit = <nil>, want expected test-failure code 1; output:
+        2026/09/30 05:02:43 INFO graph-query coordinator initialized
+        2026/09/30 05:02:43 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+        2026/09/30 05:02:43 INFO graph-query coordinator started
+        2026/09/30 05:02:43 ERROR community generation supervisor has no catalog reader opener
+        2026/09/30 05:02:43 ERROR community summary view supervisor has no catalog reader opener
+        GRAPH_QUERY_CHILD_CLOSE_START_LIVE
+        2026/09/30 05:02:43 INFO graph-query coordinator stopped
+        GRAPH_QUERY_CHILD_SUBSTRATE_AFTER_TERMINAL
+        GRAPH_QUERY_CHILD_CLOSE_ONCE
+        PASS
+--- FAIL: TestGraphQueryOwnerAssertionExitAndCleanupErrors (1.04s)
+    --- FAIL: TestGraphQueryOwnerAssertionExitAndCleanupErrors/cleanup-error (1.04s)
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/graph-query	1.464s
+FAIL

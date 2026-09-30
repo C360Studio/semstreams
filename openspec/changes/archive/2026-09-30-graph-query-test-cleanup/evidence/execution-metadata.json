@@ -1,0 +1,37 @@
+{
+  "head": "80565d7b0cab337a8e750cc330aee4a4d4940d8d",
+  "source_sha256": {
+    "processor/graph-query/attack_test.go": "ad18dd57c37f4f746a8e02bab7b9c15137712af9148d558c4568312ed774fd1a",
+    "processor/graph-query/batch_passthrough_integration_test.go": "46b0ada10e181ae3123485c71324495b1f50e4b42b10ad7d9ffa7c4554ecae44",
+    "processor/graph-query/component_integration_test.go": "fdc7fb11254de04962495a59f0ea478270516e03427cddc2d294e31e185098e4",
+    "processor/graph-query/component_test.go": "e4062ff5207a517efddbd06ad9db9f524371af2cf7ad5e5ad47405b578711e5d",
+    "processor/graph-query/summary_bucket_late_attach_integration_test.go": "a5b1881dc74be945799d3cf2298f630b9211febba1c18ef091affd99a3e615f7",
+    "processor/graph-query/test_owner_child_test.go": "c7f5cf7e12e6350dfe1365ed9958bf9dd28a0122167bb47e5208ce82068a6067",
+    "processor/graph-query/test_owner_proof_test.go": "1c803fd868e0c10792f507358729f2759e9e753bdd52a7effc9c736424681fad",
+    "processor/graph-query/test_owner_support_test.go": "bb3a776cda94658c7ddcfec4e6101dbdbb6223febfa7545899a4a4c186c6c526",
+    "test/testinfra/cleanup_baseline.json": "b64eb75670b5e85ee91a0a206f4741024d0775527b528b3b83df463882d1f959"
+  },
+  "native_runs": [
+    {
+      "phase": "before review fix, nonverbose initial PASS",
+      "command": "scripts/run-integration-tests.sh -run '^TestIntegration_(ComponentLifecycle|GraphQuery_SummaryBucketCreatedLate_Attaches)$' ./processor/graph-query/...",
+      "package_seconds": 8.414,
+      "wall_seconds": 12.24,
+      "log": "initial tool transcript; nonverbose output not copied to file"
+    },
+    {
+      "phase": "before review fix, verbose PASS",
+      "command": "scripts/run-integration-tests.sh -v -run '^TestIntegration_(ComponentLifecycle|GraphQuery_SummaryBucketCreatedLate_Attaches)$' ./processor/graph-query/...",
+      "package_seconds": 2.675,
+      "wall_seconds": 4.93,
+      "log": "focused-native.log.txt"
+    },
+    {
+      "phase": "after review fix, verbose PASS",
+      "command": "scripts/run-integration-tests.sh -v -run '^TestIntegration_(ComponentLifecycle|GraphQuery_SummaryBucketCreatedLate_Attaches)$' ./processor/graph-query/...",
+      "package_seconds": 2.643,
+      "wall_seconds": 6.11,
+      "log": "focused-native-review-fix.log.txt"
+    }
+  ]
+}

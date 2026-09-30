@@ -1,0 +1,17 @@
+Source: HEAD 3c0eb2d6; B38 retained its original late t.Cleanup Stop registration. The selected child-only assertion-exit branch was inserted immediately after component acquisition and before Initialize, Start, and that registration. No private owner or source conversion existed yet. This is the first behavioral RED, distinct from later late-registration mutation.
+Command: /usr/bin/time -p go test -race -count=1 -run '^TestGraphQueryOwnerSetupAssertionExit$' -v ./processor/graph-query
+Exit: 1
+Observed output:
+=== RUN   TestGraphQueryOwnerSetupAssertionExit
+    test_owner_child_test.go:43: child missing witness "GRAPH_QUERY_CHILD_COMPONENT_TERMINAL_BEFORE_SUBSTRATE"; output:
+        --- FAIL: TestGraphQueryStartRegistersStableLocalSearchResponder (0.00s)
+            component_test.go:255: intentional setup assertion exit
+            component_test.go:250: GRAPH_QUERY_CHILD_COMPONENT_NOT_TERMINAL
+        FAIL
+--- FAIL: TestGraphQueryOwnerSetupAssertionExit (0.04s)
+FAIL
+FAIL    github.com/c360studio/semstreams/processor/graph-query    0.505s
+FAIL
+real 4.42
+user 4.58
+sys 1.63

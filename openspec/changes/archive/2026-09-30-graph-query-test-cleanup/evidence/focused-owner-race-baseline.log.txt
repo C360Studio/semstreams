@@ -1,0 +1,35 @@
+=== RUN   TestGraphQueryOwnerSetupAssertionExit
+--- PASS: TestGraphQueryOwnerSetupAssertionExit (0.04s)
+=== RUN   TestGraphQueryOwnerAssertionExitAndCleanupErrors
+=== RUN   TestGraphQueryOwnerAssertionExitAndCleanupErrors/caller-exit
+=== RUN   TestGraphQueryOwnerAssertionExitAndCleanupErrors/cleanup-error
+=== RUN   TestGraphQueryOwnerAssertionExitAndCleanupErrors/fence-error
+--- PASS: TestGraphQueryOwnerAssertionExitAndCleanupErrors (0.11s)
+    --- PASS: TestGraphQueryOwnerAssertionExitAndCleanupErrors/caller-exit (0.04s)
+    --- PASS: TestGraphQueryOwnerAssertionExitAndCleanupErrors/cleanup-error (0.04s)
+    --- PASS: TestGraphQueryOwnerAssertionExitAndCleanupErrors/fence-error (0.03s)
+=== RUN   TestGraphQueryOwnerChildFixture
+--- PASS: TestGraphQueryOwnerChildFixture (0.00s)
+=== RUN   TestGraphQueryOwnerTerminalExpiryAndIndependentAuthority
+1999/12/31 18:00:00 INFO graph-query coordinator initialized
+1999/12/31 18:00:00 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+1999/12/31 18:00:00 INFO graph-query coordinator started
+1999/12/31 18:00:00 ERROR community generation supervisor has no catalog reader opener
+1999/12/31 18:00:00 ERROR community summary view supervisor has no catalog reader opener
+1999/12/31 18:00:06 INFO graph-query coordinator stopped
+--- PASS: TestGraphQueryOwnerTerminalExpiryAndIndependentAuthority (0.00s)
+=== RUN   TestGraphQueryOwnerEndedOperationStillAttemptsTerminal
+2026/09/30 04:59:18 INFO graph-query coordinator initialized
+2026/09/30 04:59:18 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 04:59:18 INFO graph-query coordinator started
+2026/09/30 04:59:18 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 04:59:18 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 04:59:18 INFO graph-query coordinator stopped
+--- PASS: TestGraphQueryOwnerEndedOperationStillAttemptsTerminal (0.00s)
+=== RUN   TestGraphQueryOwnerFailedStartCleanupIsNotRetried
+--- PASS: TestGraphQueryOwnerFailedStartCleanupIsNotRetried (0.00s)
+PASS
+ok  	github.com/c360studio/semstreams/processor/graph-query	1.623s
+real 3.70
+user 2.35
+sys 3.07

@@ -1,0 +1,74 @@
+[INTEGRATION] docker info latency: 0ms (integer-second clock fallback)
+[INTEGRATION] using cached nats:2.14-alpine (registry pull skipped)
+[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)
+=== RUN   TestIntegration_ComponentLifecycle
+2026/09/30 05:05:14 github.com/testcontainers/testcontainers-go - Connected to docker: 
+  Server Version: 29.8.0
+  API Version: 1.51
+  Operating System: Docker Desktop
+  Total Memory: 23742 MB
+  Labels:
+    com.docker.desktop.address=unix:///Users/coby/Library/Containers/com.docker.docker/Data/docker-cli.sock
+  Testcontainers for Go Version: v0.40.0
+  Resolved Docker Host: unix:///var/run/docker.sock
+  Resolved Docker Socket Path: /var/run/docker.sock
+  Test SessionID: 59679c0ab0b129b1097314d9192471ba13cef2ffe6bd24c1285cbe9131744825
+  Test ProcessID: 13881247-e3fe-441d-8dd4-4aed815ea203
+2026/09/30 05:05:14 🐳 Creating container for image nats:2.14-alpine
+2026/09/30 05:05:14 🐳 Creating container for image testcontainers/ryuk:0.13.0
+2026/09/30 05:05:14 ✅ Container created: 270f08372ee4
+2026/09/30 05:05:14 🐳 Starting container: 270f08372ee4
+2026/09/30 05:05:14 ✅ Container started: 270f08372ee4
+2026/09/30 05:05:14 ⏳ Waiting for container id 270f08372ee4 image: testcontainers/ryuk:0.13.0. Waiting for: port 8080/tcp to be listening
+2026/09/30 05:05:14 Shell not found in container
+2026/09/30 05:05:14 🔔 Container is ready: 270f08372ee4
+2026/09/30 05:05:14 ✅ Container created: b48496d46fa9
+2026/09/30 05:05:14 🐳 Starting container: b48496d46fa9
+2026/09/30 05:05:14 ✅ Container started: b48496d46fa9
+2026/09/30 05:05:14 ⏳ Waiting for container id b48496d46fa9 image: nats:2.14-alpine. Waiting for: log message "Server is ready"
+2026/09/30 05:05:14 🔔 Container is ready: b48496d46fa9
+2026/09/30 05:05:14 INFO Connecting to NATS urls=nats://localhost:55017
+2026/09/30 05:05:14 INFO Successfully connected to NATS urls=nats://localhost:55017
+2026/09/30 05:05:14 INFO graph-query coordinator initialized component=graph-query
+2026/09/30 05:05:14 INFO query handlers registered component=graph-query subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:05:14 INFO graph-query coordinator started component=graph-query
+2026/09/30 05:05:14 WARN community generation unavailable; retrying component=graph-query generation=1 error="framework bucket \"COMMUNITY_INDEX\" is not ready: its owner (graph-clustering) has not provisioned it in this deployment" retry_interval=5s
+2026/09/30 05:05:14 WARN COMMUNITY_SUMMARIES unavailable; using statistical summaries component=graph-query error="framework bucket \"COMMUNITY_SUMMARIES\" is not ready: its owner (graph-clustering) has not provisioned it in this deployment" retry_interval=5s
+2026/09/30 05:05:14 INFO graph-query coordinator stopped component=graph-query
+2026/09/30 05:05:14 🐳 Stopping container: b48496d46fa9
+2026/09/30 05:05:14 ✅ Container stopped: b48496d46fa9
+2026/09/30 05:05:14 🐳 Terminating container: b48496d46fa9
+2026/09/30 05:05:14 🚫 Container terminated: b48496d46fa9
+--- PASS: TestIntegration_ComponentLifecycle (0.66s)
+=== RUN   TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches
+2026/09/30 05:05:14 🐳 Creating container for image nats:2.14-alpine
+2026/09/30 05:05:14 ✅ Container created: 04fe626ea874
+2026/09/30 05:05:14 🐳 Starting container: 04fe626ea874
+2026/09/30 05:05:14 ✅ Container started: 04fe626ea874
+2026/09/30 05:05:14 ⏳ Waiting for container id 04fe626ea874 image: nats:2.14-alpine. Waiting for: log message "Server is ready"
+2026/09/30 05:05:14 🔔 Container is ready: 04fe626ea874
+2026/09/30 05:05:14 INFO Connecting to NATS urls=nats://localhost:55018
+2026/09/30 05:05:14 INFO Successfully connected to NATS urls=nats://localhost:55018
+2026/09/30 05:05:14 INFO Created new KV bucket bucket=COMMUNITY_INDEX
+2026/09/30 05:05:14 INFO graph-query coordinator initialized component=graph-query
+2026/09/30 05:05:14 INFO query handlers registered component=graph-query subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:05:14 INFO graph-query coordinator started component=graph-query
+2026/09/30 05:05:14 WARN COMMUNITY_SUMMARIES unavailable; using statistical summaries component=graph-query error="framework bucket \"COMMUNITY_SUMMARIES\" is not ready: its owner (graph-clustering) has not provisioned it in this deployment" retry_interval=200ms
+2026/09/30 05:05:14 INFO Created new KV bucket bucket=COMMUNITY_SUMMARIES
+2026/09/30 05:05:14 INFO community cache generation watcher started component=graph-query generation=1
+2026/09/30 05:05:14 INFO community cache generation published component=graph-query generation=1 communities=1
+2026/09/30 05:05:15 INFO COMMUNITY_SUMMARIES view attached component=graph-query
+2026/09/30 05:05:15 INFO community cache generation watcher stopping component=graph-query generation=1 reason="context cancelled"
+2026/09/30 05:05:15 INFO graph-query coordinator stopped component=graph-query
+2026/09/30 05:05:15 🐳 Stopping container: 04fe626ea874
+2026/09/30 05:05:15 ✅ Container stopped: 04fe626ea874
+2026/09/30 05:05:15 🐳 Terminating container: 04fe626ea874
+2026/09/30 05:05:15 🚫 Container terminated: 04fe626ea874
+--- PASS: TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches (0.50s)
+PASS
+ok  	github.com/c360studio/semstreams/processor/graph-query	2.675s
+[INTEGRATION] no latency distributions recorded
+[INTEGRATION] tests complete
+real 4.93
+user 2.96
+sys 1.06

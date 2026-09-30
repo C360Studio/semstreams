@@ -1,0 +1,4 @@
+ok  	github.com/c360studio/semstreams/test/testinfra	8.052s
+real 8.25
+user 19.61
+sys 13.25

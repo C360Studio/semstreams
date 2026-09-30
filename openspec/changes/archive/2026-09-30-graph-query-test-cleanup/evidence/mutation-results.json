@@ -1,0 +1,102 @@
+[
+  {
+    "name": "late-registration",
+    "source": "processor/graph-query/component_test.go",
+    "baseline_md5": "e282861356bd4dd35fddcd52480ce6ab",
+    "mutant_md5": "0ea88b54528a9a0d471649b6a37aaf66",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "-run",
+      "^TestGraphQueryOwnerSetupAssertionExit$",
+      "-v",
+      "./processor/graph-query"
+    ],
+    "exit": 1,
+    "wall_seconds": 2.515,
+    "intended_witness": "child missing witness \"GRAPH_QUERY_CHILD_COMPONENT_TERMINAL_BEFORE_SUBSTRATE\"",
+    "valid": true
+  },
+  {
+    "name": "early-start-cancel",
+    "source": "processor/graph-query/test_owner_support_test.go",
+    "baseline_md5": "4681fb25f8546a7ae65337fabc5868ef",
+    "mutant_md5": "127d24e5497ab8ca07e821d247572614",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "-run",
+      "^TestGraphQueryOwnerAssertionExitAndCleanupErrors/caller-exit$",
+      "-v",
+      "./processor/graph-query"
+    ],
+    "exit": 1,
+    "wall_seconds": 2.423,
+    "intended_witness": "parent missing terminal sentinel; native Close reported accepted Start authority ended before concrete Close",
+    "valid": true
+  },
+  {
+    "name": "discard-concrete-error",
+    "source": "processor/graph-query/test_owner_support_test.go",
+    "baseline_md5": "4681fb25f8546a7ae65337fabc5868ef",
+    "mutant_md5": "b2e3d906a1e42aeeb68e7c2cf8fb94b4",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "-run",
+      "^TestGraphQueryOwnerAssertionExitAndCleanupErrors/cleanup-error$",
+      "-v",
+      "./processor/graph-query"
+    ],
+    "exit": 1,
+    "wall_seconds": 3.365,
+    "intended_witness": "parent rejects unexpected child success after concrete cleanup error was discarded",
+    "valid": true
+  },
+  {
+    "name": "ignore-terminal-expiry",
+    "source": "processor/graph-query/test_owner_support_test.go",
+    "baseline_md5": "4681fb25f8546a7ae65337fabc5868ef",
+    "mutant_md5": "ec9ee85e3ff0580a7ec546570723e79a",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "-run",
+      "^TestGraphQueryOwnerTerminalExpiryAndIndependentAuthority$",
+      "-v",
+      "./processor/graph-query"
+    ],
+    "exit": 1,
+    "wall_seconds": 2.377,
+    "intended_witness": "context deadline exceeded",
+    "valid": true
+  },
+  {
+    "name": "implicit-retry",
+    "source": "processor/graph-query/test_owner_support_test.go",
+    "baseline_md5": "4681fb25f8546a7ae65337fabc5868ef",
+    "mutant_md5": "842713f5a4b3e43074d3ff104777ce1e",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "-run",
+      "^TestGraphQueryOwnerFailedStartCleanupIsNotRetried$",
+      "-v",
+      "./processor/graph-query"
+    ],
+    "exit": 1,
+    "wall_seconds": 2.465,
+    "intended_witness": "one concrete terminal attempt",
+    "valid": true
+  }
+]
