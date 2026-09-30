@@ -136,3 +136,18 @@ Not unit-covered: the one-line copy `cfg.PathOnly = flags.pathOnly` in `createSc
 config is unexported to `cmd/e2e`). Its evidence is the same task 2.6 log read as § 4's `Execute` branch: a
 `[PATH-ONLY]` line and `[41/41]` exist only if the env reached the flag, the flag reached the config, and the config
 reached `Execute`.
+
+## § 6 Ladder job (task 2.4)
+
+`e2e-semantic` / `e2e semantic (path-only)` replaces `e2e-semantic-measure` in one commit; header rewritten.
+
+```
+$ ! git grep -q 'MEASUREMENT ONLY' -- .github/; echo $?
+0
+$ ! git grep -q prev1-program -- .github/; echo $?
+0
+$ actionlint .github/workflows/e2e-ladder.yml; echo $?
+0
+```
+
+The job appearing once in the PR's ladder, its `[PATH-ONLY]` line, `[41/41]` and wall-clock are task 2.6 (CI facts).
