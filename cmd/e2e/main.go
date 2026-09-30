@@ -98,6 +98,7 @@ type cliFlags struct {
 	listScenarios bool
 	// Tiered test variant flags
 	variant      string // "structural", "statistical", or "semantic"
+	pathOnly     bool   // Skip the tiered scenario's declared quality stages (gh#1117)
 	outputDir    string // Directory for results output
 	compare      bool   // Generate comparison report from existing results
 	compareTiers bool   // Generate tier comparison report (0 vs 1 vs 2)
@@ -135,6 +136,8 @@ func parseCommandLineFlags() *cliFlags {
 	// Tiered test variant flags
 	flag.StringVar(&flags.variant, "variant", "",
 		"Test variant: structural (rules-only), statistical (BM25), semantic (neural+LLM)")
+	flag.BoolVar(&flags.pathOnly, "path-only", false,
+		"Tiered: skip the declared quality stages (the per-PR semantic ladder shape; env E2E_PATH_ONLY)")
 	flag.StringVar(&flags.outputDir, "output-dir", "",
 		"Directory for saving results JSON (empty=no output)")
 	flag.BoolVar(&flags.compare, "compare", false,
@@ -173,21 +176,31 @@ func parseCommandLineFlags() *cliFlags {
 		"Fail if query error rate exceeds this ratio (0 = disabled, 0.05 = 5%)")
 
 	// Support environment variables for Docker Compose
-	if envURL := os.Getenv("SEMSTREAMS_BASE_URL"); envURL != "" {
-		flags.baseURL = envURL
-	}
-	if envUDP := os.Getenv("UDP_ENDPOINT"); envUDP != "" {
-		flags.udpEndpoint = envUDP
-	}
-	if envVariant := os.Getenv("E2E_VARIANT"); envVariant != "" {
-		flags.variant = envVariant
-	}
-	if envOutput := os.Getenv("E2E_OUTPUT_DIR"); envOutput != "" {
-		flags.outputDir = envOutput
-	}
+	applyEnvOverrides(flags, os.Getenv)
 
 	flag.Parse()
 	return flags
+}
+
+// applyEnvOverrides applies the non-empty environment overrides before flag
+// parsing, so an explicit flag still wins. getenv is os.Getenv in production.
+func applyEnvOverrides(flags *cliFlags, getenv func(string) string) {
+	if envURL := getenv("SEMSTREAMS_BASE_URL"); envURL != "" {
+		flags.baseURL = envURL
+	}
+	if envUDP := getenv("UDP_ENDPOINT"); envUDP != "" {
+		flags.udpEndpoint = envUDP
+	}
+	if envVariant := getenv("E2E_VARIANT"); envVariant != "" {
+		flags.variant = envVariant
+	}
+	if envOutput := getenv("E2E_OUTPUT_DIR"); envOutput != "" {
+		flags.outputDir = envOutput
+	}
+	// gh#1117: the per-PR ladder sets E2E_PATH_ONLY=1; unset = the full variant.
+	if getenv("E2E_PATH_ONLY") != "" {
+		flags.pathOnly = true
+	}
 }
 
 // handleVersionCommand shows version information and returns true if version flag is set
@@ -398,6 +411,7 @@ func createScenario(
 		cfg.ServiceManagerURL = flags.baseURL
 		cfg.GatewayURL = flags.baseURL + "/api-gateway"
 		cfg.OutputDir = flags.outputDir
+		cfg.PathOnly = flags.pathOnly
 		// Set variant from flag or scenario name
 		cfg.Variant = flags.variant
 		if cfg.Variant == "" {

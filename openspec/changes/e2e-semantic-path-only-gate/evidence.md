@@ -112,3 +112,27 @@ ok  	github.com/c360studio/semstreams/test/e2e/scenarios	0.352s
 Not unit-covered: the `if s.config.PathOnly` branch in `Execute` (it needs a live deployment for
 `EffectiveTierAuthority`). Its wiring evidence is task 2.6's read of the `[PATH-ONLY]` line and the `[41/41]` counter
 from the PR's ladder log, per design D1 / Risks.
+
+## § 5 `--path-only` / `E2E_PATH_ONLY` (task 2.2)
+
+The env reads in `parseCommandLineFlags` moved unchanged into `applyEnvOverrides(flags, getenv)` (production passes
+`os.Getenv`) so the new read is unit-testable; the task's alternative to two local Docker runs. Test:
+`TestEnvOverridesPathOnlyFromNonEmptyEnv` (`cmd/e2e/path_only_test.go`): unset and empty → off, `1` → on. Red before
+implementation (compile: `undefined: applyEnvOverrides`).
+
+Mutation — delete the `E2E_PATH_ONLY` read:
+
+```
+BEFORE 3a310a1e83d40c3de9f4d08e3ad35cd4e9f0e53eb373eff718d93ea449d5244c  cmd/e2e/main.go
+--- FAIL: TestEnvOverridesPathOnlyFromNonEmptyEnv (0.00s)
+    --- FAIL: TestEnvOverridesPathOnlyFromNonEmptyEnv/one (0.00s)
+        path_only_test.go:22: pathOnly = false, want true for env map[E2E_PATH_ONLY:1]
+FAIL
+AFTER  3a310a1e83d40c3de9f4d08e3ad35cd4e9f0e53eb373eff718d93ea449d5244c  cmd/e2e/main.go
+ok  	github.com/c360studio/semstreams/cmd/e2e	0.299s
+```
+
+Not unit-covered: the one-line copy `cfg.PathOnly = flags.pathOnly` in `createScenario`'s tiered case (the scenario's
+config is unexported to `cmd/e2e`). Its evidence is the same task 2.6 log read as § 4's `Execute` branch: a
+`[PATH-ONLY]` line and `[41/41]` exist only if the env reached the flag, the flag reached the config, and the config
+reached `Execute`.
