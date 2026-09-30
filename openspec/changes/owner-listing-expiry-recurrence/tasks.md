@@ -1,13 +1,13 @@
-# Listing recurrence tasks
+# Listing recurrence diagnostic tasks
 
-- [x] Preserve exact recurrence evidence and independently review a bounded refresh of the existing inventory.
-- [x] Independently review and accept the bounded two-case measurement design (review/experiment-design-review-final.md).
-- [x] Execute the accepted diagnostic once, retain focused proof and native evidence, and independently review its limits
-  (review/measurement-evidence-final.md).
-- [x] Independently review and accept the actual-workload observation design
-  (review/workload-observation-design-review.md).
-- [ ] Implement the five-call observer, prove transparency/retention/ownership, and review one real-workload pass.
-- [ ] Establish the failing mechanism and implement the reviewed repair without changing deadline or success semantics.
-- [ ] Prove failure sensitivity and actual owned-work completion; pass focused race/native and required gate stages.
-- [ ] Resolve independent implementation findings and reconcile the incident's supported disposition.
-- [ ] Archive/spec sync as the final content commit and pass its narrow review.
+- [x] Preserve recurrence evidence and independently review the refreshed inventory.
+- [x] Execute and independently review the first bounded diagnostic and its limits.
+- [x] Independently review and accept the actual-workload observation design.
+- [x] Reconcile proposal and graph-index delta to the diagnostic outcome; obtain narrow spec review
+  (review/workload-observation-spec-review.md).
+- [ ] Implement the five-attempt observer and prove transparency, failure retention, snapshot classification and
+  bounded callback ownership, including the accepted failure-sensitivity check.
+- [ ] Execute at most one accepted real-workload pass; retain measurements, completion evidence and unresolved limits.
+- [ ] Resolve independent implementation findings and complete required verification evidence.
+- [ ] Promote the diagnostic requirement and archive this change in the final content commit; retain #1421 as open
+  cause/repair work and obtain narrow archive/spec review.

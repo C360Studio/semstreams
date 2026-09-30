@@ -1,4 +1,4 @@
-# Owner listing expiry recurrence
+# Owner listing failure-phase evidence
 
 ## Why
 
@@ -9,6 +9,10 @@ returned a typed deadline error after 10.001209581 seconds. The 39-entry graph-q
 in #1433 / #1434 while this observed required-job failure takes priority under #1417.
 
 ## Evidence and scope
+
+This change delivers persistent, bounded failure diagnostics for the actual repeated predicate-forward owner-load
+workload. Historical cause attribution and production repair remain open on #1421; completing this diagnostic change
+does not resolve that issue. See `scope-reconciliation.md` for the current behavioral scope.
 
 Use the accepted inventory and native experiment in the completed owner-load-reliability archive as historical
 starting evidence. Refresh only changed facts and the paths implicated by this recurrence. Do not infer that SDK
@@ -32,5 +36,5 @@ timeout increase or weakened success criterion is authorized.
 
 ## Status
 
-Initial follow-up claim for existing #1421. No cause or repair is established. The previous one-PR waiver applied
+Follow-up diagnostic change for existing #1421. No cause or production repair is established. The previous one-PR waiver applied
 only to merged #1432; it supplies no merge authorization here. Graph-query's draft remains open without code changes.
