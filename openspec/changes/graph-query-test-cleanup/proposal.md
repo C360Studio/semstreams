@@ -23,5 +23,8 @@ individual merge waivers; neither waiver transfers to this batch.
 Independent inventory review passed at inventory SHA-256 `990e720cca7b45f62bd7400674bda662e39390ad7c9b38b65b5092517ab5eaa2`.
 The #1435 repair merged as `1b1accf4` after the owner approved its explicit waiver. This worktree now includes
 that main revision at `80fab70a`; all 151 inventory pins still verify, with no changed pinned files. The bounded
-dependency/count refresh passed independent review; design is next. The current baseline is 273 legacy entries / 96 resolutions.
+dependency/count refresh passed independent review. The current baseline is 273 legacy entries / 96 resolutions.
+Independent DESIGN REVIEW PASS at `714bb0fa` was accepted by the coordinator on 2026-09-30 for the routine private
+fixture pattern adoption recorded in `design.md`; implementation is next. The full verdict, conditions and promotion
+record are in `review/design-review.md`. No implementation or test results are asserted.
 No graph-query cleanup count reduction, implementation validation or merge-readiness is claimed.
