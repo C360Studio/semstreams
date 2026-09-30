@@ -60,9 +60,9 @@ When `TieredConfig.PathOnly` is set (`--path-only`, or a non-empty `E2E_PATH_ONL
 `test-http-gateway` MUST send `includeSummaries: false` and `summarizeThreshold: 0` in every variant, and in the
 semantic variant MUST return a non-nil error when the served response's `strategy` is not `graphrag` or its `entities`
 list is empty, because the community-text fallback answers `strategy: graphrag` with zero entities when nothing
-matches, and a non-contract entity-load failure that falls through to an empty fallback would otherwise pass. The
-statistical variant's hit count under these arguments is measured on the first CI run before the empty-list clause is
-extended to it.
+matches, and a non-contract entity-load failure that falls through to an empty fallback would otherwise pass. Under
+the statistical variant the probe records the hit count without asserting on it; the reason is recorded in the
+stage-table comment (measured 0 at level 0, 2026-09-30, issue #1441).
 
 #### Scenario: The gateway serves zero entities
 - **GIVEN** the semantic variant and a `globalSearch` response with `strategy: graphrag` and no entities

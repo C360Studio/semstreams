@@ -367,6 +367,11 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// Go) and is a RECORDER under semantic (the embedding model ranks); the
 		// average-score arm is a RECORDER in both (#1426).
 		{"verify-search-quality", s.executeVerifySearchQuality, []string{"statistical", "semantic"}},
+		// test-http-gateway is a path probe (includeSummaries:false,
+		// summarizeThreshold:0): strategy graphrag in both variants, and entities > 0
+		// under semantic only. Statistical records the hit count without asserting:
+		// its level-0 globalSearch reads 0 entities while test-graphrag-global's
+		// level-1 probe reads 6 (owner ruling 2026-09-30 on #1117; #1441).
 		{"test-http-gateway", s.executeTestHTTPGateway, []string{"statistical", "semantic"}},
 		// gh#768: gateway response SHAPE. Every other gateway stage decodes into
 		// typed structs, and the wrapped and unwrapped shapes both decode

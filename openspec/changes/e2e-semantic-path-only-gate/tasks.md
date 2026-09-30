@@ -28,8 +28,9 @@
       `strategy: graphrag`, zero-entity envelope to the stage's assertion under semantic (delete the `hitCount == 0`
       check from the stage → the test reds; restore → green). A local `task e2e:statistical` run with
       `includeSummaries:false` / `summarizeThreshold:0` recorded `graphql_gateway_search_hits` = 0 (evidence § 1)
-      before the gate's scope was written, so the clause stays semantic-scoped and the statistical zero is the owner's
-      question on #1117. Measured on the PR's ladder run, semantic: `graphql_gateway_search_hits` 30,
+      before the gate's scope was written. Final scope: semantic only; statistical measured 0 locally (evidence § 1),
+      filed as #1441, recorded in the row comment (owner, 2026-09-30); a second unit case pins the statistical
+      exemption. Measured on the PR's ladder run, semantic: `graphql_gateway_search_hits` 30,
       `graphql_gateway_latency_ms` < 1000, strategy `graphrag`.
 - [ ] 2.4 `e2e-ladder.yml`: job `e2e-semantic` per D5 (no artifact step) replaces `e2e-semantic-measure` in the same
   commit; header `:21-30` rewritten. Evidence: `! git grep -q 'MEASUREMENT ONLY' -- .github/` and `! git grep -q

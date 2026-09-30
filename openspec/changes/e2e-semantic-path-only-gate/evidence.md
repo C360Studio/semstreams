@@ -27,14 +27,14 @@ Verbatim result lines:
 42/42 stages.)
 
 **Result: `graphql_gateway_search_hits` = 0, `graphql_gateway_latency_ms` = 5, under statistical, with D4's
-arguments.** Per design D4 the `hitCount == 0` gate therefore stays semantic-scoped and the statistical zero is the
-owner's question on #1117. With `summarizeThreshold: 0` auto-summarize is off (`graphrag.go:172-178`, `:861`), so this
+arguments.** Owner ruling 2026-09-30 on #1117: the `hitCount == 0` gate is semantic only; the statistical zero is
+filed as #1441 and recorded in `test-http-gateway`'s row comment. With `summarizeThreshold: 0` auto-summarize is off (`graphrag.go:172-178`, `:861`), so this
 zero is not the summarized branch (hits in `EntityIDs`); it is either the Tier-1 path returning no entities or the
 Tier-2 community-text fallback matching nothing — the log does not discriminate. Observation only, not a cause: the
 same run's `test-graphrag-global` (level 1, `tiered_statistical.go:264-272`) found 6 entities
 (`graphrag_global_entities_found:6`); `test-http-gateway` queries level 0.
 
-Side effect recorded: every tier task's `:e2e:check-ports` depends on `:e2e:clean` (`taskfiles/e2e/common.yml:27`), so
+Host-effect note: every tier task's `:e2e:check-ports` depends on `:e2e:clean` (`taskfiles/e2e/common.yml:27`), so
 this run executed `e2e:clean`. The host had no compose stack up (pre-check above), and the clean's `docker volume rm`
 steps printed no volume names in the log, i.e. removed none.
 
@@ -54,3 +54,34 @@ FAIL
 AFTER  7be553b0588bff591956e27f831803e85f7d7a83ce1291e60f7dcc94d74ebfc8  test/e2e/scenarios/http_gateway_readiness.go
 ok  	github.com/c360studio/semstreams/test/e2e/scenarios	0.317s
 ```
+
+## § 3 Empty-globalSearch gate, semantic only (task 2.3, second half)
+
+Test: `TestHTTPGatewayStageEmptyGlobalSearchFailsOnlyUnderSemantic` feeds the stub gateway a served
+`strategy: graphrag`, zero-entity envelope; subtest `semantic` wants an error naming "no entities", subtest
+`statistical` wants none (the #1441 exemption). Both record `graphql_gateway_search_hits` = 0. Red before the check
+was added (`stage passed on a served globalSearch with zero entities under semantic`).
+
+Mutation A — delete the `if hitCount == 0 && s.effectiveVariant(result) == "semantic" { … }` block:
+
+```
+BEFORE e5e44734df0122ba1bb37c5a91a6ee5f119668f69241baadc8a14c4f0765215b  test/e2e/scenarios/validate_infra.go
+--- FAIL: TestHTTPGatewayStageEmptyGlobalSearchFailsOnlyUnderSemantic (0.00s)
+    --- FAIL: TestHTTPGatewayStageEmptyGlobalSearchFailsOnlyUnderSemantic/semantic (0.00s)
+        http_gateway_readiness_test.go:349: stage passed on a served globalSearch with zero entities under semantic
+FAIL
+AFTER  e5e44734df0122ba1bb37c5a91a6ee5f119668f69241baadc8a14c4f0765215b  test/e2e/scenarios/validate_infra.go
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	0.336s
+```
+
+Mutation B — drop the variant scope (`if hitCount == 0 {`), restored from the same backup:
+
+```
+--- FAIL: TestHTTPGatewayStageEmptyGlobalSearchFailsOnlyUnderSemantic (0.00s)
+    --- FAIL: TestHTTPGatewayStageEmptyGlobalSearchFailsOnlyUnderSemantic/statistical (0.00s)
+        http_gateway_readiness_test.go:353: stage failed under statistical, where the hit count is recorded, not asserted: GraphQL globalSearch returned no entities (strategy "graphrag", served)
+FAIL
+AFTER  e5e44734df0122ba1bb37c5a91a6ee5f119668f69241baadc8a14c4f0765215b  test/e2e/scenarios/validate_infra.go
+```
+
+(The checksum above is of the file while its comment still carried a placeholder for the issue number, before `#1441` was filed.)

@@ -316,3 +316,45 @@ func TestHTTPGatewayStageRequestsNoSummariesAndNoAutoSummarize(t *testing.T) {
 		}
 	}
 }
+
+// emptyGraphRAGEnvelope is the community-text fallback's answer when the level
+// has no communities or none match (processor/graph-query/graphrag.go:1389-1393,
+// :1462-1466): served, strategy graphrag, zero entities.
+const emptyGraphRAGEnvelope = `{"data":{"globalSearch":{"entities":[],"count":0,"strategy":"graphrag"}}}`
+
+// gh#1117 D4 — under the semantic variant a served globalSearch with no entities
+// is the outcome test-http-gateway exists to detect (the #830 class), so it
+// fails. Under statistical the stage records the count without asserting on it:
+// the level-0 probe measured 0 there (owner ruling 2026-09-30, #1441).
+func TestHTTPGatewayStageEmptyGlobalSearchFailsOnlyUnderSemantic(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		variant string
+		wantErr bool
+	}{
+		{variant: "semantic", wantErr: true},
+		{variant: "statistical", wantErr: false},
+	} {
+		t.Run(tc.variant, func(t *testing.T) {
+			t.Parallel()
+
+			url, _ := stubGateway(t, emptyGraphRAGEnvelope)
+			s, result := readinessScenario(url)
+			s.config.Variant = tc.variant
+
+			err := s.executeTestHTTPGateway(context.Background(), result)
+			switch {
+			case tc.wantErr && err == nil:
+				t.Fatal("stage passed on a served globalSearch with zero entities under semantic")
+			case tc.wantErr && !strings.Contains(err.Error(), "no entities"):
+				t.Errorf("error = %q, want it to state the gateway returned no entities", err)
+			case !tc.wantErr && err != nil:
+				t.Fatalf("stage failed under %s, where the hit count is recorded, not asserted: %v", tc.variant, err)
+			}
+			if got := result.Metrics["graphql_gateway_search_hits"]; got != 0 {
+				t.Errorf("graphql_gateway_search_hits = %v, want 0 recorded in both variants", got)
+			}
+		})
+	}
+}

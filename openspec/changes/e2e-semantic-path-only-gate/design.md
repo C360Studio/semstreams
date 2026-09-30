@@ -143,9 +143,10 @@ return 30. The stage also runs in the required `e2e statistical` job (`tiered.go
 and the log does not say whether that zero is the summarized branch (`EntityIDs`, which D4's arguments would fix) or
 the community-text fallback matching nothing. Prefer observation to prediction: a local `task e2e:statistical` run
 with `includeSummaries:false` / `summarizeThreshold:0` recorded `graphql_gateway_search_hits` = 0 (evidence § 1)
-before the gate's scope was written, so the statistical zero is not the summarized branch; the gate is written
-semantic-scoped and the statistical zero is the owner's question on #1117, never asserted around. The gate catches a fall-through that yields no entities only: a `loadEntities` failure that the
-community-text fallback answers with a non-empty list (`graphrag.go:1462-1466`) looks like a Tier-1 answer, and
+before the gate's scope was written, so the statistical zero is not the summarized branch. Final scope: semantic only;
+statistical measured 0 locally (evidence § 1), filed as #1441, recorded in the row comment (owner, 2026-09-30).
+The gate catches a fall-through that yields no entities only: a `loadEntities` failure that the community-text
+fallback answers with a non-empty list (`graphrag.go:1462-1466`) looks like a Tier-1 answer, and
 `recordGlobalSearchTierTransition` is the only discriminator — a residual, not covered (round-2 M). Stays a path
 probe: request shape, status, GraphQL errors, decode, `strategy == "graphrag"` (`graphrag.go:934`), hits > 0 under
 semantic. Stops observing: community enrichment and answer synthesis on the Tier-1 path (never decoded; on an unready
@@ -201,7 +202,7 @@ and the job log (`[PATH-ONLY]` line, per-stage `completed in`), recorded on #111
 | test-predicate-stats | path | 10 / 15 ms | index |
 | test-predicate-compound | path | 6 / 7 ms | index |
 | verify-search-quality | path (hits arm) + RECORDER (known-answer, avg score; #1426) | 62 / 96 ms | ruled #1426 |
-| test-http-gateway | path (after D4: strategy `graphrag` and, under semantic, entities > 0; statistical measured first) | 18.7 / 27.5 s → ms | P6; the zero-entity fallback `graphrag.go:1391`; round-2 H3 |
+| test-http-gateway | path (after D4: strategy `graphrag` and, under semantic, entities > 0; statistical records the count, measured 0, #1441) | 18.7 / 27.5 s → ms | P6; the zero-entity fallback `graphrag.go:1391`; round-2 H3 |
 | validate-gateway-response-shape | path | 169 / 153 ms | 3 probes, no globalSearch (`gateway_response_shape.go:57-77`) |
 | test-embedding-fallback | path | 4 / 2 ms | reads `semembed_available` (health) + component health (`validate_infra.go:398-433`) |
 | validate-community-structure | path (exists, non-singleton) + RECORDER (ground truth) | 26.9 / 14.1 s | community wait; reads `communities_llm_enhanced`, unasserted → R2 |

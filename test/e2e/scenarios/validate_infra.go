@@ -391,6 +391,18 @@ func (s *TieredScenario) executeTestHTTPGateway(ctx context.Context, result *Res
 	result.Details["graphql_gateway_endpoint"] = s.config.GraphQLURL
 	result.Details["graphql_gateway_strategy"] = gqlResp.Data.GlobalSearch.Strategy
 
+	// gh#1117 D4: the community-text fallback also answers strategy graphrag, with
+	// zero entities when the level has no communities or none match
+	// (graph-query graphrag.go:1389-1393, :1462-1466), and a non-contract entity-load
+	// failure falls through to it — so under semantic an empty answer is the #830
+	// class this probe exists to detect. Statistical records the count without
+	// asserting: its level-0 probe measured 0 (owner ruling 2026-09-30,
+	// #1441).
+	if hitCount == 0 && s.effectiveVariant(result) == "semantic" {
+		return fmt.Errorf("GraphQL globalSearch returned no entities (strategy %q, served)",
+			gqlResp.Data.GlobalSearch.Strategy)
+	}
+
 	return nil
 }
 
