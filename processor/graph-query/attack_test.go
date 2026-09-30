@@ -69,10 +69,14 @@ func TestAttack_ZeroMaxDepth(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	comp.config.MaxDepth = 10
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	// Request with max_depth: 0 should apply component default
@@ -92,9 +96,13 @@ func TestAttack_MalformedJSON(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 
@@ -137,9 +145,13 @@ func TestAttack_MissingEntityID(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 
@@ -156,9 +168,13 @@ func TestAttack_MissingStartEntity(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 
@@ -180,18 +196,23 @@ func TestAttack_NoGoroutineLeakOnStartStop(t *testing.T) {
 
 	mockClient := newMockNATSClient()
 
-	// Start and stop component 10 times
+	// Each fresh instance finishes before the next iteration is admitted.
 	for i := 0; i < 10; i++ {
-		comp := createTestComponentWithMockClient(t, mockClient)
-		require.NoError(t, comp.Initialize())
-
-		ctx := context.Background()
-		require.NoError(t, comp.Start(ctx))
-		require.NoError(t, comp.Stop(context.Background()))
+		func() {
+			comp := createTestComponentWithMockClient(t, mockClient)
+			operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancelOperation()
+			owner := newGraphQueryTestOwner(comp)
+			startCtx := owner.startContext(operationCtx)
+			defer owner.finish(operationCtx, startCtx, false, t)
+			require.NoError(t, comp.Initialize())
+			require.NoError(t, comp.Start(startCtx))
+			require.NoError(t, owner.stop(operationCtx, startCtx, false))
+		}()
+		if t.Failed() {
+			break
+		}
 	}
-
-	// Allow goroutines to terminate
-	time.Sleep(100 * time.Millisecond)
 
 	after := runtime.NumGoroutine()
 
@@ -205,19 +226,26 @@ func TestAttack_NoGoroutineLeakOnContextCancel(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	abortParent, cancelAbort := context.WithCancel(operationCtx)
+	defer cancelAbort()
+	startCtx := owner.startContext(abortParent)
+	defer owner.finish(operationCtx, startCtx, true, t)
 	require.NoError(t, comp.Initialize())
+	require.NoError(t, comp.Start(startCtx))
+	runtimeDone := comp.runtimeDone
+	require.NotNil(t, runtimeDone)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	require.NoError(t, comp.Start(ctx))
-
-	// Cancel context immediately
-	cancel()
-
-	// Stop component
-	require.NoError(t, comp.Stop(context.Background()))
-
-	// Allow goroutines to terminate
-	time.Sleep(100 * time.Millisecond)
+	// Cancellation is the test input; terminal cleanup remains separately bounded.
+	cancelAbort()
+	select {
+	case <-runtimeDone:
+	case <-operationCtx.Done():
+		t.Fatalf("runtime did not observe accepted Start cancellation: %v", operationCtx.Err())
+	}
+	require.NoError(t, owner.stop(operationCtx, startCtx, true))
 
 	after := runtime.NumGoroutine()
 
@@ -230,9 +258,13 @@ func TestAttack_NoGoroutineLeakOnContextCancel(t *testing.T) {
 
 func TestAttack_ConcurrentHealthChecks(t *testing.T) {
 	comp := createTestComponent(t)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	// Concurrent health checks
 	const n = 100
@@ -251,18 +283,32 @@ func TestAttack_ConcurrentHealthChecks(t *testing.T) {
 		}()
 	}
 
-	// Collect results
+	// Observe failure within the operation budget, then still join every worker.
+	timedOut := false
 	for i := 0; i < n; i++ {
-		err := <-errCh
+		var err error
+		select {
+		case err = <-errCh:
+		case <-operationCtx.Done():
+			if !timedOut {
+				t.Errorf("health worker results exceeded operation budget: completed=%d/%d: %v", i, n, operationCtx.Err())
+				timedOut = true
+			}
+			err = <-errCh
+		}
 		assert.NoError(t, err, "concurrent health checks should not panic")
 	}
 }
 
 func TestAttack_ConcurrentMetricsAccess(t *testing.T) {
 	comp := createTestComponent(t)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	// Concurrent metrics access
 	const n = 100
@@ -281,9 +327,19 @@ func TestAttack_ConcurrentMetricsAccess(t *testing.T) {
 		}()
 	}
 
-	// Collect results
+	// Observe failure within the operation budget, then still join every worker.
+	timedOut := false
 	for i := 0; i < n; i++ {
-		err := <-errCh
+		var err error
+		select {
+		case err = <-errCh:
+		case <-operationCtx.Done():
+			if !timedOut {
+				t.Errorf("metrics worker results exceeded operation budget: completed=%d/%d: %v", i, n, operationCtx.Err())
+				timedOut = true
+			}
+			err = <-errCh
+		}
 		assert.NoError(t, err, "concurrent metrics access should not panic")
 	}
 }
@@ -304,9 +360,13 @@ func TestAttack_VeryLongEntityID(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 
@@ -326,9 +386,13 @@ func TestAttack_DeeplyNestedJSON(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 
@@ -366,10 +430,14 @@ func TestAttack_PathSearchExcessiveMaxDepth(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	comp.config.MaxDepth = 3 // Component limit
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 
@@ -389,9 +457,13 @@ func TestAttack_PathSearchEmptyStartEntity(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 
@@ -430,8 +502,13 @@ func TestAttack_HealthCheckWithDisconnectedNATS(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
+	require.NoError(t, comp.Start(startCtx))
 
 	// Simulate disconnection
 	mockClient.status = natsclient.StatusDisconnected
@@ -441,7 +518,7 @@ func TestAttack_HealthCheckWithDisconnectedNATS(t *testing.T) {
 	// Should report unhealthy when NATS disconnected
 	assert.False(t, health.Healthy, "component should be unhealthy with disconnected NATS")
 
-	comp.Stop(context.Background())
+	require.NoError(t, owner.stop(operationCtx, startCtx, false))
 }
 
 // ====================================================================================
@@ -452,9 +529,13 @@ func TestAttack_EmptyRequestBody(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 

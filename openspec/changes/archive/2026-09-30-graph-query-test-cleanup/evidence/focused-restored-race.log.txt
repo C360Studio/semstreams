@@ -1,0 +1,422 @@
+=== RUN   TestAttack_NilConfig
+--- PASS: TestAttack_NilConfig (0.00s)
+=== RUN   TestAttack_NilContext
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+--- PASS: TestAttack_NilContext (0.00s)
+=== RUN   TestAttack_ZeroTimeout
+--- PASS: TestAttack_ZeroTimeout (0.00s)
+=== RUN   TestAttack_ZeroMaxDepth
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+--- PASS: TestAttack_ZeroMaxDepth (0.00s)
+=== RUN   TestAttack_MalformedJSON
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+=== RUN   TestAttack_MalformedJSON/entity_query_-_malformed
+=== RUN   TestAttack_MalformedJSON/relationships_query_-_malformed
+=== RUN   TestAttack_MalformedJSON/path_search_-_malformed
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+--- PASS: TestAttack_MalformedJSON (0.00s)
+    --- PASS: TestAttack_MalformedJSON/entity_query_-_malformed (0.00s)
+    --- PASS: TestAttack_MalformedJSON/relationships_query_-_malformed (0.00s)
+    --- PASS: TestAttack_MalformedJSON/path_search_-_malformed (0.00s)
+=== RUN   TestAttack_MissingEntityID
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+--- PASS: TestAttack_MissingEntityID (0.00s)
+=== RUN   TestAttack_MissingStartEntity
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR query failed error="invalid request: empty start_entity"
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+--- PASS: TestAttack_MissingStartEntity (0.00s)
+=== RUN   TestAttack_NoGoroutineLeakOnStartStop
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+--- PASS: TestAttack_NoGoroutineLeakOnStartStop (0.00s)
+=== RUN   TestAttack_NoGoroutineLeakOnContextCancel
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+--- PASS: TestAttack_NoGoroutineLeakOnContextCancel (0.00s)
+=== RUN   TestAttack_ConcurrentHealthChecks
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+--- PASS: TestAttack_ConcurrentHealthChecks (0.00s)
+=== RUN   TestAttack_ConcurrentMetricsAccess
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 INFO graph-query coordinator stopped
+--- PASS: TestAttack_ConcurrentMetricsAccess (0.00s)
+=== RUN   TestAttack_VeryLongEntityID
+2026/09/30 05:04:19 INFO graph-query coordinator initialized
+2026/09/30 05:04:19 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:19 INFO graph-query coordinator started
+2026/09/30 05:04:19 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:19 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR query failed error="request too large"
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestAttack_VeryLongEntityID (0.06s)
+=== RUN   TestAttack_DeeplyNestedJSON
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestAttack_DeeplyNestedJSON (0.01s)
+=== RUN   TestAttack_PathSearchExcessiveMaxDepth
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestAttack_PathSearchExcessiveMaxDepth (0.00s)
+=== RUN   TestAttack_PathSearchEmptyStartEntity
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR query failed error="invalid request: empty start_entity"
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestAttack_PathSearchEmptyStartEntity (0.00s)
+=== RUN   TestAttack_NATSClientDisconnected
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+--- PASS: TestAttack_NATSClientDisconnected (0.00s)
+=== RUN   TestAttack_HealthCheckWithDisconnectedNATS
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestAttack_HealthCheckWithDisconnectedNATS (0.00s)
+=== RUN   TestAttack_EmptyRequestBody
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+=== RUN   TestAttack_EmptyRequestBody/entity_query_-_empty
+=== RUN   TestAttack_EmptyRequestBody/relationships_query_-_empty
+=== RUN   TestAttack_EmptyRequestBody/path_search_-_empty
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestAttack_EmptyRequestBody (0.00s)
+    --- PASS: TestAttack_EmptyRequestBody/entity_query_-_empty (0.00s)
+    --- PASS: TestAttack_EmptyRequestBody/relationships_query_-_empty (0.00s)
+    --- PASS: TestAttack_EmptyRequestBody/path_search_-_empty (0.00s)
+=== RUN   TestGraphQueryStartRegistersStableLocalSearchResponder
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR query failed error="community index is not ready"
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestGraphQueryStartRegistersStableLocalSearchResponder (0.00s)
+=== RUN   TestComponent_Meta_ReturnsCorrectMetadata
+--- PASS: TestComponent_Meta_ReturnsCorrectMetadata (0.00s)
+=== RUN   TestComponent_InputPorts_ReturnsNATSRequestPorts
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+--- PASS: TestComponent_InputPorts_ReturnsNATSRequestPorts (0.00s)
+=== RUN   TestComponent_OutputPorts_ReturnsEmpty
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+--- PASS: TestComponent_OutputPorts_ReturnsEmpty (0.00s)
+=== RUN   TestComponent_ConfigSchema_ReturnsValidSchema
+--- PASS: TestComponent_ConfigSchema_ReturnsValidSchema (0.00s)
+=== RUN   TestComponent_Health_NotStarted
+--- PASS: TestComponent_Health_NotStarted (0.00s)
+=== RUN   TestComponent_DataFlow_ReturnsMetrics
+--- PASS: TestComponent_DataFlow_ReturnsMetrics (0.00s)
+=== RUN   TestComponent_Initialize_Success
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+--- PASS: TestComponent_Initialize_Success (0.00s)
+=== RUN   TestComponent_Initialize_InvalidConfig
+--- PASS: TestComponent_Initialize_InvalidConfig (0.00s)
+=== RUN   TestComponent_Start_Success
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_Start_Success (0.00s)
+=== RUN   TestComponent_Start_BeforeInitialize
+--- PASS: TestComponent_Start_BeforeInitialize (0.00s)
+=== RUN   TestComponent_Start_AlreadyStarted
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_Start_AlreadyStarted (0.00s)
+=== RUN   TestComponent_Stop_Success
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_Stop_Success (0.00s)
+=== RUN   TestComponent_Stop_BeforeStart
+--- PASS: TestComponent_Stop_BeforeStart (0.00s)
+=== RUN   TestComponent_QueryEntity_PassthroughSuccess
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_QueryEntity_PassthroughSuccess (0.00s)
+=== RUN   TestComponent_QueryEntity_ComponentUnavailable
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR query failed error="nats: timeout"
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_QueryEntity_ComponentUnavailable (0.00s)
+=== RUN   TestComponent_QueryEntity_InvalidRequest
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_QueryEntity_InvalidRequest (0.00s)
+=== RUN   TestComponent_QueryRelationships_TransformSuccess
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_QueryRelationships_TransformSuccess (0.00s)
+=== RUN   TestComponent_PathSearch_SimpleTraversal
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_SimpleTraversal (0.00s)
+=== RUN   TestComponent_PathSearch_MaxDepthEnforced
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_MaxDepthEnforced (0.00s)
+=== RUN   TestComponent_PathSearch_ContextCancellation
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR query failed error="query entity server error: context canceled"
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_ContextCancellation (0.00s)
+=== RUN   TestComponent_PathSearch_Timeout
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR query failed error="query entity server error: context deadline exceeded"
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_Timeout (0.00s)
+=== RUN   TestComponent_PathSearch_StartEntityNotFound
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR query failed error="query entity server error: entity not found"
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_StartEntityNotFound (0.00s)
+=== RUN   TestComponent_PathSearch_CyclicGraph
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_CyclicGraph (0.00s)
+=== RUN   TestComponent_RespectsContext_Cancellation
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_RespectsContext_Cancellation (0.00s)
+=== RUN   TestComponent_RespectsContext_Timeout
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_RespectsContext_Timeout (0.00s)
+=== RUN   TestComponent_PathSearch_DirectionIncoming
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_DirectionIncoming (0.00s)
+=== RUN   TestComponent_PathSearch_DirectionBoth
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_DirectionBoth (0.00s)
+=== RUN   TestComponent_PathSearch_PredicateFilter_Single
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_PredicateFilter_Single (0.00s)
+=== RUN   TestComponent_PathSearch_PredicateFilter_NoMatch
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_PredicateFilter_NoMatch (0.00s)
+=== RUN   TestComponent_PathSearch_MaxPathsLimit
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestComponent_PathSearch_MaxPathsLimit (0.00s)
+=== RUN   TestGraphQueryOwnerSetupAssertionExit
+--- PASS: TestGraphQueryOwnerSetupAssertionExit (0.04s)
+=== RUN   TestGraphQueryOwnerAssertionExitAndCleanupErrors
+=== RUN   TestGraphQueryOwnerAssertionExitAndCleanupErrors/caller-exit
+=== RUN   TestGraphQueryOwnerAssertionExitAndCleanupErrors/cleanup-error
+=== RUN   TestGraphQueryOwnerAssertionExitAndCleanupErrors/fence-error
+--- PASS: TestGraphQueryOwnerAssertionExitAndCleanupErrors (0.10s)
+    --- PASS: TestGraphQueryOwnerAssertionExitAndCleanupErrors/caller-exit (0.03s)
+    --- PASS: TestGraphQueryOwnerAssertionExitAndCleanupErrors/cleanup-error (0.03s)
+    --- PASS: TestGraphQueryOwnerAssertionExitAndCleanupErrors/fence-error (0.04s)
+=== RUN   TestGraphQueryOwnerChildFixture
+--- PASS: TestGraphQueryOwnerChildFixture (0.00s)
+=== RUN   TestGraphQueryOwnerTerminalExpiryAndIndependentAuthority
+1999/12/31 18:00:00 INFO graph-query coordinator initialized
+1999/12/31 18:00:00 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+1999/12/31 18:00:00 ERROR community generation supervisor has no catalog reader opener
+1999/12/31 18:00:00 INFO graph-query coordinator started
+1999/12/31 18:00:00 ERROR community summary view supervisor has no catalog reader opener
+1999/12/31 18:00:06 INFO graph-query coordinator stopped
+--- PASS: TestGraphQueryOwnerTerminalExpiryAndIndependentAuthority (0.00s)
+=== RUN   TestGraphQueryOwnerEndedOperationStillAttemptsTerminal
+2026/09/30 05:04:20 INFO graph-query coordinator initialized
+2026/09/30 05:04:20 INFO query handlers registered subjects="[graph.query.entity graph.query.entityByAlias graph.query.batch graph.query.relationships graph.query.pathSearch graph.query.hierarchyStats graph.query.prefix graph.query.spatial graph.query.temporal graph.query.semantic graph.query.similar graph.query.globalSearch graph.query.summary graph.query.searchGraph graph.query.byName graph.query.localSearch]"
+2026/09/30 05:04:20 INFO graph-query coordinator started
+2026/09/30 05:04:20 ERROR community generation supervisor has no catalog reader opener
+2026/09/30 05:04:20 ERROR community summary view supervisor has no catalog reader opener
+2026/09/30 05:04:20 INFO graph-query coordinator stopped
+--- PASS: TestGraphQueryOwnerEndedOperationStillAttemptsTerminal (0.00s)
+=== RUN   TestGraphQueryOwnerFailedStartCleanupIsNotRetried
+--- PASS: TestGraphQueryOwnerFailedStartCleanupIsNotRetried (0.00s)
+PASS
+ok  	github.com/c360studio/semstreams/processor/graph-query	1.669s
+real 2.63
+user 1.15
+sys 2.33

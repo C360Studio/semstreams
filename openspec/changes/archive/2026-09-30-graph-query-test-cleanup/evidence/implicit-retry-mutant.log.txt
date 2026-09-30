@@ -1,0 +1,16 @@
+command: go test -race -count=1 -run ^TestGraphQueryOwnerFailedStartCleanupIsNotRetried$ -v ./processor/graph-query
+exit: 1
+wall_seconds: 2.465
+=== RUN   TestGraphQueryOwnerFailedStartCleanupIsNotRetried
+    test_owner_proof_test.go:178: 
+        	Error Trace:	/Users/coby/.codex/worktrees/gh1421-owner-load/semstreams/processor/graph-query/test_owner_proof_test.go:178
+        	            				/Users/coby/.codex/worktrees/gh1421-owner-load/semstreams/processor/graph-query/test_owner_proof_test.go:182
+        	Error:      	Not equal: 
+        	            	expected: 1
+        	            	actual  : 2
+        	Test:       	TestGraphQueryOwnerFailedStartCleanupIsNotRetried
+        	Messages:   	one concrete terminal attempt
+--- FAIL: TestGraphQueryOwnerFailedStartCleanupIsNotRetried (0.00s)
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/graph-query	0.396s
+FAIL

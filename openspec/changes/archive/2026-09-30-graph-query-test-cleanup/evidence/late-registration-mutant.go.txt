@@ -245,7 +245,6 @@ func TestGraphQueryStartRegistersStableLocalSearchResponder(t *testing.T) {
 	defer cancelOperation()
 	owner := newGraphQueryTestOwner(comp)
 	startCtx := owner.startContext(operationCtx)
-	defer owner.finish(operationCtx, startCtx, false, t)
 	if mode := os.Getenv(graphQueryOwnerChildEnv); mode != "" {
 		if err := graphQueryOwnerChildRequest(mode, os.Args[1:]); err != nil {
 			t.Fatal(err)

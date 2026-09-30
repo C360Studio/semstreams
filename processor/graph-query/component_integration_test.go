@@ -5,6 +5,7 @@ package graphquery
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,8 @@ func TestIntegration_ComponentLifecycle(t *testing.T) {
 
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
 	// Create component
 	config := DefaultConfig()
@@ -50,25 +53,139 @@ func TestIntegration_ComponentLifecycle(t *testing.T) {
 	// Type assert to access component-specific fields
 	graphQuery, ok := comp.(*Component)
 	require.True(t, ok, "component should be *Component type")
+	owner := newGraphQueryTestOwner(graphQuery)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 
-	// Test lifecycle
-	ctx := context.Background()
+	// The real NATS responder holds one admitted callback while Stop drains.
+	entered := make(chan context.Context, 1)
+	release := make(chan struct{})
+	completed := make(chan struct{})
+	var releaseOnce sync.Once
+	graphQuery.subscribeForRequests = func(ctx context.Context, subject string,
+		handler func(context.Context, []byte) ([]byte, error)) (*natsclient.Subscription, error) {
+		if subject != "graph.query.entity" {
+			return natsClient.SubscribeForRequests(ctx, subject, handler)
+		}
+		return natsClient.SubscribeForRequests(ctx, subject, func(callbackCtx context.Context, data []byte) ([]byte, error) {
+			entered <- callbackCtx
+			<-release
+			defer close(completed)
+			return handler(callbackCtx, data)
+		})
+	}
 
-	// Initialize
-	err = graphQuery.Initialize()
-	assert.NoError(t, err)
+	// Preserve the lifecycle and health assertions on the production constructor.
+	require.NoError(t, graphQuery.Initialize())
+	require.NoError(t, graphQuery.Start(startCtx))
+	assert.True(t, graphQuery.Health().Healthy, "component should be healthy after start")
+	runtimeDone := graphQuery.runtimeDone
+	require.NotNil(t, runtimeDone)
 
-	// Start
-	err = graphQuery.Start(ctx)
-	assert.NoError(t, err)
+	requestResult := make(chan error, 1)
+	stopResult := make(chan error, 1)
+	requestStarted, stopStarted := false, false
+	requestJoined, stopJoined := false, false
+	// Own both tasks before launching either. A fatal admission wait still
+	// releases a late callback and joins the request before fixture teardown.
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		if stopStarted && !stopJoined {
+			var stopErr error
+			select {
+			case stopErr = <-stopResult:
+			case <-time.After(7 * time.Second):
+				t.Error("native Stop task exceeded failure-cleanup join budget; waiting for ownership resolution")
+				stopErr = <-stopResult // Never race fixture finalization with a live Stop task.
+			}
+			if stopErr != nil {
+				t.Errorf("native Stop failed during failure cleanup: %v", stopErr)
+			}
+			stopJoined = true
+		}
+		if requestStarted && !requestJoined {
+			select {
+			case <-requestResult:
+			case <-time.After(7 * time.Second):
+				t.Error("native request task exceeded failure-cleanup join budget; waiting for ownership resolution")
+				<-requestResult
+			}
+			requestJoined = true
+		}
+	}()
+	requestStarted = true
+	go func() {
+		_, requestErr := natsClient.Request(operationCtx, "graph.query.entity", []byte("{"), 5*time.Second)
+		requestResult <- requestErr
+	}()
+	var callbackCtx context.Context
+	select {
+	case callbackCtx = <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("native responder callback was not admitted")
+	}
 
-	// Check health
-	health := graphQuery.Health()
-	assert.True(t, health.Healthy, "component should be healthy after start")
+	stopStarted = true
+	go func() { stopResult <- owner.stop(operationCtx, startCtx, false) }()
 
-	// Stop
-	err = graphQuery.Stop(context.Background())
-	assert.NoError(t, err)
+	// There is no drain-entry signal; the lock-protected stopping state is the
+	// production observation. The short ticker only bounds observation.
+	observedStopping := false
+	observation := time.NewTicker(5 * time.Millisecond)
+	defer observation.Stop()
+	observationDeadline := time.NewTimer(2 * time.Second)
+	defer observationDeadline.Stop()
+	for !observedStopping {
+		graphQuery.lifecycleMu.Lock()
+		observedStopping = graphQuery.stopping
+		graphQuery.lifecycleMu.Unlock()
+		if observedStopping {
+			break
+		}
+		select {
+		case early := <-stopResult:
+			stopJoined = true
+			t.Fatalf("Stop returned before admitted callback completed: %v", early)
+		case <-observation.C:
+		case <-observationDeadline.C:
+			t.Fatal("Stop did not enter the terminal phase while callback was held")
+		}
+	}
+	select {
+	case early := <-stopResult:
+		stopJoined = true
+		t.Fatalf("Stop returned before admitted callback completed: %v", early)
+	default:
+	}
+	require.NoError(t, callbackCtx.Err(), "admitted callback authority must remain live during drain")
+	require.NoError(t, startCtx.Err(), "accepted Start authority must remain live during drain")
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-completed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("admitted callback did not complete after release")
+	}
+	select {
+	case err = <-stopResult:
+		stopJoined = true
+	case <-time.After(7 * time.Second):
+		t.Fatal("Stop did not return after admitted callback completed")
+	}
+	require.NoError(t, err)
+	select {
+	case <-runtimeDone:
+	default:
+		t.Fatal("component runtime was not joined when Stop returned")
+	}
+	select {
+	case <-requestResult:
+		requestJoined = true
+	case <-time.After(2 * time.Second):
+		t.Fatal("native request did not finish after callback completion")
+	}
+	require.NoError(t, operationCtx.Err())
+	require.NoError(t, natsClient.Publish(operationCtx, "graph.query.test.cleanup-order", nil),
+		"NATS substrate must remain usable until component Stop completes")
 }
 
 func TestIntegration_ComponentDiscovery(t *testing.T) {
@@ -176,6 +293,8 @@ func TestIntegration_MetricsTracking(t *testing.T) {
 
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
 	// Create and start component
 	config := DefaultConfig()
@@ -190,11 +309,12 @@ func TestIntegration_MetricsTracking(t *testing.T) {
 	require.NoError(t, err)
 
 	graphQuery := comp.(*Component)
+	owner := newGraphQueryTestOwner(graphQuery)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, graphQuery.Initialize())
 
-	ctx := context.Background()
-	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(context.Background())
+	require.NoError(t, graphQuery.Start(startCtx))
 
 	// Get initial metrics
 	metrics := graphQuery.DataFlow()
@@ -210,6 +330,8 @@ func TestIntegration_PathSearch_Structure(t *testing.T) {
 
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
 	// Create and start component
 	config := DefaultConfig()
@@ -224,11 +346,13 @@ func TestIntegration_PathSearch_Structure(t *testing.T) {
 	require.NoError(t, err)
 
 	graphQuery := comp.(*Component)
+	owner := newGraphQueryTestOwner(graphQuery)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, graphQuery.Initialize())
 
-	ctx := context.Background()
-	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(context.Background())
+	ctx := operationCtx
+	require.NoError(t, graphQuery.Start(startCtx))
 
 	// Test PathSearch request structure
 	req := PathSearchRequest{
@@ -264,9 +388,11 @@ func TestIntegration_GraphRAGLifecycle(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	ctx := context.Background()
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	ctx := operationCtx
 
 	// Get JetStream for bucket operations
 	js, err := natsClient.JetStream()
@@ -289,13 +415,15 @@ func TestIntegration_GraphRAGLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	graphQuery := comp.(*Component)
+	owner := newGraphQueryTestOwner(graphQuery)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	published := make(chan uint64, 1)
 	graphQuery.communityPublished = func(generation uint64) { published <- generation }
 	require.NoError(t, graphQuery.Initialize())
 
 	// Start component - COMMUNITY_INDEX doesn't exist yet
-	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(context.Background())
+	require.NoError(t, graphQuery.Start(startCtx))
 
 	// Verify GraphRAG is disabled initially (community cache should not be ready)
 	assert.Nil(t, graphQuery.communityCache.acquire(),
@@ -338,9 +466,11 @@ func TestIntegration_GraphRAGOrderlyCancellation(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	ctx := context.Background()
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	ctx := operationCtx
 
 	js, err := natsClient.JetStream()
 	require.NoError(t, err)
@@ -366,6 +496,9 @@ func TestIntegration_GraphRAGOrderlyCancellation(t *testing.T) {
 	require.NoError(t, err)
 
 	graphQuery := comp.(*Component)
+	owner := newGraphQueryTestOwner(graphQuery)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	published := make(chan uint64, 2)
 	unpublished := make(chan uint64, 1)
 	retryCalled := make(chan struct{}, 1)
@@ -376,7 +509,7 @@ func TestIntegration_GraphRAGOrderlyCancellation(t *testing.T) {
 		return false
 	}
 	require.NoError(t, graphQuery.Initialize())
-	require.NoError(t, graphQuery.Start(ctx))
+	require.NoError(t, graphQuery.Start(startCtx))
 
 	var firstGeneration uint64
 	select {
@@ -391,7 +524,7 @@ func TestIntegration_GraphRAGOrderlyCancellation(t *testing.T) {
 	require.NoError(t, err, "global search should work initially")
 	require.NotNil(t, resp)
 
-	require.NoError(t, graphQuery.Stop(context.Background()))
+	require.NoError(t, owner.stop(operationCtx, startCtx, false))
 	select {
 	case revokedGeneration := <-unpublished:
 		require.Equal(t, firstGeneration, revokedGeneration)
@@ -414,9 +547,11 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	ctx := context.Background()
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	ctx := operationCtx
 
 	js, err := natsClient.JetStream()
 	require.NoError(t, err)
@@ -488,9 +623,11 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 	require.NoError(t, err)
 
 	graphQuery := comp.(*Component)
+	owner := newGraphQueryTestOwner(graphQuery)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, graphQuery.Initialize())
-	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(context.Background())
+	require.NoError(t, graphQuery.Start(startCtx))
 
 	// Wait for community cache to be ready and populated
 	require.Eventually(t, func() bool {
@@ -554,9 +691,11 @@ func TestIntegration_EnrichGlobalResponse(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	ctx := context.Background()
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	ctx := operationCtx
 
 	js, err := natsClient.JetStream()
 	require.NoError(t, err)
@@ -607,9 +746,11 @@ func TestIntegration_EnrichGlobalResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	graphQuery := comp.(*Component)
+	owner := newGraphQueryTestOwner(graphQuery)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, graphQuery.Initialize())
-	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(context.Background())
+	require.NoError(t, graphQuery.Start(startCtx))
 
 	// Wait for community cache
 	require.Eventually(t, func() bool {
@@ -654,9 +795,10 @@ func TestIntegration_StaticRouting(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	ctx := context.Background()
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
 	// Create and start graph-query
 	config := DefaultConfig()
@@ -671,9 +813,11 @@ func TestIntegration_StaticRouting(t *testing.T) {
 	require.NoError(t, err)
 
 	graphQuery := comp.(*Component)
+	owner := newGraphQueryTestOwner(graphQuery)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, graphQuery.Initialize())
-	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(context.Background())
+	require.NoError(t, graphQuery.Start(startCtx))
 
 	// Verify static routing works for known query types
 	subject := graphQuery.router.Route("entity")
@@ -701,9 +845,11 @@ func TestIntegration_CommunityCacheCrossLevelCollision(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	ctx := context.Background()
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	ctx := operationCtx
 
 	js, err := natsClient.JetStream()
 	require.NoError(t, err)
@@ -738,9 +884,11 @@ func TestIntegration_CommunityCacheCrossLevelCollision(t *testing.T) {
 	require.NoError(t, err)
 
 	graphQuery := comp.(*Component)
+	owner := newGraphQueryTestOwner(graphQuery)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, graphQuery.Initialize())
-	require.NoError(t, graphQuery.Start(ctx))
-	defer graphQuery.Stop(context.Background())
+	require.NoError(t, graphQuery.Start(startCtx))
 
 	require.Eventually(t, func() bool { return graphQuery.communityCache.acquire() != nil },
 		5*time.Second, 50*time.Millisecond, "community cache must complete initial sync")

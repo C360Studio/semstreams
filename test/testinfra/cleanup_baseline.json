@@ -1416,279 +1416,6 @@
       "owner_issue": "#1064"
     },
     {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_ConcurrentHealthChecks|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "d8628907d833462e7e3cf2b13dcd4c4cc13f74c06198c818cf519a082eddb659",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_ConcurrentMetricsAccess|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "d8628907d833462e7e3cf2b13dcd4c4cc13f74c06198c818cf519a082eddb659",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_DeeplyNestedJSON|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_EmptyRequestBody|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_MalformedJSON|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_MissingEntityID|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_MissingStartEntity|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_PathSearchEmptyStartEntity|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_PathSearchExcessiveMaxDepth|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_VeryLongEntityID|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/attack_test.go|TestAttack_ZeroMaxDepth|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/batch_passthrough_integration_test.go|TestIntegration_BatchQueryPassthrough_ForwardsToGraphIngest|cleanup|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "104822045cfabf6b038e8b8a59e2d40f962efbb84385b9555837213b22e515ba",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/batch_passthrough_integration_test.go|TestIntegration_BatchQueryPassthrough_RejectsMalformedRequest|cleanup|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "104822045cfabf6b038e8b8a59e2d40f962efbb84385b9555837213b22e515ba",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_integration_test.go|TestIntegration_AnswerSynthesis|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "88f2328595ae9ff080895464102e9855dc8a81781d02e9f943dbf9a346c41988",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_integration_test.go|TestIntegration_CommunityCacheCrossLevelCollision|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "88f2328595ae9ff080895464102e9855dc8a81781d02e9f943dbf9a346c41988",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_integration_test.go|TestIntegration_EnrichGlobalResponse|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "88f2328595ae9ff080895464102e9855dc8a81781d02e9f943dbf9a346c41988",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_integration_test.go|TestIntegration_GraphRAGLifecycle|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "88f2328595ae9ff080895464102e9855dc8a81781d02e9f943dbf9a346c41988",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_integration_test.go|TestIntegration_MetricsTracking|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "88f2328595ae9ff080895464102e9855dc8a81781d02e9f943dbf9a346c41988",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_integration_test.go|TestIntegration_PathSearch_Structure|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "88f2328595ae9ff080895464102e9855dc8a81781d02e9f943dbf9a346c41988",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_integration_test.go|TestIntegration_StaticRouting|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "88f2328595ae9ff080895464102e9855dc8a81781d02e9f943dbf9a346c41988",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_ContextCancellation|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_CyclicGraph|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_DirectionBoth|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_DirectionIncoming|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_MaxDepthEnforced|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_MaxPathsLimit|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_PredicateFilter_NoMatch|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_PredicateFilter_Single|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_SimpleTraversal|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_StartEntityNotFound|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_PathSearch_Timeout|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_QueryEntity_ComponentUnavailable|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_QueryEntity_InvalidRequest|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_QueryEntity_PassthroughSuccess|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_QueryRelationships_TransformSuccess|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "b5379b3fa65c13764d18442df9857775ec52a3fe64fbee3988b2628716a4b491",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_Start_AlreadyStarted|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "d8628907d833462e7e3cf2b13dcd4c4cc13f74c06198c818cf519a082eddb659",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestComponent_Start_Success|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "d8628907d833462e7e3cf2b13dcd4c4cc13f74c06198c818cf519a082eddb659",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/component_test.go|TestGraphQueryStartRegistersStableLocalSearchResponder|cleanup|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "a076933141a0fed6b557ac001c085fabafeeb7634aed97e3f829cced64bd5dd1",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
-      "identity": "processor/graph-query/summary_bucket_late_attach_integration_test.go|TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches|defer|github.com/c360studio/semstreams/processor/graph-query.Stop|*github.com/c360studio/semstreams/processor/graph-query.Component|unbounded|1",
-      "fingerprint": "0fc97b9adeccfe4e36b9c78e1e57622f7c2fea66f88ec0d7fa49dde02baff170",
-      "classification": "unbounded-terminal-cleanup",
-      "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
-      "owner_issue": "#1064"
-    },
-    {
       "identity": "processor/json_filter/json_filter_integration_test.go|TestIntegration_ContainsOperator|defer|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unbounded|1",
       "fingerprint": "049fb92a85e0ecccbd81f3223bdd64b4b8bd06fcf239b22f3f2585022378efd3",
       "classification": "unbounded-terminal-cleanup",
@@ -3512,6 +3239,42 @@
           "path": "processor/graph-ingest/test_owner_support_test.go",
           "declaration": "graphIngestTestOwner.finish",
           "fingerprint": "7c09d338f13fda8611e6eb4c42456ff8f2750f48323a0fcf071f3174621a40e3"
+        }
+      ]
+    },
+    {
+      "identity": "processor/graph-query/test_owner_support_test.go|(*graphQueryTestOwner).stop|defer|o.cancelStart|unresolved callback|unknown|1",
+      "site_fingerprint": "07b402a848f099f4d1cd16737188ce3e05fdee4c127658aac047156674bca763",
+      "classification": "non-lifecycle-stop",
+      "question": "function-valued selector target unresolved on cleanup path",
+      "reason": "The private cancelStart field is assigned only the cancel returned by context.WithCancel in startContext. stop invokes that verified cancel after the synchronous concrete terminal attempt; it does not invoke another lifecycle Stop.",
+      "owner_issue": "#1433",
+      "reviewer": "semstreams-reviewer (/root/gh1421_inventory_review), 2026-09-30; #1433 exact source review",
+      "dependencies": [
+        {
+          "path": "processor/graph-query/test_owner_support_test.go",
+          "declaration": "graphQueryTestOwner",
+          "fingerprint": "20842631875dffd3565d4f8b04d42a618b7bfd7cafa0bf280fabbbf88f3cc9eb"
+        },
+        {
+          "path": "processor/graph-query/test_owner_support_test.go",
+          "declaration": "newGraphQueryTestOwner",
+          "fingerprint": "dfbe63bdb471c66f2ebe1671ee4a949b0ae03d8af7ee0d981197706ce9639e2b"
+        },
+        {
+          "path": "processor/graph-query/test_owner_support_test.go",
+          "declaration": "graphQueryTestOwner.startContext",
+          "fingerprint": "0cea0964998e6366764975557471e4ce159d28bb06290c9bf86d31390328efa5"
+        },
+        {
+          "path": "processor/graph-query/test_owner_support_test.go",
+          "declaration": "graphQueryTestOwner.stop",
+          "fingerprint": "469faae8f6e49b5f2687cfbd4234a1457f9297a66376f682744cb836cb6a2353"
+        },
+        {
+          "path": "processor/graph-query/test_owner_support_test.go",
+          "declaration": "graphQueryTestOwner.finish",
+          "fingerprint": "0ab0b9a3b4729ac98565d5829bc34ff6c0bad98765865e5f13b2abc65211833f"
         }
       ]
     },
