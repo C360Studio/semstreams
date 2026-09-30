@@ -28,7 +28,8 @@ stage assert the outcome it exists to detect or leave the per-PR variants, so th
   request.
 - `e2e-ladder.yml` gains the per-PR job `e2e semantic (path-only)` in the shape the measurement supports (registry
   login, port reservation, timeout), and the `gh#1117 MEASUREMENT ONLY` job on this branch is deleted
-  in the same commit. Expected cost about 5 min; ladder critical path from about 4 min to about 5.
+  in the same commit. Expected cost about 5 min (measured 4m17s and 4m30s on the PR's first two path-only runs,
+  36728438332 and 36732308747); ladder critical path from about 4 min to about 4.5.
 - The dangling `TODO` about the semantic gate and its baton reference are deleted (scope box 5); the tracking is #1117.
 - Docs: the tier table in `docs/contributing/02-e2e-tests.md` and the taskfile `desc` say which stages the per-PR
   semantic run skips and why; the ~90s figure is corrected in this change at every site.

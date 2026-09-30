@@ -30,10 +30,11 @@
       `includeSummaries:false` / `summarizeThreshold:0` recorded `graphql_gateway_search_hits` = 0 (evidence § 1)
       before the gate's scope was written. Final scope: semantic only; statistical measured 0 locally (evidence § 1),
       filed as #1441, recorded in the row comment (owner, 2026-09-30); a second unit case pins the statistical
-      exemption. Measured on the PR's ladder run (36728438332), semantic: one attempt,
-      `graphql_gateway_search_hits` 30, `graphql_gateway_latency_ms` 7998, `graphql_gateway_readiness_wait_ms` 8000,
-      `graphql_gateway_index_not_ready_retries` 0, strategy `graphrag`; the ~8 s cause is unattributed (a cold semembed
-      query embedding is a hypothesis, not verified); ~7× headroom against the 60 s client timeout.
+      exemption. Measured on the PR's first two ladder runs (36728438332, 36732308747), semantic: one attempt
+      each, `graphql_gateway_search_hits` 30, `graphql_gateway_latency_ms` 7998 and 10011,
+      `graphql_gateway_readiness_wait_ms` 8000 and 10014, `graphql_gateway_index_not_ready_retries` 0, strategy
+      `graphrag`; the 8-10 s cause is unattributed (a cold semembed query embedding is a hypothesis, not verified); ~6×
+      headroom against the 60 s client timeout on the slower sample.
 - [ ] 2.4 `e2e-ladder.yml`: job `e2e-semantic` per D5 (no artifact step) replaces `e2e-semantic-measure` in the same
   commit; header `:21-30` rewritten. Evidence: `! git grep -q 'MEASUREMENT ONLY' -- .github/` and `! git grep -q
   prev1-program -- .github/` both exit 0; the PR's ladder shows the job once.
@@ -44,7 +45,8 @@
 - [ ] 2.6 PR #1425's own ladder run: `e2e semantic (path-only)` green once; read from its log the `[PATH-ONLY]
   skipping 3 quality stages` line and the `[41/41]` counter (the wiring evidence for the `Execute` branch, beyond the
   unit test) and the job's wall-clock; record them on #1117; replace the "~5 min" prediction in the three doc sites
-  with the measured number.
+  with the measured number. Second sample: run 36732308747 at `0912fe29` (the head with `stagesToRun` and the print
+  guard), 4m30s, one `[PATH-ONLY]` line, `[41/41]` (evidence § 10; #1117 comment 2026-09-30).
 - [ ] 2.7 Review through the reviewer contract; owner rulings R1-R7 applied as ruled; owner acceptance on #1117.
 
 Landing tasks (archive, spec sync, ticks) live on the PR checklist per the #1230 ruling, not here.

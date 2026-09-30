@@ -132,7 +132,7 @@ ok  	github.com/c360studio/semstreams/cmd/e2e	0.299s
 ```
 
 Not unit-covered: the one-line copy `cfg.PathOnly = flags.pathOnly` in `createScenario`'s tiered case (the scenario's
-config is unexported to `cmd/e2e`). Its evidence is the same task 2.6 log read as § 4's `Execute` branch: a
+config is unexported to `cmd/e2e`). Its evidence is the same task 2.6 log read as § 4's `stagesToRun` call in `Execute`: a
 `[PATH-ONLY]` line and `[41/41]` exist only if the env reached the flag, the flag reached the config, and the config
 reached `Execute`.
 
@@ -232,3 +232,31 @@ openspec validate e2e-semantic-path-only-gate --strict  → Change 'e2e-semantic
 task spec:properties                                    → spec-properties: 465/465 citations resolve.
 actionlint .github/workflows/e2e-ladder.yml             → exit 0
 ```
+
+## § 10 Second path-only CI run (head `0912fe29`) and review round 2
+
+PR #1425's E2E Ladder run 36732308747 at `0912fe29`, job `e2e semantic (path-only)`: success, 14:51:50Z → 14:56:20Z
+(4m30s wall-clock). This is the first CI run of the `stagesToRun` call in `Execute` and of the `len(skipped) > 0` print
+guard (both from the round-1 fixes), so it is the wiring evidence for them and for the `cfg.PathOnly` copy. Verbatim
+lines from `gh run view --job 109944885309 --log` (timestamps kept), then the scenario metrics:
+
+```
+2026-09-30T14:55:25.5802979Z [PATH-ONLY] skipping 3 quality stages: validate-llm-enhancement, validate-thematic-answer-eval, validate-globalsearch-known-answer
+2026-09-30T14:55:25.5805154Z [1/41] verify-components starting...
+2026-09-30T14:55:38.4238678Z [28/41] test-http-gateway completed in 10.014050339s
+2026-09-30T14:55:56.1401671Z [31/41] validate-community-structure completed in 17.635691432s
+2026-09-30T14:55:56.7799085Z [41/41] verify-outputs completed in 721.965µs
+Scenario completed successfully duration=31.224628629s
+graphql_gateway_index_not_ready_retries:0
+graphql_gateway_latency_ms:10011
+graphql_gateway_readiness_wait_ms:10014
+graphql_gateway_search_hits:30
+```
+
+Compared with run 36728438332 (§ 9): job 4m17s → 4m30s, scenario 26.19 s → 31.22 s, `test-http-gateway` 8.00 s →
+10.01 s (one attempt, zero not-ready retries both times), `validate-community-structure` 17.1 s → 17.6 s, hits 30 both.
+The `[PATH-ONLY]` line occurs once; no `/44]` counter appears in the log.
+
+Review round 2 (PR #1425 comment, 2026-09-30): APPROVE; M1-M4, N1-N2 verified fixed or honestly recorded; the M1 mutation
+re-derived in a `git archive` copy (restore matched `7991775a…683471`); four nits folded into this commit (this section,
+the second gateway sample in D4/D6/task 2.3, the proposal's cost line, the § 4 wording below, `CLAUDE.md:52`).
