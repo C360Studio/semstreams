@@ -81,7 +81,7 @@ func applyScenarioPreset(server *mock.OpenAIServer, scenario string) {
 		server.WithRoleToolCallSequence([]mock.RoleToolCall{{
 			Marker:                "inspect configured mock model endpoint",
 			ToolName:              "query_entity",
-			Args:                  map[string]any{"entity_id": mock.ObservedEntityIDPlaceholder},
+			Args:                  map[string]any{},
 			ObserveEntityIDSuffix: "model-registry.agent.endpoint.mock",
 			OnlyBeforeToolResult:  true,
 		}})

@@ -939,7 +939,7 @@ func TestOpenAIServer_RoleToolCallObservesRuntimeEntityID(t *testing.T) {
 	server := NewOpenAIServer().WithRoleToolCallSequence([]RoleToolCall{{
 		Marker:                "inspect configured mock model endpoint",
 		ToolName:              "query_entity",
-		Args:                  map[string]any{"entity_id": ObservedEntityIDPlaceholder},
+		Args:                  map[string]any{},
 		ObserveEntityIDSuffix: "model-registry.agent.endpoint.mock",
 	}})
 	if err := server.Start(":0"); err != nil {
@@ -963,11 +963,12 @@ func TestOpenAIServer_RoleToolCallObservesRuntimeEntityID(t *testing.T) {
 
 	request.Messages[0].Content = "inspect configured mock model endpoint c360.logistics.sensor.environmental.temperature.temp-sensor-001"
 	response = makeRequest(t, server.URL()+"/v1/chat/completions", request)
+	args = nil
 	if err := json.Unmarshal([]byte(response.Choices[0].Message.ToolCalls[0].Function.Arguments), &args); err != nil {
 		t.Fatal(err)
 	}
-	if args["entity_id"] != ObservedEntityIDPlaceholder {
-		t.Fatalf("wrong-suffix request selected entity_id = %q, want unresolved marker", args["entity_id"])
+	if _, found := args["entity_id"]; found {
+		t.Fatalf("wrong-suffix request selected entity_id = %q, want no target", args["entity_id"])
 	}
 }
 
@@ -977,7 +978,7 @@ func TestOpenAIServer_FirstTurnRoleToolCallYieldsToCompletedTool(t *testing.T) {
 		WithRoleToolCallSequence([]RoleToolCall{{
 			Marker:                "inspect configured mock model endpoint",
 			ToolName:              "query_entity",
-			Args:                  map[string]any{"entity_id": ObservedEntityIDPlaceholder},
+			Args:                  map[string]any{},
 			ObserveEntityIDSuffix: "model-registry.agent.endpoint.mock",
 			OnlyBeforeToolResult:  true,
 		}})

@@ -174,8 +174,9 @@ type RoleToolCall struct {
 	// Args is serialised to JSON and placed on ToolCall.Function.Arguments.
 	// Must be non-nil for JSON marshal to produce "{}" at minimum.
 	Args map[string]any
-	// ObserveEntityIDSuffix resolves ObservedEntityIDPlaceholder in Args
-	// from a canonical ID carried by this request's system or user prompt.
+	// ObserveEntityIDSuffix fills the entity_id argument from a canonical ID
+	// carried by this request's system or user prompt. On a miss, the mock
+	// omits entity_id so the tool refuses the request instead of guessing.
 	ObserveEntityIDSuffix string
 	// OnlyBeforeToolResult limits this script to the initial tool turn.
 	// Other role scripts retain their existing multi-turn sequence behavior.
@@ -642,11 +643,24 @@ func (s *OpenAIServer) tryRoleToolCall(req ChatCompletionRequest) (ChatCompletio
 		return ChatCompletionResponse{}, false
 	}
 
-	argsJSON, err := json.Marshal(entry.Args)
+	args := make(map[string]any, len(entry.Args)+1)
+	for name, value := range entry.Args {
+		args[name] = value
+	}
+	if entry.ObserveEntityIDSuffix != "" {
+		delete(args, "entity_id")
+		observed := findEntityIDBySuffix(req.Messages, entry.ObserveEntityIDSuffix)
+		if observed == "" {
+			log.Printf("mock openai: no entity ID ending in %q appears in the request; omitting entity_id",
+				"."+entry.ObserveEntityIDSuffix)
+		} else {
+			args["entity_id"] = observed
+		}
+	}
+	argsJSON, err := json.Marshal(args)
 	if err != nil {
 		argsJSON = []byte("{}")
 	}
-	argsJSON = []byte(resolveObservedEntityID(string(argsJSON), entry.ObserveEntityIDSuffix, req.Messages))
 	// Advance only when we're actually about to return this entry —
 	// otherwise repeated failed matches would burn the cursor.
 	if s.roleToolCallIndex < len(s.roleToolCalls) {
