@@ -114,3 +114,24 @@ func TestPathOnlySkips_NonSemanticVariantsAreUnchanged(t *testing.T) {
 		require.Equal(t, stageNames(full), stageNames(kept), "%s: list unchanged under PathOnly", variant)
 	}
 }
+
+// spec: e2e-tiered-scenario / The semantic path-only run skips its declared quality stages and logs them as skipped
+// The list Execute runs comes from stagesToRun, so this pins the PathOnly branch
+// itself, not only the filter it calls.
+func TestStagesToRun_PathOnlySelectsTheFilteredList(t *testing.T) {
+	quality := []string{"validate-llm-enhancement", "validate-thematic-answer-eval", "validate-globalsearch-known-answer"}
+
+	full := &TieredScenario{config: &TieredConfig{PathOnly: false}}
+	stages, skipped := full.stagesToRun("semantic")
+	require.Nil(t, skipped, "PathOnly unset skips nothing")
+	require.Equal(t, semanticStagesBeforePathOnly, stageNames(stages), "PathOnly unset runs the full 44 (I3)")
+
+	pathOnly := &TieredScenario{config: &TieredConfig{PathOnly: true}}
+	stages, skipped = pathOnly.stagesToRun("semantic")
+	require.Equal(t, quality, skipped, "PathOnly skips the declared rows, in stage-table order")
+	want := slices.DeleteFunc(slices.Clone(semanticStagesBeforePathOnly), func(n string) bool {
+		return slices.Contains(quality, n)
+	})
+	require.Len(t, stageNames(stages), 41)
+	require.Equal(t, want, stageNames(stages), "PathOnly runs the other 41, order kept (I1)")
+}

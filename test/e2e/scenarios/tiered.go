@@ -269,6 +269,16 @@ func withoutPathOnlySkips(stages []stage) (kept []stage, skipped []string) {
 	return kept, skipped
 }
 
+// stagesToRun is the stage list Execute runs: the variant's list, minus the
+// declared quality rows when TieredConfig.PathOnly is set, with the omitted names.
+func (s *TieredScenario) stagesToRun(variant string) (stages []stage, skipped []string) {
+	stages = s.getStagesForVariant(variant)
+	if s.config.PathOnly {
+		stages, skipped = withoutPathOnlySkips(stages)
+	}
+	return stages, skipped
+}
+
 // getStagesForVariant returns the filtered list of stages for a given variant.
 //
 // Stages are organized following the progressive enhancement model:
@@ -639,13 +649,11 @@ func (s *TieredScenario) Execute(ctx context.Context) (*Result, error) {
 	s.effectiveAuthority = authority
 	result.Details["effective_authority"] = authority
 
-	stages := s.getStagesForVariant(variant)
-	if s.config.PathOnly {
-		// A skipped stage never enters executeStages: no "completed in" line and
-		// no <stage>_duration_ms, so it can never read as passed. This line and
-		// the [n/41] counter are the run's record of the skip (gh#1117 D1).
-		var skipped []string
-		stages, skipped = withoutPathOnlySkips(stages)
+	// A skipped stage never enters executeStages: no "completed in" line and no
+	// <stage>_duration_ms, so it can never read as passed. This line and the
+	// [n/41] counter are the run's record of the skip (gh#1117 D1).
+	stages, skipped := s.stagesToRun(variant)
+	if len(skipped) > 0 {
 		fmt.Printf("\n[PATH-ONLY] skipping %d quality stages: %s\n", len(skipped), strings.Join(skipped, ", "))
 	}
 	if !s.executeStages(ctx, result, stages) {

@@ -38,7 +38,7 @@ A recorder SHALL NOT be added without the declaration.
 
 ### Requirement: The semantic path-only run skips its declared quality stages and logs them as skipped
 
-When `TieredConfig.PathOnly` is set (`--path-only`, or a non-empty `E2E_PATH_ONLY`), the tiered scenario MUST omit from the stage list every row the stage table declares quality and no other row, print one `[PATH-ONLY] skipping N quality stages: <names>` line before the first stage runs, and write no `<stage>_duration_ms` metric for an omitted stage. The declared rows SHALL be `validate-llm-enhancement`, `validate-thematic-answer-eval`, and `validate-globalsearch-known-answer`, all semantic-only, so the structural and statistical lists are unchanged under `PathOnly`. With `PathOnly` unset the stage list SHALL be the variant's full list.
+When `TieredConfig.PathOnly` is set (`--path-only`, or a non-empty `E2E_PATH_ONLY`), the tiered scenario MUST omit from the stage list every row the stage table declares quality and no other row, print one `[PATH-ONLY] skipping N quality stages: <names>` line before the first stage runs when it omits any row, and write no `<stage>_duration_ms` metric for an omitted stage. The declared rows SHALL be `validate-llm-enhancement`, `validate-thematic-answer-eval`, and `validate-globalsearch-known-answer`, all semantic-only, so the structural and statistical lists are unchanged under `PathOnly`. With `PathOnly` unset the stage list SHALL be the variant's full list.
 
 #### Scenario: The path-only run skips exactly the declared stages
 - **GIVEN** `--variant semantic` with `PathOnly` set
