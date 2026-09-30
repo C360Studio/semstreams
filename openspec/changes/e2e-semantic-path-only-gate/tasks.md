@@ -3,7 +3,7 @@
 ## 1. Inventory and design
 
 - [ ] 1.1 Line-pinned inventory of the 44 semantic-variant stages, model producers, skip/env mechanisms, gateway
-      request, timings (`inventory.md`, 366 pins at `2430ebd1`; § E corrected 2026-09-30: synthesis via
+      request, timings (`inventory.md`, 366 pins at `2430ebd1`, 373 after round 1; § E corrected 2026-09-30: synthesis via
       `includeSummaries`, hits 30 < 50); independent review records `INVENTORY PASS` on PR #1425.
 - [ ] 1.2 Design: D1-D8, the 41-row classification, R1-R7 (`design.md`); independent pre-owner review; owner rulings
       R1-R7 and acceptance of the design on #1117.
@@ -23,10 +23,13 @@
       semantic …` logs `[…/44]`; restore → `[…/41]` (one local run each, or the unit test on the override if `main` is
       refactored to expose it).
 - [ ] 2.3 `gatewayGlobalSearchQuery()` sends `includeSummaries: false` and `summarizeThreshold: 0` (document args +
-  variables); `executeTestHTTPGateway` fails on `hitCount == 0`. Mutation evidence: unit test on the builder's
-  variables (delete one key → red); unit test feeding a `strategy: graphrag`, zero-entity envelope to the assertion
-  (revert the check → green, restore → red); measured on the PR's ladder run: `graphql_gateway_latency_ms` < 1000
-  under semantic, `graphql_gateway_search_hits` 30, strategy `graphrag`.
+      variables); `executeTestHTTPGateway` fails on `hitCount == 0` under the semantic variant. Mutation evidence:
+      unit test on the builder's variables (delete one key from the builder → the test reds); unit test feeding a
+      `strategy: graphrag`, zero-entity envelope to the stage's assertion under semantic (delete the `hitCount == 0`
+      check from the stage → the test reds; restore → green). Measured on the PR's ladder run, both variants: semantic
+      `graphql_gateway_search_hits` 30, `graphql_gateway_latency_ms` < 1000, strategy `graphrag`; statistical
+      `graphql_gateway_search_hits` recorded — if > 0 the clause extends to statistical in this PR (spec delta and
+      design D4 updated), if 0 it is filed as its own question on #1117.
 - [ ] 2.4 `e2e-ladder.yml`: job `e2e-semantic` per D5 (no artifact step) replaces `e2e-semantic-measure` in the same
   commit; header `:21-30` rewritten. Evidence: `! git grep -q 'MEASUREMENT ONLY' -- .github/` and `! git grep -q
   prev1-program -- .github/` both exit 0; the PR's ladder shows the job once.

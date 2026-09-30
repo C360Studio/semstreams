@@ -1,6 +1,6 @@
 # Design: e2e-semantic-path-only-gate
 
-Drafted by the project architect (read-only contract) from `inventory.md` (366 pins at `2430ebd1`) and written by the
+Drafted by the project architect (read-only contract) from `inventory.md` (366 pins at `2430ebd1`, 373 after round 1) and written by the
 coordinating session, 2026-09-30. Rulings needed are § Rulings needed; nothing there is decided here.
 
 ## Context
@@ -103,8 +103,7 @@ and prints `[PATH-ONLY] skipping N quality stages: …`. A skipped stage never e
 in` line, no `_duration_ms`, and the counter reads `[n/41]` (P2, P3). The set filters whatever list is built; only
 semantic rows are named, so structural/statistical lists are unchanged. The I1 unit test pins the set against the
 table (a name in the set that is not a table row, or a set that is not exactly the three, is red).
-`getStagesForVariant` keeps its signature (P13). An in-process `result.Details["path_only_skipped_stages"]` is one
-line and may be kept, but nothing observes it (P3) and nothing here claims it. Alternatives: a `quality bool` field —
+`getStagesForVariant` keeps its signature (P13). No `result.Details` record: nothing observes one (P3). Alternatives: a `quality bool` field —
 54 literal edits, rejected; in-stage early return — records as completed with a duration (P2), three copies, rejected;
 a fourth variant name (`semantic-path`) — `semantic-fallback` shows the cost: the variant string is compared at
 `validate_search.go:28,518`, `cmd/e2e/main.go:405,410,764`, `config.EffectiveTierAuthority` (`tiered.go:590`), plus
@@ -136,15 +135,24 @@ synthesis (P6, the measured 18-56 s; the spec already requires it, P14); `summar
 non-summarized branch so `Entities` (which the stage decodes, `:87-97`) is never nil (in the summarized branch
 `EntityIDs` carries hits and the stage would read 0). Today the stage asserts only `strategy != "graphrag"`
 (`validate_infra.go:384-385`), but the Tier-2 text fallback also answers `Strategy: "graphrag"` with zero entities
-(`graphrag.go:1389-1393`) and a non-contract `loadEntities` failure falls through to it (`:924-930`), so the same edit
-makes `hitCount == 0` (`:388`) an error: the outcome the stage exists to detect is a gateway `globalSearch` served
-with no entities (the #830 class); both measured runs return 30. Stays a path probe: request shape, status, GraphQL
-errors, decode, `strategy == "graphrag"` (`graphrag.go:934`), hits > 0. Stops observing: community enrichment and
-answer
-synthesis on the Tier-1 path (never decoded; on an unready generation today they are stripped, not errored,
-`:700-722`). Still observes: the gh#1336 readiness transient on the Tier-2 fallback (`:979-982`). Under statistical
-`test-graphrag-global` asserts summaries through the same handler (`tiered.go:400-406`). Expected: ms in both
-variants. Alternative: a measured budget with margin — keeps a model cost on a path stage; rejected.
+when nothing matches (`graphrag.go:1389-1393`) and a non-contract `loadEntities` failure falls through to it
+(`:924-930`), so the same edit makes `hitCount == 0` (`:388`) an error in the semantic variant: the outcome the stage
+exists to detect is a gateway `globalSearch` served with no entities (the #830 class); both measured semantic runs
+return 30. The stage also runs in the required `e2e statistical` job (`tiered.go:370`), where today's runs read
+`graphql_gateway_search_hits:0` under the default arguments (E2E Ladder runs 36700758142 and 36699189684; round-2 H3)
+and the log does not say whether that zero is the summarized branch (`EntityIDs`, which D4's arguments would fix) or
+the community-text fallback matching nothing. Prefer observation to prediction: the gate is written semantic-scoped;
+PR #1425's first statistical run under D4's arguments is the measurement, and if it reads > 0 the scope widens to both
+variants in the same PR (task 2.3 names both figures), while a measured 0 is recorded as its own question on #1117,
+never asserted around. The gate catches a fall-through that yields no entities only: a `loadEntities` failure that the
+community-text fallback answers with a non-empty list (`graphrag.go:1462-1466`) looks like a Tier-1 answer, and
+`recordGlobalSearchTierTransition` is the only discriminator — a residual, not covered (round-2 M). Stays a path
+probe: request shape, status, GraphQL errors, decode, `strategy == "graphrag"` (`graphrag.go:934`), hits > 0 under
+semantic. Stops observing: community enrichment and answer synthesis on the Tier-1 path (never decoded; on an unready
+generation today they are stripped, not errored, `:700-722`). Still observes: the gh#1336 readiness transient on the
+Tier-2 fallback (`:979-982`). Under statistical `test-graphrag-global` asserts summaries through the same handler
+(`tiered.go:400-406`). Expected: ms in both variants. Alternative: a measured budget with margin — keeps a model cost
+on a path stage; rejected.
 
 **D5 Ladder job `e2e-semantic` / name `e2e semantic (path-only)`**, replacing `e2e-semantic-measure` in the same
 commit. Shape from the measurement (P8): `runs-on: ubuntu-latest`; `permissions: contents: read, packages: read`;
@@ -193,7 +201,7 @@ and the job log (`[PATH-ONLY]` line, per-stage `completed in`), recorded on #111
 | test-predicate-stats | path | 10 / 15 ms | index |
 | test-predicate-compound | path | 6 / 7 ms | index |
 | verify-search-quality | path (hits arm) + RECORDER (known-answer, avg score; #1426) | 62 / 96 ms | ruled #1426 |
-| test-http-gateway | path (after D4: strategy `graphrag` and entities > 0) | 18.7 / 27.5 s → ms | P6; the zero-entity fallback `graphrag.go:1391` |
+| test-http-gateway | path (after D4: strategy `graphrag` and, under semantic, entities > 0; statistical measured first) | 18.7 / 27.5 s → ms | P6; the zero-entity fallback `graphrag.go:1391`; round-2 H3 |
 | validate-gateway-response-shape | path | 169 / 153 ms | 3 probes, no globalSearch (`gateway_response_shape.go:57-77`) |
 | test-embedding-fallback | path | 4 / 2 ms | reads `semembed_available` (health) + component health (`validate_infra.go:398-433`) |
 | validate-community-structure | path (exists, non-singleton) + RECORDER (ground truth) | 26.9 / 14.1 s | community wait; reads `communities_llm_enhanced`, unasserted → R2 |
