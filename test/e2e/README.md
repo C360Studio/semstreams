@@ -14,7 +14,7 @@ observe system behavior from the outside, just like production monitoring.
 task e2e:core        # Platform boots, data flows (~10s)
 task e2e:structural  # Rules + structural inference (~30s)
 task e2e:statistical # BM25 + community detection (~60s)
-task e2e:semantic    # Neural embeddings + LLM (~90s)
+task e2e:semantic    # Neural embeddings + LLM (~11.5 min; E2E_PATH_ONLY=1 4m17s on CI)
 
 # Cleanup
 task e2e:clean
@@ -55,7 +55,7 @@ Neural embeddings + LLM. Full ML stack validation.
 
 | Duration | Purpose | Dependencies |
 |----------|---------|--------------|
-| ~90s | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
+| ~11.5 min on CI; 4m17s with `E2E_PATH_ONLY=1` (first CI run, gh#1117) | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
 
 ## Assertion Strategy
 

@@ -186,7 +186,7 @@ task check              # Lint + test
 task e2e:core           # Health + dataflow (~10s)
 task e2e:structural     # Rules + structural inference (~30s)
 task e2e:statistical    # BM25 + community detection (~60s)
-task e2e:semantic       # Neural embeddings + LLM (~90s)
+task e2e:semantic       # Neural embeddings + LLM (~11.5 min; E2E_PATH_ONLY=1 4m17s on CI)
 task e2e:agentic        # Agent loop + tools (~30s)
 task e2e:all            # All tiers sequentially
 ```

@@ -10,7 +10,7 @@
 
 The `tiered --variant semantic` scenario validates the full ML stack with neural embeddings and LLM-enhanced community summaries. This is Tier 2 - the highest capability tier requiring SemEmbed and SemInstruct services.
 
-**Duration**: ~90 seconds  
+**Duration**: ~11.5 min on a CI runner; 4m17s with `E2E_PATH_ONLY=1`, the per-PR path-only shape (first CI run, gh#1117)  
 **Tier**: Semantic (Tier 2)  
 **Dependencies**: NATS + SemEmbed + SemInstruct
 
