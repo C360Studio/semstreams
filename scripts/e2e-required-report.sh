@@ -91,7 +91,7 @@ e2e_report_child() {
 }
 
 e2e_report_finalize() {
-  local command_exit=$1 cleanup_exit=$2 input files result status
+  local command_exit=$1 cleanup_exit=$2 input files result status path
   input="$E2E_REPORT_DIR/e2e-task-input-$E2E_REPORT_RUN_ID.json"
   files=$(printf '%s' "$E2E_REPORT_FILES" |
     jq -c --arg path "$E2E_REPORT_LOG" '. + [{role:"task_log",path:$path}]') || files=''
@@ -99,12 +99,20 @@ e2e_report_finalize() {
     e2e_report_write_input "$input" "$E2E_REPORT_SELECTION" \
       "${E2E_REPORT_PARENT_ID:-}" "${E2E_REPORT_PARENT_SLOT:-}" "$files" || true
   fi
+  status=0
   result=$("$E2E_REPORT_BIN" --report-finalize --report-run-path "$E2E_REPORT_RUN_PATH" \
     --report-command-exit "$command_exit" --report-cleanup-exit "$cleanup_exit" \
-    --report-manifest-input "$input")
-  status=$?
-  if [ -n "$result" ]; then
-    printf 'E2E_TASK_RESULT_PATH=%s\n' "$(printf '%s\n' "$result" | tail -n 1)"
+    --report-manifest-input "$input") || status=$?
+  path=$(printf '%s\n' "$result" | tail -n 1)
+  if [ "$path" = "$E2E_REPORT_RUN_PATH" ] && [ -f "$path" ]; then
+    printf 'E2E_TASK_RESULT_PATH=%s\n' "$path"
+  elif [ "$status" -ne 0 ] && [ -f "$E2E_REPORT_RUN_PATH" ]; then
+    # A failed terminal write can leave the real initialized envelope. Link it
+    # as incomplete evidence; the parent still receives the nonzero exit.
+    printf 'E2E_TASK_RESULT_PATH=%s\n' "$E2E_REPORT_RUN_PATH"
+  elif [ "$status" -eq 0 ]; then
+    echo "[FAIL] Task reporter returned success without the initialized artifact" >&2
+    status=1
   fi
   return "$status"
 }

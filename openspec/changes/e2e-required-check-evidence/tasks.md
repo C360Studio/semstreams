@@ -58,7 +58,8 @@ The owner approved explicitly incomplete outer Task launcher history while retai
 source/configuration identity and observed results. Implementation must distinguish the resolved Task target from
 observed command arguments; the active delta and guide record this narrow limit.
 
-Task truth is 7/10. Remaining implementation, assembled proof, independent review and push gates are incomplete.
+Task truth is 7/10. The assembled run exposed an agentic tool failure; final implementation proof and push gates
+remain incomplete.
 The 2026-09-27 pause and earlier evidence records below are historical checkpoints.
 
 ## Completed bounded corrections
@@ -95,8 +96,14 @@ read, a wrong deployment refusal and the graph probe. Independent bounded review
 
 The CLI/report helper and six direct Task wrappers now include core minted/graph/preidentity adoption, the five-family
 composite, selected `all`/`tiers` scope, verified composite child provenance and exact executed Task-child arguments.
-Actual Task fixtures cover failure propagation and cleanup ordering: seven cases pass, as do all 17 existing
-statistical bind fixtures. Bounded source review is approved. No assembled E2E or full push gate has run yet.
+Actual Task fixtures cover failure propagation and cleanup ordering: ten cases pass after the assembled run exposed
+a missing failed-child artifact link. The helper correction preserves the failure exit and links only real retained
+reports; independent review approved it. All 17 existing statistical bind fixtures also passed.
+
+The five-family composite ran at clean checkpoint `6b495b77` with unchanged source hashes and exited 201 after
+856.857 seconds. Core, structural, statistical and semantic required checks passed. Agentic failed because the
+controlled tool call completed with status `failed`; streaming proof was consequently missing. This remains a failed
+composite, with the actual tool error under diagnosis. The full push gate has not run.
 
 Before the two-key provenance allowlist extension, Result/Writer passed four native fuzz targets with bounded three-second exploration, and the
 Result observation target also passed exploration. Strict OpenSpec validation passed all 60 items; all 485 spec
@@ -113,7 +120,8 @@ agentic scenario, tier-authority and platform-identity behavior before editing t
 Claude's #1117 / PR #1425 retains semantic CI ownership; this claim retains #1222 required-check evidence.
 No transfer of that adjacent work is implied.
 
-Remaining work includes authorized CI retention, assembled E2E, full push gates, final verification reconciliation
+Remaining work includes authorized CI retention, resolving the observed agentic failure, assembled proof, full push
+gates, final verification reconciliation
 and archive/spec synchronization.
 The historical #1397 issue is closed. Required-job recurrence #1421 remains open and has no waiver for this PR. Earlier GREEN and claim-head hosted checks do not prove
 this dirty implementation. No implementation-complete or merge-ready claim is made.

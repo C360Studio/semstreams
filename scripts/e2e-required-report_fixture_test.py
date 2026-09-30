@@ -17,12 +17,20 @@ args = sys.argv[1:]
 with open(os.environ["TRACE"], "a") as trace:
     trace.write(json.dumps(["report", *args]) + "\n")
 if "--report-init" in args:
-    path = pathlib.Path(os.environ["FIXTURE_ROOT"]) / "test/e2e/results/initial.json"
+    selection = args[args.index("--report-selection") + 1]
+    name = "child-core.json" if selection == "core" else "initial.json"
+    path = pathlib.Path(os.environ["FIXTURE_ROOT"]) / "test/e2e/results" / name
     path.write_text('{"evidence_status":"unattested"}')
-    print(json.dumps({"run_id": "fixture-run", "path": str(path)}))
+    run_id = "fixture-child-core" if selection == "core" else "fixture-run"
+    print(json.dumps({"run_id": run_id, "path": str(path)}))
 elif "--report-finalize" in args:
-    print(os.environ["FIXTURE_ROOT"] + "/test/e2e/results/initial.json")
-    sys.exit(int(os.environ.get("FINALIZE_EXIT", "0")))
+    path = args[args.index("--report-run-path") + 1]
+    if path.endswith("/child-core.json") and os.environ.get("CHILD_FINALIZE_REMOVE") == "1":
+        pathlib.Path(path).unlink()
+    if not (path.endswith("/child-core.json") and os.environ.get("CHILD_FINALIZE_NO_PATH") == "1"):
+        print(path)
+    code = os.environ.get("CHILD_FINALIZE_EXIT", "0") if path.endswith("/child-core.json") else os.environ.get("FINALIZE_EXIT", "0")
+    sys.exit(int(code))
 elif "--report-child" in args:
     sys.exit(int(os.environ.get("CHILD_REPORT_EXIT", "1")))
 elif "--report-record" in args:
@@ -132,12 +140,21 @@ tasks:
         self.env["BOOT_TRACE"] = str(self.home / "bootstrap.log")
         self.env.update(BUILD_EXIT="0", CLEAN_EXIT="0", PORT_EXIT="0")
 
-    def install_composite(self, successful_children=False):
+    def install_composite(self, successful_children=False, failed_report_child=False):
         source = (ROOT / "Taskfile.yml").read_text()
         composite = source[source.index("  e2e:core-inference-agentic:\n"):]
         composite = composite.replace('    deps: ["build:e2e"]\n', "")
         children = ""
         for member in ("core", "structural", "statistical", "semantic", "agentic"):
+            if member == "core" and failed_report_child:
+                children += '''  e2e:core:
+    cmds:
+      - |
+        . scripts/e2e-required-report.sh
+        e2e_report_begin core fixtures e2e:core || exit 1
+        e2e_report_finalize 17 0
+'''
+                continue
             command = ('printf "E2E_RESULT_PATH=/fixture/grandchild.json\\n'
                        'E2E_TASK_RESULT_PATH=/fixture/task-' + member + '.json\\n"'
                        if successful_children else "exit 33")
@@ -250,6 +267,44 @@ tasks:
                          ["task", "e2e:core"])
         final = entries[-1]
         self.assertEqual(final[final.index("--report-command-exit") + 1], "1")
+
+    def test_composite_links_failed_child_aggregate_and_stays_red(self):
+        self.install_composite(failed_report_child=True)
+        self.env["CHILD_FINALIZE_EXIT"] = "1"
+        process, entries = self.run_task("e2e:core-inference-agentic")
+        self.assertNotEqual(process.returncode, 0, process.stdout)
+        child = next(entry for entry in entries if "--report-child" in entry)
+        path = child[child.index("--report-child-path") + 1]
+        self.assertEqual(path, str(self.home / "test/e2e/results/child-core.json"))
+        self.assertTrue(Path(path).is_file(), "parent referenced an absent failed child artifact")
+        self.assertNotEqual(child[child.index("--report-child-exit") + 1], "0")
+        self.assertIn(f"E2E_TASK_RESULT_PATH={path}", process.stdout)
+        final = entries[-1]
+        self.assertIn("--report-finalize", final)
+        self.assertNotEqual(final[final.index("--report-command-exit") + 1], "0")
+
+    def test_composite_links_existing_initial_envelope_after_final_write_failure(self):
+        self.install_composite(failed_report_child=True)
+        self.env["CHILD_FINALIZE_EXIT"] = "1"
+        self.env["CHILD_FINALIZE_NO_PATH"] = "1"
+        process, entries = self.run_task("e2e:core-inference-agentic")
+        self.assertNotEqual(process.returncode, 0, process.stdout)
+        child = next(entry for entry in entries if "--report-child" in entry)
+        path = child[child.index("--report-child-path") + 1]
+        self.assertEqual(path, str(self.home / "test/e2e/results/child-core.json"))
+        self.assertTrue(Path(path).is_file())
+        self.assertNotEqual(child[child.index("--report-child-exit") + 1], "0")
+
+    def test_composite_does_not_name_missing_failed_child_artifact(self):
+        self.install_composite(failed_report_child=True)
+        self.env["CHILD_FINALIZE_EXIT"] = "1"
+        self.env["CHILD_FINALIZE_NO_PATH"] = "1"
+        self.env["CHILD_FINALIZE_REMOVE"] = "1"
+        process, entries = self.run_task("e2e:core-inference-agentic")
+        self.assertNotEqual(process.returncode, 0, process.stdout)
+        child = next(entry for entry in entries if "--report-child" in entry)
+        self.assertEqual(child[child.index("--report-child-path") + 1], "")
+        self.assertFalse((self.home / "test/e2e/results/child-core.json").exists())
 
     def test_composite_selects_each_task_aggregate_after_grandchild_marker(self):
         self.install_composite(successful_children=True)
