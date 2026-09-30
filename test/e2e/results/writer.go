@@ -165,23 +165,8 @@ func (w *Writer) WriteRun(run *TestRun) (string, error) {
 		run.Environment = make(map[string]string)
 	}
 	run.Environment["output_dir"] = outputDir
-	if run.StartedAt.IsZero() {
-		if !run.Timestamp.IsZero() {
-			run.StartedAt = run.Timestamp.UTC()
-		} else {
-			run.StartedAt = time.Now().UTC()
-		}
-	}
-	if run.Timestamp.IsZero() {
-		run.Timestamp = run.StartedAt
-	}
-	run.StartedAt = run.StartedAt.UTC()
-	run.Timestamp = run.Timestamp.UTC()
-	if !run.CompletedAt.IsZero() {
-		run.CompletedAt = run.CompletedAt.UTC()
-	}
-	if run.CompletedAt.IsZero() != (run.ExitCode == nil) {
-		return "", fmt.Errorf("partial terminal result has completion without exit or exit without completion")
+	if err := normalizeRunTimes(run); err != nil {
+		return "", err
 	}
 	// Bind terminal observations to the persisted initial declaration. A
 	// mismatch is retained as failed evidence, never an acceptance shortcut.
@@ -254,6 +239,28 @@ func (w *Writer) WriteRun(run *TestRun) (string, error) {
 	}
 
 	return runPath, nil
+}
+
+func normalizeRunTimes(run *TestRun) error {
+	if run.StartedAt.IsZero() {
+		if !run.Timestamp.IsZero() {
+			run.StartedAt = run.Timestamp.UTC()
+		} else {
+			run.StartedAt = time.Now().UTC()
+		}
+	}
+	if run.Timestamp.IsZero() {
+		run.Timestamp = run.StartedAt
+	}
+	run.StartedAt = run.StartedAt.UTC()
+	run.Timestamp = run.Timestamp.UTC()
+	if !run.CompletedAt.IsZero() {
+		run.CompletedAt = run.CompletedAt.UTC()
+	}
+	if run.CompletedAt.IsZero() != (run.ExitCode == nil) {
+		return fmt.Errorf("partial terminal result has completion without exit or exit without completion")
+	}
+	return nil
 }
 
 func reconcileInitializedChecks(path string, run *TestRun) ([]string, error) {
@@ -691,7 +698,7 @@ var allowedEnvironmentKeys = map[string]bool{
 	"config_sha256": true, "fixture_sha256": true, "effective_settings_sha256": true,
 	"log_path": true, "log_sha256": true,
 	"artifact_manifest_path": true, "artifact_manifest_sha256": true,
-	"output_dir": true,
+	"output_dir":    true,
 	"command_scope": true, "outer_launcher_argv": true,
 }
 

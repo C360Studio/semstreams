@@ -126,6 +126,118 @@ func sameCheckRequirements(expected, actual []scenarios.CheckRequirement) bool {
 	return len(byID) == 0
 }
 
+type selectedRunSetup struct {
+	checkSets     [][]scenarios.CheckRequirement
+	adopted       []bool
+	evidenceInput reportManifestInput
+	writer        *results.Writer
+	initial       results.TestRun
+}
+
+// prepareSelectedRun records every member declaration before scenario setup.
+func prepareSelectedRun(
+	logger *slog.Logger,
+	selection *scenarioSelection,
+	run *results.TestRun,
+	tests []scenarios.Scenario,
+) (*selectedRunSetup, bool) {
+	checkSets := make([][]scenarios.CheckRequirement, len(tests))
+	adopted := make([]bool, len(tests))
+	run.Scenarios = make([]scenarios.Result, len(tests))
+	for i, scenario := range tests {
+		memberID := selection.members[i]
+		name := strings.SplitN(memberID, ":", 2)[0]
+		if scenario == nil || scenario.Name() != name {
+			logger.Error("Selected member differs from scenario", "member", memberID)
+			return nil, false
+		}
+		checkSets[i], adopted[i] = scenarioChecks(scenario)
+		if selection.required && !adopted[i] {
+			logger.Error("Required member has no declared checks", "member", memberID)
+			return nil, false
+		}
+		if adopted[i] {
+			declaration := &scenarios.Result{}
+			if err := declaration.DeclareChecks(run.ID, memberID, checkSets[i]); err != nil {
+				logger.Error("Invalid required member declaration", "member", memberID, "error", err)
+				return nil, false
+			}
+			run.Scenarios[i] = *declaration
+		} else {
+			run.Scenarios[i] = scenarios.Result{ScenarioName: scenario.Name(), RunID: run.ID, MemberID: memberID,
+				EvidenceStatus: "unattested"}
+		}
+	}
+
+	run.Config.Selection = selection.label
+	run.Config.RequireEvidence = selection.required
+	run.Config.Variant = selection.flags.variant
+	run.Config.Scenarios = append([]string(nil), selection.members...)
+	run.Config.BaseURL = selection.flags.baseURL
+	run.Config.MetricsURL = selection.flags.metricsURL
+	var evidenceInput reportManifestInput
+	if selection.flags.evidenceInputPath != "" {
+		var inputErr error
+		evidenceInput, inputErr = readReportManifestInput(selection.flags.evidenceInputPath)
+		if inputErr != nil {
+			logger.Error("Cannot read typed evidence input", "error", inputErr)
+			return nil, false
+		}
+		if evidenceInput.Selection != selection.label ||
+			(evidenceInput.ParentID == "") != (evidenceInput.ParentMemberID == "") {
+			logger.Error("Evidence input selection or parent slot differs from selected CLI run")
+			return nil, false
+		}
+		run.ParentID, run.ParentMemberID = evidenceInput.ParentID, evidenceInput.ParentMemberID
+	}
+	if selection.required {
+		run.Config.RequiredMembers = append([]string(nil), selection.members...)
+	}
+	if len(run.Command) == 0 {
+		run.Command = append([]string(nil), os.Args...)
+	}
+	if run.WorkingDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			logger.Error("Cannot observe working directory", "error", err)
+			return nil, false
+		}
+		run.WorkingDir = wd
+	}
+	fillUnavailableProvenance(run)
+
+	var writer *results.Writer
+	var initial results.TestRun
+	if selection.flags.outputDir != "" {
+		outputDir, err := filepath.Abs(selection.flags.outputDir)
+		if err != nil {
+			logger.Error("Cannot resolve evidence output directory", "error", err)
+			return nil, false
+		}
+		selection.flags.outputDir = outputDir
+		if selection.flags.evidenceInputPath != "" && evidenceInput.OutputDir != outputDir {
+			logger.Error("Evidence input output location differs from selected CLI output")
+			return nil, false
+		}
+		writer = results.NewWriter(outputDir)
+		if _, err := writer.WriteRun(run); err != nil {
+			logger.Error("Failed to write initial evidence", "path", outputDir, "error", err)
+			fmt.Fprintf(os.Stderr, "E2E initial evidence failed at %s: %s\n", outputDir, err)
+			return nil, false
+		}
+		initial = *run
+		initial.Scenarios = append([]scenarios.Result(nil), run.Scenarios...)
+		initial.Environment = make(map[string]string, len(run.Environment))
+		for key, value := range run.Environment {
+			initial.Environment[key] = value
+		}
+	}
+	return &selectedRunSetup{
+		checkSets: checkSets, adopted: adopted, evidenceInput: evidenceInput,
+		writer: writer, initial: initial,
+	}, true
+}
+
 // runSelectedScenarios persists one aggregate for the resolved invocation.
 // Its only execution path is the Scenario interface; Task remains responsible
 // for building, starting, stopping and cleaning the services around this CLI.
@@ -151,97 +263,12 @@ func runSelectedScenarios(
 	logger.Info("Resolved scenario selection", "selection", selection.label,
 		"members", selection.members, "evidence_status", disposition)
 
-	checkSets := make([][]scenarios.CheckRequirement, len(tests))
-	adopted := make([]bool, len(tests))
-	run.Scenarios = make([]scenarios.Result, len(tests))
-	for i, scenario := range tests {
-		memberID := selection.members[i]
-		name := strings.SplitN(memberID, ":", 2)[0]
-		if scenario == nil || scenario.Name() != name {
-			logger.Error("Selected member differs from scenario", "member", memberID)
-			return 1
-		}
-		checkSets[i], adopted[i] = scenarioChecks(scenario)
-		if selection.required && !adopted[i] {
-			logger.Error("Required member has no declared checks", "member", memberID)
-			return 1
-		}
-		if adopted[i] {
-			declaration := &scenarios.Result{}
-			if err := declaration.DeclareChecks(run.ID, memberID, checkSets[i]); err != nil {
-				logger.Error("Invalid required member declaration", "member", memberID, "error", err)
-				return 1
-			}
-			run.Scenarios[i] = *declaration
-		} else {
-			run.Scenarios[i] = scenarios.Result{ScenarioName: scenario.Name(), RunID: run.ID, MemberID: memberID,
-				EvidenceStatus: "unattested"}
-		}
+	prepared, ok := prepareSelectedRun(logger, &selection, run, tests)
+	if !ok {
+		return 1
 	}
-
-	run.Config.Selection = selection.label
-	run.Config.RequireEvidence = selection.required
-	run.Config.Variant = selection.flags.variant
-	run.Config.Scenarios = append([]string(nil), selection.members...)
-	run.Config.BaseURL = selection.flags.baseURL
-	run.Config.MetricsURL = selection.flags.metricsURL
-	var evidenceInput reportManifestInput
-	if selection.flags.evidenceInputPath != "" {
-		var inputErr error
-		evidenceInput, inputErr = readReportManifestInput(selection.flags.evidenceInputPath)
-		if inputErr != nil {
-			logger.Error("Cannot read typed evidence input", "error", inputErr)
-			return 1
-		}
-		if evidenceInput.Selection != selection.label ||
-			(evidenceInput.ParentID == "") != (evidenceInput.ParentMemberID == "") {
-			logger.Error("Evidence input selection or parent slot differs from selected CLI run")
-			return 1
-		}
-		run.ParentID, run.ParentMemberID = evidenceInput.ParentID, evidenceInput.ParentMemberID
-	}
-	if selection.required {
-		run.Config.RequiredMembers = append([]string(nil), selection.members...)
-	}
-	if len(run.Command) == 0 {
-		run.Command = append([]string(nil), os.Args...)
-	}
-	if run.WorkingDir == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			logger.Error("Cannot observe working directory", "error", err)
-			return 1
-		}
-		run.WorkingDir = wd
-	}
-	fillUnavailableProvenance(run)
-
-	var writer *results.Writer
-	var initial results.TestRun
-	if selection.flags.outputDir != "" {
-		outputDir, err := filepath.Abs(selection.flags.outputDir)
-		if err != nil {
-			logger.Error("Cannot resolve evidence output directory", "error", err)
-			return 1
-		}
-		selection.flags.outputDir = outputDir
-		if selection.flags.evidenceInputPath != "" && evidenceInput.OutputDir != outputDir {
-			logger.Error("Evidence input output location differs from selected CLI output")
-			return 1
-		}
-		writer = results.NewWriter(outputDir)
-		if _, err := writer.WriteRun(run); err != nil {
-			logger.Error("Failed to write initial evidence", "path", outputDir, "error", err)
-			fmt.Fprintf(os.Stderr, "E2E initial evidence failed at %s: %s\n", outputDir, err)
-			return 1
-		}
-		initial = *run
-		initial.Scenarios = append([]scenarios.Result(nil), run.Scenarios...)
-		initial.Environment = make(map[string]string, len(run.Environment))
-		for key, value := range run.Environment {
-			initial.Environment[key] = value
-		}
-	}
+	checkSets, adopted := prepared.checkSets, prepared.adopted
+	evidenceInput, writer, initial := prepared.evidenceInput, prepared.writer, prepared.initial
 	originalLogger := logger
 	var executionLog *os.File
 	var executionLogPath string
@@ -328,6 +355,10 @@ func runSelectedScenarios(
 		fmt.Fprintf(os.Stdout, "E2E_RESULT_PATH=%s\n", path)
 		exitCode = *run.ExitCode
 	}
+	return finishSelectedRun(logger, selection, run, exitCode)
+}
+
+func finishSelectedRun(logger *slog.Logger, selection scenarioSelection, run *results.TestRun, exitCode int) int {
 	// The aggregate Writer owns final Result -> typed metadata projection.
 	// Serialize optional analysis only after that projection, including legacy
 	// final-validation and teardown failures.

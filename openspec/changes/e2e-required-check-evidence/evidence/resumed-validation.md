@@ -85,6 +85,11 @@ The first `task check:push` attempt at that source exited 201 after 25.007 secon
 closure preserves the same cleanup operation and order, and the existing cleanup guard passes. This is a fixture
 representation correction, not a guard exemption or an observed runtime leak. The failed gate log remains in
 `continuation/check-push/`; later attempts use separate directories so the original failure is not overwritten.
+The second full gate at `db3f8cd6` passed the cleanup guard and stopped at revive after 14.355 seconds on two
+function-length warnings. The bounded correction extracts existing Writer time normalization and CLI run preparation/
+completion into private helpers, preserving their order and failures. Affected-package revive and CLI/Writer race
+checks pass; independent review found no behavior changes and retained the prior per-family E2E disposition.
+The second gate log is retained in `continuation/check-push-round2/`; the next attempt has its own directory.
 Strict OpenSpec validation passed 60 items, and all 488 current property citations resolve.
 
 ## Remaining proof
