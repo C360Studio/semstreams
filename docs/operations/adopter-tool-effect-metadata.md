@@ -3,7 +3,9 @@
 **Audience:** semdev and the second gh#749 consumer, and any repo building tool
 discovery, a tool picker, or a default approval policy over SemStreams tools.
 
-**Effect-metadata status:** additive. The effect field and enum remain compatible.
+**Effect-metadata status:** the field and enum remain compatible. The pre-v1 `http_request` page-reader correction
+changes that tool's declaration from `external_effect` to `mutating` when graph emission is wired and `read_only`
+otherwise; it no longer admits POST.
 
 **Discovery-address status (2026-08-11):** breaking. The logical port remains
 `tool.list`, but its kind is now `nats-request` and its default request subject is
@@ -127,13 +129,18 @@ ship unclassified or misspelled. Broad strokes:
 
 | Effect | Tools |
 |---|---|
-| `read_only` | `query_entity`, `query_entities`, `query_relationships`, `query_neighbors`, `query_by_type`, `read_loop_result`, `list_components` (carries `default_ports`), `validate_composition`, `composition_graph` (both run the offline composition validator over a configuration document; no NATS, no write — ADR-100), and the `list_*` / `get_*` half of the rule and persona tools |
-| `mutating` | the `create_*` / `update_*` / `delete_*` half of those same CRUD tools, `scratchpad`, `write_todos`, `decide`, `emit_lesson`, `emit_diagnosis`, `research_graph`, and `web_search` **when backed by a real provider** — it writes observation triples to the graph; the no-provider stub is `read_only` |
-| `external_effect` | `bash`, `http_request` |
+| `read_only` | `query_entity`, `query_entities`, `query_relationships`, `query_neighbors`, `query_by_type`, `read_loop_result`, `list_components` (carries `default_ports`), `validate_composition`, `composition_graph` (both run the offline composition validator over a configuration document; no NATS, no write — ADR-100), text-only `http_request`, and the `list_*` / `get_*` half of the rule and persona tools |
+| `mutating` | the `create_*` / `update_*` / `delete_*` half of those same CRUD tools, `scratchpad`, `write_todos`, `decide`, `emit_lesson`, `emit_diagnosis`, `research_graph`, `http_request` when graph emission is wired, and `web_search` **when backed by a real provider** — those web tools write observation triples to the graph; the no-provider search stub is `read_only` |
+| `external_effect` | `bash` |
 
 Note `web_search`: two implementations share one tool name and legitimately
 carry different effects. Read the effect off the catalog your deployment serves
 rather than assuming a name maps to a fixed classification.
+
+`http_request` is a pre-v1 breaking correction: POST was removed because durable redelivery cannot safely repeat a
+generic bodyless write without an operation-owned idempotency contract. The GET-only reader is `mutating` when the
+framework implementation can append its observation and loop back-link internally and `read_only` otherwise; its remote
+operation remains a read.
 
 **Your own executors are not covered by that check** — it scans only the in-repo
 packages that register into the shared registry. The fail-safe covers yours
