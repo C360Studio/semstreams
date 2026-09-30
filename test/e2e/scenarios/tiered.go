@@ -74,6 +74,9 @@ type TieredScenario struct {
 type TieredConfig struct {
 	// Variant configuration
 	Variant string `json:"variant"` // "structural", "statistical", "semantic"
+	// PathOnly omits the stage table's declared quality rows (pathOnlySkips):
+	// the per-PR semantic ladder shape (gh#1117). Unset = the full variant.
+	PathOnly bool `json:"path_only"`
 
 	// Test data configuration
 	MessageCount    int           `json:"message_count"`
@@ -238,6 +241,34 @@ type stage struct {
 	variants []string // Empty = run for all variants
 }
 
+// pathOnlySkips declares the stage-table rows whose outcome is the small model's
+// answer or summary quality, which no PR owns. A path-only run (TieredConfig.PathOnly,
+// the per-PR ladder's E2E_PATH_ONLY=1) omits them; the full semantic, :8b and
+// :frontier runs keep them (owner rulings on gh#1117, 2026-09-29 and R1/R5
+// 2026-09-30). All three are semantic-only rows, so the structural and
+// statistical lists are unchanged under PathOnly.
+var pathOnlySkips = map[string]string{
+	"validate-llm-enhancement": "the community summaries the model enhances within a 120 s wait; " +
+		"its path arms (communities exist, summaries readable) are validate-community-structure's",
+	"validate-thematic-answer-eval": "B0 recorder of the answer model's thematic recall",
+	"validate-globalsearch-known-answer": "globalSearch known-answer probe under the answer model; " +
+		"the zero-entity globalSearch class is test-http-gateway's gate per-PR",
+}
+
+// withoutPathOnlySkips returns stages minus the rows pathOnlySkips declares, in
+// order, and the names it omitted, in stage-table order.
+func withoutPathOnlySkips(stages []stage) (kept []stage, skipped []string) {
+	kept = make([]stage, 0, len(stages))
+	for _, st := range stages {
+		if _, quality := pathOnlySkips[st.name]; quality {
+			skipped = append(skipped, st.name)
+			continue
+		}
+		kept = append(kept, st)
+	}
+	return kept, skipped
+}
+
 // getStagesForVariant returns the filtered list of stages for a given variant.
 //
 // Stages are organized following the progressive enhancement model:
@@ -311,6 +342,7 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// count and the quality issues are the small model's output, recorded in
 		// Metrics/Warnings without gating. Only an unreachable transport or a
 		// failed read (no communities, a failed wait or re-fetch) fails (#1426).
+		// Quality row: a path-only run skips it (pathOnlySkips, gh#1117).
 		{"validate-llm-enhancement", s.executeValidateLLMEnhancement, []string{"semantic"}},
 		// Epic B increment B0 — the GraphRAG thematic-answer eval — runs HERE, before
 		// ANY stage that drives LLM answer synthesis (the NL-intent, graphrag, and
@@ -324,6 +356,7 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// communities + embeddings + community summaries are already populated.
 		// Semantic-only; RECORDER, not a hard gate (see validate_thematic_eval.go
 		// header). Only an unreachable transport fails.
+		// Quality row: a path-only run skips it (pathOnlySkips, gh#1117).
 		{"validate-thematic-answer-eval", s.executeValidateThematicAnswerEval, []string{"semantic"}},
 		// Epic B increment B2 — partition co-location diagnostic — runs immediately
 		// after B0 so its per-query plurality_share lines up 1:1 (by query id) with
@@ -333,6 +366,8 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// run. Semantic-only; RECORDER, not a hard gate (see
 		// validate_partition_colocation.go header). Only an unreachable partition
 		// index (GetAllCommunities) fails.
+		// Under path-only it records without its B0 pair and asserts nothing on
+		// the model's summaries (owner ruling R7, gh#1117).
 		{"validate-partition-colocation", s.executePartitionColocation, []string{"semantic"}},
 		// NL intent routing tests (validates classifier → strategy routing through globalSearch).
 		// The probes send includeSummaries:false (no synthesis), and 0 probes
@@ -385,6 +420,8 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// arm is a RECORDER: LPA's partition varies 1/3 <-> 0/3 across identical
 		// code (fresh authority suffix, ID-ordered tie-breaks); ADR-099/#606
 		// make it deterministic, after which it asserts (#1426).
+		// It also reads COMMUNITY_SUMMARIES to record communities_llm_enhanced and
+		// asserts nothing on it (owner ruling R2, gh#1117).
 		{"validate-community-structure", s.executeValidateCommunityStructure, []string{"statistical", "semantic"}},
 		// ADR-090 breaking gate: statistical is the checked-in graph-clustering
 		// deployment and a fresh stack must never recreate retired persistence.
@@ -415,6 +452,7 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// the "globalSearch returns count=0 for content that exists" bug class
 		// (see semspec Meshtastic report). Probes deterministic single-word
 		// terms and HARD-FAILs when the response is empty or unrelated.
+		// Quality row: a path-only run skips it (pathOnlySkips, gh#1117).
 		{"validate-globalsearch-known-answer", s.executeValidateGlobalSearchKnownAnswer, []string{"semantic"}},
 		// gh#599/#597: graph batch/semantic read-path reconciliation over the real
 		// NATS wire (gh#604 contracts) + batch_query_missing_total soak signal. Runs
@@ -602,6 +640,14 @@ func (s *TieredScenario) Execute(ctx context.Context) (*Result, error) {
 	result.Details["effective_authority"] = authority
 
 	stages := s.getStagesForVariant(variant)
+	if s.config.PathOnly {
+		// A skipped stage never enters executeStages: no "completed in" line and
+		// no <stage>_duration_ms, so it can never read as passed. This line and
+		// the [n/41] counter are the run's record of the skip (gh#1117 D1).
+		var skipped []string
+		stages, skipped = withoutPathOnlySkips(stages)
+		fmt.Printf("\n[PATH-ONLY] skipping %d quality stages: %s\n", len(skipped), strings.Join(skipped, ", "))
+	}
 	if !s.executeStages(ctx, result, stages) {
 		return result, nil
 	}

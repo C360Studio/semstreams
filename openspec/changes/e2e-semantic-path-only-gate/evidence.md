@@ -85,3 +85,30 @@ AFTER  e5e44734df0122ba1bb37c5a91a6ee5f119668f69241baadc8a14c4f0765215b  test/e2
 ```
 
 (The checksum above is of the file while its comment still carried a placeholder for the issue number, before `#1441` was filed.)
+
+## § 4 Declared quality set and filter (task 2.1)
+
+Tests: `test/e2e/scenarios/tiered_path_only_test.go` — the set is exactly the three names, each with a reason, each a
+semantic row (I1); `withoutPathOnlySkips` over the semantic list returns the 41 names in order and skips the three in
+stage-table order; with the filter not applied the semantic list equals the 44 names dumped at `8bae169b` (I3);
+structural and statistical lists unchanged with nothing skipped. Red before implementation (compile: `undefined:
+pathOnlySkips`, `undefined: withoutPathOnlySkips`).
+
+Mutation — delete `"validate-thematic-answer-eval"` from `pathOnlySkips`:
+
+```
+BEFORE c886943d8046d4dacde40ac5e91679f2ad2acb2bfa8f50a7412058b965118c36  test/e2e/scenarios/tiered.go
+--- FAIL: TestPathOnlySkips_DeclaredSetIsExactlyTheThreeQualityRows (0.00s)
+        	Error:      	elements differ
+        	            	extra elements in list A:
+        	            	 (string) (len=29) "validate-thematic-answer-eval"
+--- FAIL: TestPathOnlySkips_SemanticListLosesExactlyTheDeclaredRowsInOrder (0.00s)
+        	            	expected: []string{"validate-llm-enhancement", "validate-thematic-answer-eval", "validate-globalsearch-known-answer"}
+FAIL
+AFTER  c886943d8046d4dacde40ac5e91679f2ad2acb2bfa8f50a7412058b965118c36  test/e2e/scenarios/tiered.go
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	0.352s
+```
+
+Not unit-covered: the `if s.config.PathOnly` branch in `Execute` (it needs a live deployment for
+`EffectiveTierAuthority`). Its wiring evidence is task 2.6's read of the `[PATH-ONLY]` line and the `[41/41]` counter
+from the PR's ladder log, per design D1 / Risks.
