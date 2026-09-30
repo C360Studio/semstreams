@@ -92,8 +92,38 @@ checks pass; independent review found no behavior changes and retained the prior
 The second gate log is retained in `continuation/check-push-round2/`; the next attempt has its own directory.
 Strict OpenSpec validation passed 60 items, and all 488 current property citations resolve.
 
+## Published recovery and approved CI retention
+
+The complete local `task check:push` passed at `c441841d` in 891.229 seconds, with source hashes unchanged.
+The entity-ID audit passed 1,337 candidates after the mock switched from invalid placeholders to direct binding of
+validated request-carried IDs. Bounded independent review and focused mock/agentic race, lint and vet passed.
+That checkpoint was published to draft PR #1406; the worktree was clean.
+
+The owner then explicitly approved retaining the statistical and slow-consumer jobs' JSON reports and logs as
+GitHub Actions artifacts. The workflow adds `always()` uploads for the named result/member/manifest JSON files,
+task/log files and child stdout. Copied application binaries, report inputs and unrelated results are excluded.
+The allowlist matches files from the retained local slow-consumer and composite runs. Hosted retention remains to
+be verified; authorization alone is not an observed upload.
+
+The first hosted implementation E2E run (`36719273975`, source `c441841d`) failed both jobs. The console reaches
+Task report finalization but omits the underlying command log. The failure log is retained in the recovery artifact
+directory; no infrastructure or flake attribution is made from that incomplete output.
+
+## Failed finalizer diagnostics
+
+The pinned CI Task version, 3.53.1, reproduced a separate output-loss defect in an isolated copy of the original
+structural wrapper: Task exited 201 and emitted its retained report marker, but omitted the runtime-only Compose
+stdout marker. The reproduction script exits zero only after asserting that defect; it is not a successful Task run.
+Seven adopted wrappers now capture finalizer status with `|| report_exit=$?` before printing the captured log.
+Cleanup ordering and command/cleanup/report failure precedence are unchanged.
+
+The strengthened actual-Task fixture suite passed all 10 cases on Task 3.53.1; the release guard passed under
+`-race` in 1.187 seconds. Task listing, Python syntax and diff checks passed. The focused RED/GREEN logs and source
+hashes are retained in `continuation/ci-retention-finalizer/`. The underlying hosted E2E command failure remains
+unattributed until the next run exposes its log and retained artifact.
+
 ## Remaining proof
 
-The PR checkpoint records the final full push-gate result for its published source. CI retention is still awaiting explicit upload
-authorization after automatic approval rejected the prepared workflow edit. Earlier bounded Writer mutation
+The PR checkpoint records the full push-gate result for each published source. Final CI correction and hosted
+artifact verification remain due, followed by archive/spec synchronization. Earlier bounded Writer mutation
 deferrals remain unchanged. No merge-readiness, full implementation completion or issue closure is claimed.

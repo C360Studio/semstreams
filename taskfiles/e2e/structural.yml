@@ -20,8 +20,8 @@ tasks:
           trap - EXIT
           cleanup_exit=0
           docker compose -f docker/compose/tiered.yml --profile structural down -v --timeout 15 >> "$E2E_REPORT_LOG" 2>&1 || cleanup_exit=$?
-          e2e_report_finalize "$command_exit" "$cleanup_exit"
-          report_exit=$?
+          report_exit=0
+          e2e_report_finalize "$command_exit" "$cleanup_exit" || report_exit=$?
           cat "$E2E_REPORT_LOG"
           if [ "$command_exit" -ne 0 ]; then exit "$command_exit"; fi
           if [ "$cleanup_exit" -ne 0 ]; then exit "$cleanup_exit"; fi

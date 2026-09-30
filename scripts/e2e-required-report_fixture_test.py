@@ -45,6 +45,8 @@ args = sys.argv[1:]
 with open(os.environ["TRACE"], "a") as trace:
     trace.write(json.dumps(["docker", *args]) + "\n")
 if "up" in args:
+    if os.environ.get("UP_STDOUT"):
+        print(os.environ["UP_STDOUT"])
     sys.exit(int(os.environ.get("UP_EXIT", "0")))
 if "down" in args:
     sys.exit(int(os.environ.get("DOWN_EXIT", "0")))
@@ -178,8 +180,8 @@ tasks:
           trap - EXIT
           cleanup_exit=0
           docker compose -f docker/compose/e2e.yml down -v --timeout 15 >> "$E2E_REPORT_LOG" 2>&1 || cleanup_exit=$?
-          e2e_report_finalize "$command_exit" "$cleanup_exit"
-          report_exit=$?
+          report_exit=0
+          e2e_report_finalize "$command_exit" "$cleanup_exit" || report_exit=$?
           cat "$E2E_REPORT_LOG"
           if [ "$command_exit" -ne 0 ]; then exit "$command_exit"; fi
           if [ "$cleanup_exit" -ne 0 ]; then exit "$cleanup_exit"; fi
@@ -210,8 +212,11 @@ tasks:
     def test_body_failure_still_cleans_then_finalizes(self):
         self.install_structural()
         self.env["DOWN_EXIT"] = "23"
+        self.env["FINALIZE_EXIT"] = "1"
+        self.env["UP_STDOUT"] = "fixture compose startup detail"
         process, entries = self.run_task("default")
         self.assertNotEqual(process.returncode, 0, process.stdout)
+        self.assertIn("fixture compose startup detail", process.stdout)
         actions = [entry[0] for entry in entries]
         self.assertEqual(actions, ["report", "docker", "docker", "report"], entries)
         self.assertIn("up", entries[1])

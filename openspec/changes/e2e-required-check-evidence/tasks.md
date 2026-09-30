@@ -49,17 +49,19 @@ approval after correcting the emitted model label and adding an actual tool-stag
 review found and corrected Task-child report selection, active application phase identity and isolated cleanup
 propagation. Both implementation slices and the documentation now have bounded independent approval.
 See [the continuation evidence](evidence/resumed-validation.md). This chat owns the assembled and push gates.
-The accepted design remains in force with the launcher-history addendum in `acceptance.md`. One authorization is pending:
-
-- CI upload authorization: automatic approval rejected the prepared two-job report/log retention edit. The repository
-  workflow is unchanged; a candidate is retained outside the worktree. Local implementation continues.
+The accepted design remains in force with the launcher-history addendum in `acceptance.md`. On 2026-09-30 the owner
+approved retaining the statistical and slow-consumer jobs' JSON reports and logs as GitHub Actions artifacts.
+The workflow now includes that bounded retention: named reports, manifests and task/child logs only, excluding
+binaries and unrelated results. The prior upload-authorization hold is cleared; hosted retention proof remains due.
 
 The owner approved explicitly incomplete outer Task launcher history while retaining actual test/child argv,
 source/configuration identity and observed results. Implementation must distinguish the resolved Task target from
 observed command arguments; the active delta and guide record this narrow limit.
 
-Task truth is 7/10. The observed agentic fixture failure is corrected and its real Task now passes; remaining
-implementation and push gates remain incomplete.
+Task truth remains 7/10 pending final CI correction and verification. The recovered implementation was published
+at `c441841d` after a complete local push gate passed in 891.229 seconds with unchanged source hashes.
+The first hosted implementation E2E jobs failed; their console logs stop at report finalization without exposing
+the underlying command error. This remains an unresolved CI finding, not an attributed flake.
 The 2026-09-27 pause and earlier evidence records below are historical checkpoints.
 
 ## Completed bounded corrections
@@ -117,15 +119,15 @@ Agentic's actual tool-stage warning-nil mutation produced baseline/mutant/restor
 hashes, patch and raw logs are retained there, along with the passing package race log. Prior helper-only mutation
 results are not substituted for this stage-boundary evidence.
 Automatic approval rejected exporting all of `test/e2e/results/` from `.github/workflows/e2e-ladder.yml`, citing
-possible sensitive logs, manifests, metadata or binaries without specific authorization. No workflow edit landed;
-CI retention remains blocked. No bypass was attempted.
+possible sensitive logs, manifests, metadata or binaries without specific authorization. No workflow edit landed
+at that historical checkpoint. The later explicit owner approval above authorizes the bounded two-job allowlist.
 
 #1404 / #1188 merged as `03bd62bb` on 2026-09-29. Its former ownership hold is historical; reconcile the landed
 agentic scenario, tier-authority and platform-identity behavior before editing those surfaces. #1427 also merged.
 Claude's #1117 / PR #1425 retains semantic CI ownership; this claim retains #1222 required-check evidence.
 No transfer of that adjacent work is implied.
 
-Remaining work includes authorized CI retention, final full-gate/verification reconciliation
+Remaining work includes hosted retention verification, final CI correction and full-gate/verification reconciliation,
 and archive/spec synchronization.
 The historical #1397 issue is closed. Required-job recurrence #1421 remains open and has no waiver for this PR. Earlier GREEN and claim-head hosted checks do not prove
 this dirty implementation. No implementation-complete or merge-ready claim is made.

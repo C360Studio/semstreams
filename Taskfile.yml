@@ -202,8 +202,8 @@ tasks:
           trap - EXIT
           cleanup_exit=0
           # Each child owns its Compose cleanup; the parent has no Compose stack.
-          e2e_report_finalize "$command_exit" "$cleanup_exit"
-          report_exit=$?
+          report_exit=0
+          e2e_report_finalize "$command_exit" "$cleanup_exit" || report_exit=$?
           cat "$E2E_REPORT_LOG"
           if [ "$command_exit" -ne 0 ]; then exit "$command_exit"; fi
           if [ "$report_exit" -ne 0 ]; then exit "$report_exit"; fi

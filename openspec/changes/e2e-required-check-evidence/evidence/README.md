@@ -4,8 +4,9 @@
 
 The owner requested recovery and claiming on 2026-09-30. [Tasks](../tasks.md) identify the current Codex write owner,
 worktree, remaining work and gates. The exact 78-path paused implementation is now committed locally at
-`4b8204ba0da9a579bfb1ca869b646c36d3110b98`. The draft PR's remote head remains the initial claim; implementation
-publication awaits the required gates. The 2026-09-27 pause is historical, not evidence of a current competing writer.
+`4b8204ba0da9a579bfb1ca869b646c36d3110b98`. Recovery was published at `c441841d` after the complete local push
+gate passed. [Resumed validation](resumed-validation.md) records the later assembled proof and CI limits.
+The 2026-09-27 pause is historical, not evidence of a current competing writer.
 
 The [final source/document hashes](pause-final-source.sha256) identify the preserved implementation before recovery
 record updates. The [final correction artifact hashes](pause-final-artifacts.sha256) identify the historical reports
@@ -13,10 +14,12 @@ and raw logs. All 150 files in the separate recovery archive matched their manif
 The archive also retains ignored logs and local commits. Later task/evidence-index updates do not alter source code.
 
 The recovered snapshot passed the three focused E2E Go packages with `-race` on 2026-09-30; see tasks for the exact
-command and evidence location. This does not complete the pending Docker, Task propagation or broader report review.
+command and evidence location. Later assembled runs and Task/report reviews are recorded in resumed validation.
 The older [14-file pause snapshot](paused-source.sha256) and review records below retain their original limits.
 
-## Latest corrections and their limits
+## Historical pause corrections and their limits
+
+The following records describe the paused snapshot. Resumed validation and current tasks supersede their open holds.
 
 - Result R1/R2: [author](result-fixes-round2.md), [approved review](implementation-review-round2.md).
 - CLI C1-C4: [author](cli-corrections-round2.md), [digests](cli-corrections-round2.sha256),
@@ -60,7 +63,8 @@ No other required control, producer proof or assembled gate is waived.
 
 Automatic approval also rejected broad workflow export of the entire E2E results directory, citing potential
 sensitive logs, manifests, metadata or binaries without specific authorization. No workflow edit landed and no bypass
-was attempted. CI artifact retention remains blocked, separately from the local evidence preserved here.
+was attempted at that checkpoint. On 2026-09-30 the owner approved the bounded two-job JSON/report/log upload
+to GitHub Actions artifacts; that authorization hold is cleared. Hosted retention proof remains due.
 
 Core's [duplicate-count mutation](core-duplicate-mutant-red.log), [restoration](core-duplicate-restored-green.log),
 and K1 bridge controls remain bounded core evidence. No Docker/integration/assembled E2E or implementation push gate
