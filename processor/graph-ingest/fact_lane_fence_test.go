@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -27,6 +28,8 @@ const (
 	fenceModeInvalid      = "invalid"
 	fenceModePanicID      = "panic-entity-id"
 	fenceModePanicTriples = "panic-triples"
+	fenceModePanicValid   = "panic-validate"
+	fenceModePanicDecode  = "panic-unmarshal"
 )
 
 // fenceCallRecorder counts the identity calls made on decoded payloads. The
@@ -50,8 +53,11 @@ func fenceTestType() message.Type {
 func (p *fenceTestPayload) Schema() message.Type { return fenceTestType() }
 
 func (p *fenceTestPayload) Validate() error {
-	if p.Mode == fenceModeInvalid {
+	switch p.Mode {
+	case fenceModeInvalid:
 		return errors.New("fence test payload: mode invalid")
+	case fenceModePanicValid:
+		panic("fence test payload: Validate boom")
 	}
 	return nil
 }
@@ -83,7 +89,13 @@ func (p *fenceTestPayload) MarshalJSON() ([]byte, error) {
 
 func (p *fenceTestPayload) UnmarshalJSON(data []byte) error {
 	type alias fenceTestPayload
-	return json.Unmarshal(data, (*alias)(p))
+	if err := json.Unmarshal(data, (*alias)(p)); err != nil {
+		return err
+	}
+	if p.Mode == fenceModePanicDecode {
+		panic("fence test payload: UnmarshalJSON boom")
+	}
+	return nil
 }
 
 // newFenceTestComponent returns a component whose decoder resolves the fence
@@ -145,13 +157,19 @@ func TestDecodeEntity_ValidateFailureRejectsBeforeIdentity(t *testing.T) {
 	assert.Zero(t, rec.triplesCalls.Load(), "Triples must not run on a payload that failed Validate")
 }
 
-func TestDecodeEntity_FencesIdentityPanics(t *testing.T) {
+// The fence covers the whole lane entry: the payload's UnmarshalJSON (inside
+// Decode, before the message type is known, so the error names the subject),
+// its Validate, and its identity methods (the error names the message type).
+func TestDecodeEntity_FencesPayloadPanics(t *testing.T) {
 	tests := []struct {
 		mode      string
 		recovered string
+		names     string
 	}{
-		{mode: fenceModePanicID, recovered: "EntityID boom"},
-		{mode: fenceModePanicTriples, recovered: "Triples boom"},
+		{mode: fenceModePanicDecode, recovered: "UnmarshalJSON boom", names: "subject test.fence"},
+		{mode: fenceModePanicValid, recovered: "Validate boom", names: fenceTestType().String()},
+		{mode: fenceModePanicID, recovered: "EntityID boom", names: fenceTestType().String()},
+		{mode: fenceModePanicTriples, recovered: "Triples boom", names: fenceTestType().String()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.mode, func(t *testing.T) {
@@ -168,7 +186,7 @@ func TestDecodeEntity_FencesIdentityPanics(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, entity)
 			assert.True(t, errs.IsInvalid(err), "a fenced panic must be a classified error: %v", err)
-			assert.Contains(t, err.Error(), fenceTestType().String(), "the error names the message type")
+			assert.Contains(t, err.Error(), tt.names, "the error names the message type, or the subject before decode")
 			assert.Contains(t, err.Error(), tt.recovered, "the error names the recovered value")
 		})
 	}
@@ -187,6 +205,8 @@ func TestHandleMessage_RejectionsLandOnPoisonAccounting(t *testing.T) {
 		{mode: fenceModeInvalid, wantErrors: 1, wantStored: 0},
 		{mode: fenceModePanicID, wantErrors: 1, wantStored: 0},
 		{mode: fenceModePanicTriples, wantErrors: 1, wantStored: 0},
+		{mode: fenceModePanicValid, wantErrors: 1, wantStored: 0},
+		{mode: fenceModePanicDecode, wantErrors: 1, wantStored: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.mode, func(t *testing.T) {
@@ -201,4 +221,35 @@ func TestHandleMessage_RejectionsLandOnPoisonAccounting(t *testing.T) {
 			assert.Equal(t, tt.wantStored, storedKeyCount(bucket), "persisted entities for mode %s", tt.mode)
 		})
 	}
+}
+
+// The production registry and a registered in-tree type: a LoopExecutionEntity
+// whose loop_id cannot form an entity ID is refused by its own Validate on the
+// lane, before its EntityID runs (#1112).
+func TestDecodeEntity_MalformedLoopExecutionEntityIsInvalid(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	reg := payloadregistry.New()
+	require.NoError(t, agentic.RegisterPayloads(reg))
+	comp.decoder = message.NewDecoder(reg)
+
+	typ := agentic.LoopExecutionMessageType()
+	wire := map[string]any{
+		"id":   "fence-loop-001",
+		"type": map[string]string{"domain": typ.Domain, "category": typ.Category, "version": typ.Version},
+		"payload": map[string]any{
+			"org": "c360", "platform": "platform", "loop_id": "loop.dotted",
+			"task": map[string]string{"task_id": "t", "role": "r"},
+		},
+		"meta": map[string]any{"created_at": 1, "received_at": 1, "source": "fence-test"},
+	}
+	data, err := json.Marshal(wire)
+	require.NoError(t, err)
+
+	var entity any
+	require.NotPanics(t, func() { entity, err = comp.decodeEntity("test.fence.loop", data) })
+	require.Error(t, err)
+	assert.Nil(t, entity)
+	assert.True(t, errs.IsInvalid(err), "a malformed loop identity is a classified invalid error: %v", err)
+	assert.Contains(t, err.Error(), "payload validation failed")
+	assert.Contains(t, err.Error(), "loopID")
 }

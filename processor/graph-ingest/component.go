@@ -1674,39 +1674,38 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 // returns is a poison message on both (count, WARN, ack-drop).
 //
 // Validate is the consumer half of BaseMessage.MarshalJSON: what a producer's
-// envelope refuses to emit, the lane refuses to ingest, before any payload
-// method runs (#1112).
-func (c *Component) decodeEntity(subject string, data []byte) (*graph.EntityState, error) {
-	baseMsg, err := c.decoder.Decode(data)
-	if err != nil {
-		return nil, fmt.Errorf("decode base message (subject %s): %w", subject, err)
-	}
-	if err := baseMsg.Validate(); err != nil {
-		return nil, fmt.Errorf("validate base message (subject %s): %w", subject,
-			errs.WrapInvalid(err, "graph-ingest", "decodeEntity", "payload validation failed"))
-	}
-	entity, err := c.extractEntityFenced(baseMsg)
-	if err != nil {
-		return nil, fmt.Errorf("extract entity (subject %s): %w", subject, err)
-	}
-	return entity, nil
-}
-
-// extractEntityFenced runs extractEntityFromMessage and converts a panic from
-// the decoded payload's EntityID, Triples, StorageRef or IndexingProfile into a
-// classified error. The payload is producer-owned code running on
-// wire-supplied content, so one malformed arrival must not take the consumer
-// goroutine (and the process) down (#1112).
-func (c *Component) extractEntityFenced(msg *message.BaseMessage) (entity *graph.EntityState, err error) {
+// envelope refuses to emit, the lane refuses to ingest, before any identity
+// method runs. One fence covers the whole entry because every step runs
+// producer-registered payload code on wire content — the type's UnmarshalJSON
+// inside Decode, its Validate, and its EntityID/Triples/StorageRef/
+// IndexingProfile during extraction. A panic there becomes a classified error
+// on the poison path instead of escaping to the stream handler's Nak and an
+// endless redelivery (#1112).
+func (c *Component) decodeEntity(subject string, data []byte) (entity *graph.EntityState, err error) {
+	origin := "subject " + subject
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			entity = nil
 			err = errs.WrapInvalid(
-				fmt.Errorf("payload %s panicked during entity extraction: %v", msg.Type(), recovered),
+				fmt.Errorf("%s panicked on the Graphable lane: %v", origin, recovered),
 				"graph-ingest", "decodeEntity", "fence payload panic")
 		}
 	}()
-	return c.extractEntityFromMessage(msg)
+
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode base message (subject %s): %w", subject, err)
+	}
+	origin = fmt.Sprintf("payload %s (subject %s)", baseMsg.Type(), subject)
+	if err := baseMsg.Validate(); err != nil {
+		return nil, fmt.Errorf("validate base message (subject %s): %w", subject,
+			errs.WrapInvalid(err, "graph-ingest", "decodeEntity", "payload validation failed"))
+	}
+	entity, err = c.extractEntityFromMessage(baseMsg)
+	if err != nil {
+		return nil, fmt.Errorf("extract entity (subject %s): %w", subject, err)
+	}
+	return entity, nil
 }
 
 // ingestEntity merges one Graphable projection into its authority entity.
