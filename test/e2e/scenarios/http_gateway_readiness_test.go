@@ -2,7 +2,9 @@ package scenarios
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -264,5 +266,53 @@ func TestHTTPGatewayStageAdmitsNoRequestPastTheReadinessBudget(t *testing.T) {
 	// It waited, but it never got to retry: the count is requests beyond the first.
 	if got := result.Metrics["graphql_gateway_index_not_ready_retries"]; got != 0 {
 		t.Errorf("graphql_gateway_index_not_ready_retries = %v, want 0 (waited, never retried)", got)
+	}
+}
+
+// gh#1117 D4 — test-http-gateway is a PATH probe: it must not ask the gateway
+// for community enrichment and answer synthesis it never decodes (a model call,
+// measured at 18-56 s under the semantic tier), and it must pin the
+// non-summarized branch so the decoded `entities` list carries the hits.
+// The request is read at the HTTP seam, as the gateway receives it.
+func TestHTTPGatewayStageRequestsNoSummariesAndNoAutoSummarize(t *testing.T) {
+	t.Parallel()
+
+	bodies := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		select {
+		case bodies <- b:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, readyEnvelope)
+	}))
+	t.Cleanup(srv.Close)
+	s, result := readinessScenario(srv.URL)
+
+	if err := s.executeTestHTTPGateway(context.Background(), result); err != nil {
+		t.Fatalf("stage failed against a ready gateway: %v", err)
+	}
+
+	var req struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal(<-bodies, &req); err != nil {
+		t.Fatalf("decode the request the gateway received: %v", err)
+	}
+	if got, ok := req.Variables["includeSummaries"]; !ok || got != false {
+		t.Errorf("variables.includeSummaries = %v (present %v), want false", got, ok)
+	}
+	if got, ok := req.Variables["summarizeThreshold"]; !ok || got != float64(0) {
+		t.Errorf("variables.summarizeThreshold = %v (present %v), want 0", got, ok)
+	}
+	for _, arg := range []string{
+		"$includeSummaries: Boolean", "includeSummaries: $includeSummaries",
+		"$summarizeThreshold: Int", "summarizeThreshold: $summarizeThreshold",
+	} {
+		if !strings.Contains(req.Query, arg) {
+			t.Errorf("GraphQL document does not carry %q, so the variable never reaches globalSearch:\n%s", arg, req.Query)
+		}
 	}
 }

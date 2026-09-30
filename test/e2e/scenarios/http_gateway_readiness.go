@@ -97,21 +97,30 @@ type gatewayGlobalSearchResponse struct {
 	Errors []gatewayGraphQLError `json:"errors"`
 }
 
-// gatewayGlobalSearchQuery is the stage's controlled probe: the same
-// globalSearch("robot warehouse", level:0) document the stage has always sent.
+// gatewayGlobalSearchQuery is the stage's controlled probe:
+// globalSearch("robot warehouse", level:0) as a path check (gh#1117 D4).
+//
+// includeSummaries:false keeps the request off community enrichment and answer
+// synthesis, a model call the stage never decodes (18-56 s measured under the
+// semantic tier). summarizeThreshold:0 disables auto-summarize, pinning the
+// non-summarized branch so the hits arrive in `entities`, the field the stage
+// reads; the summarized branch carries them in entityIds instead.
+// Precedent: sendNLQuery (tiered_structural.go).
 func gatewayGlobalSearchQuery() map[string]any {
 	return map[string]any{
-		"query": `query($query: String!, $level: Int, $maxCommunities: Int) {
-			globalSearch(query: $query, level: $level, maxCommunities: $maxCommunities) {
+		"query": `query($query: String!, $level: Int, $maxCommunities: Int, $summarizeThreshold: Int, $includeSummaries: Boolean) {
+			globalSearch(query: $query, level: $level, maxCommunities: $maxCommunities, summarizeThreshold: $summarizeThreshold, includeSummaries: $includeSummaries) {
 				entities { id type }
 				count
 				strategy
 			}
 		}`,
 		"variables": map[string]any{
-			"query":          "robot warehouse",
-			"level":          0,
-			"maxCommunities": 10,
+			"query":              "robot warehouse",
+			"level":              0,
+			"maxCommunities":     10,
+			"summarizeThreshold": 0,
+			"includeSummaries":   false,
 		},
 	}
 }

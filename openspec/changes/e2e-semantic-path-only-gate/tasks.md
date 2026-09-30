@@ -26,10 +26,11 @@
       variables); `executeTestHTTPGateway` fails on `hitCount == 0` under the semantic variant. Mutation evidence:
       unit test on the builder's variables (delete one key from the builder → the test reds); unit test feeding a
       `strategy: graphrag`, zero-entity envelope to the stage's assertion under semantic (delete the `hitCount == 0`
-      check from the stage → the test reds; restore → green). Measured on the PR's ladder run, both variants: semantic
-      `graphql_gateway_search_hits` 30, `graphql_gateway_latency_ms` < 1000, strategy `graphrag`; statistical
-      `graphql_gateway_search_hits` recorded — if > 0 the clause extends to statistical in this PR (spec delta and
-      design D4 updated), if 0 it is filed as its own question on #1117.
+      check from the stage → the test reds; restore → green). A local `task e2e:statistical` run with
+      `includeSummaries:false` / `summarizeThreshold:0` recorded `graphql_gateway_search_hits` = 0 (evidence § 1)
+      before the gate's scope was written, so the clause stays semantic-scoped and the statistical zero is the owner's
+      question on #1117. Measured on the PR's ladder run, semantic: `graphql_gateway_search_hits` 30,
+      `graphql_gateway_latency_ms` < 1000, strategy `graphrag`.
 - [ ] 2.4 `e2e-ladder.yml`: job `e2e-semantic` per D5 (no artifact step) replaces `e2e-semantic-measure` in the same
   commit; header `:21-30` rewritten. Evidence: `! git grep -q 'MEASUREMENT ONLY' -- .github/` and `! git grep -q
   prev1-program -- .github/` both exit 0; the PR's ladder shows the job once.

@@ -135,16 +135,16 @@ synthesis (P6, the measured 18-56 s; the spec already requires it, P14); `summar
 non-summarized branch so `Entities` (which the stage decodes, `:87-97`) is never nil (in the summarized branch
 `EntityIDs` carries hits and the stage would read 0). Today the stage asserts only `strategy != "graphrag"`
 (`validate_infra.go:384-385`), but the Tier-2 text fallback also answers `Strategy: "graphrag"` with zero entities
-when nothing matches (`graphrag.go:1389-1393`) and a non-contract `loadEntities` failure falls through to it
+when the level has no communities or none match (`graphrag.go:1389-1393`, `:1462-1466`) and a non-contract `loadEntities` failure falls through to it
 (`:924-930`), so the same edit makes `hitCount == 0` (`:388`) an error in the semantic variant: the outcome the stage
 exists to detect is a gateway `globalSearch` served with no entities (the #830 class); both measured semantic runs
 return 30. The stage also runs in the required `e2e statistical` job (`tiered.go:370`), where today's runs read
 `graphql_gateway_search_hits:0` under the default arguments (E2E Ladder runs 36700758142 and 36699189684; round-2 H3)
 and the log does not say whether that zero is the summarized branch (`EntityIDs`, which D4's arguments would fix) or
-the community-text fallback matching nothing. Prefer observation to prediction: the gate is written semantic-scoped;
-PR #1425's first statistical run under D4's arguments is the measurement, and if it reads > 0 the scope widens to both
-variants in the same PR (task 2.3 names both figures), while a measured 0 is recorded as its own question on #1117,
-never asserted around. The gate catches a fall-through that yields no entities only: a `loadEntities` failure that the
+the community-text fallback matching nothing. Prefer observation to prediction: a local `task e2e:statistical` run
+with `includeSummaries:false` / `summarizeThreshold:0` recorded `graphql_gateway_search_hits` = 0 (evidence § 1)
+before the gate's scope was written, so the statistical zero is not the summarized branch; the gate is written
+semantic-scoped and the statistical zero is the owner's question on #1117, never asserted around. The gate catches a fall-through that yields no entities only: a `loadEntities` failure that the
 community-text fallback answers with a non-empty list (`graphrag.go:1462-1466`) looks like a Tier-1 answer, and
 `recordGlobalSearchTierTransition` is the only discriminator — a residual, not covered (round-2 M). Stays a path
 probe: request shape, status, GraphQL errors, decode, `strategy == "graphrag"` (`graphrag.go:934`), hits > 0 under
