@@ -644,7 +644,7 @@ Where a run's outcome is persisted (no config or `Details` reaches disk; the log
 
 - `test/e2e/results/writer.go:32` — `type TestRunConfig struct {`
 - `test/e2e/scenarios/results.go:738` — `func SaveStructuredResults(tr *TieredResults, outputDir string) (string, error) {`
-- `cmd/e2e/main.go:546` — `	if flags.outputDir != "" - `cmd/e2e/main.go:545` — `	if flags.outputDir != "" && result.Structured != nil {`- `cmd/e2e/main.go:545` — `	if flags.outputDir != "" && result.Structured != nil {` result.Structured != nil {`
+- `cmd/e2e/main.go:546` — `	if flags.outputDir != "" && result.Structured != nil {`
 
 `test-http-gateway`'s only assertion, and the zero-entity fallback it cannot see:
 
