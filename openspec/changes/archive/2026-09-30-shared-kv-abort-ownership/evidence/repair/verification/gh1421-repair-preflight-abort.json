@@ -1,0 +1,22 @@
+{
+  "reason": "Known deterministic entity-ID annotation failure; abort remaining preflight work before integration",
+  "utc": "2026-09-30T04:50:19.256416+00:00",
+  "processes": {
+    "54867": [
+      54855,
+      "task check:push"
+    ],
+    "57835": [
+      55951,
+      "/var/folders/db/qk1n2zs935q9ld3p2sn98yzr0000gn/T/go-build2204885492/b1057/testinfra.test -test.testlogfile=/var/folders/db/qk1n2zs935q9ld3p2sn98yzr0000gn/T/go-build2204885492/b1057/testlog.txt -test.paniconexit0 -test.timeout=10m0s"
+    ],
+    "58493": [
+      57835,
+      "go list -e -json=Name,ImportPath,Error,DepOnly,Imports,ImportMap,TestImports,XTestImports,Module -compiled=false -test=true -export=false -deps=true -find=false -buildvcs=false -pgo=off -- ./..."
+    ],
+    "55951": [
+      54867,
+      "go test -race ./..."
+    ]
+  }
+}

@@ -118,6 +118,7 @@ type ownerLoadFixture struct {
 	name          string
 	bucket        string
 	store         *natsclient.KVStore
+	observer      *ownerLoadObserver
 	ownerFilter   string
 	forwardFilter string
 	wantForward   int
@@ -190,11 +191,19 @@ func createAndSeedOwnerLoadBuckets(
 	)
 	bucketNames := []string{predicateBucket, nameBucket, incomingBucket}
 	stores := make(map[string]*natsclient.KVStore, len(bucketNames))
+	var predicateObserver *ownerLoadObserver
+	if profile.name == "ci" {
+		predicateObserver = newOwnerLoadObserver()
+	}
 	streams := make(map[string]jetstream.Stream, len(bucketNames))
 	for _, bucketName := range bucketNames {
 		raw, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: bucketName, Storage: jetstream.FileStorage})
 		require.NoError(t, err)
-		stores[bucketName] = nc.NewKVStore(raw)
+		if bucketName == predicateBucket && predicateObserver != nil {
+			stores[bucketName] = nc.NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: predicateObserver})
+		} else {
+			stores[bucketName] = nc.NewKVStore(raw)
+		}
 		stream, err := js.Stream(ctx, "KV_"+bucketName)
 		require.NoError(t, err)
 		streams[bucketName] = stream
@@ -204,7 +213,7 @@ func createAndSeedOwnerLoadBuckets(
 	target := "acme.ops.load.graph.target.hub"
 	name := "Owner Hotspot"
 	fixtures := []ownerLoadFixture{
-		{name: "predicate", bucket: predicateBucket, store: stores[predicateBucket],
+		{name: "predicate", bucket: predicateBucket, store: stores[predicateBucket], observer: predicateObserver,
 			ownerFilter: predicateIndexEntityFilter(owner), forwardFilter: predicateIndexForwardFilter(ownerLoadPredicate),
 			wantForward: profile.entities, stream: streams[predicateBucket]},
 		{name: "name", bucket: nameBucket, store: stores[nameBucket],
@@ -287,10 +296,10 @@ func runOwnerLoadWorkerShape(
 
 	for _, fixture := range fixtures {
 		measureOwnerLoadFilter(t, ctx, fixture.store, fixture.bucket, fixture.name+"-owner", fixture.ownerFilter,
-			profile, 1)
+			profile, 1, ownerLoadMeasurementObserver(profile, fixture, false))
 		if fixture.forwardFilter != "" {
 			measureOwnerLoadFilter(t, ctx, fixture.store, fixture.bucket, fixture.name+"-forward", fixture.forwardFilter,
-				profile, fixture.wantForward)
+				profile, fixture.wantForward, ownerLoadMeasurementObserver(profile, fixture, true))
 		}
 	}
 
@@ -459,6 +468,14 @@ func TestStoreOwnerLoadHighWater(t *testing.T) {
 	require.Equal(t, int64(5), counter.Load())
 }
 
+// Only the default CI predicate-forward loop arms the persistent observer.
+func ownerLoadMeasurementObserver(profile ownerLoadProfile, fixture ownerLoadFixture, forward bool) *ownerLoadObserver {
+	if profile.name == "ci" && fixture.name == "predicate" && forward {
+		return fixture.observer
+	}
+	return nil
+}
+
 func measureOwnerLoadFilter(
 	t *testing.T,
 	ctx context.Context,
@@ -466,25 +483,46 @@ func measureOwnerLoadFilter(
 	bucket, label, filter string,
 	profile ownerLoadProfile,
 	want int,
+	observer *ownerLoadObserver,
 ) {
 	t.Helper()
 	durations := make([]time.Duration, 0, profile.repetitions)
-	for repetition := 0; repetition < profile.repetitions; repetition++ {
-		started := time.Now()
-		keys, err := store.KeysByFilter(ctx, filter)
-		duration := time.Since(started)
-		if err != nil || len(keys) != want {
-			failure := err
-			if failure == nil {
-				failure = fmt.Errorf("count=%d want=%d", len(keys), want)
-			}
-			logOwnerLoadFault(t, ownerLoadFaultAt(ctx, "measured-list", label, bucket, filter,
-				fmt.Sprintf("repetition=%d", repetition), duration, failure))
+	ownerLoadObservationScope(observer, func(records []ownerLoadAttempt, integrity error) {
+		for _, rec := range records {
+			t.Logf("phase=predicate-forward-observation fixture=%s bucket=%s filter=%s %s", label, bucket, filter,
+				formatOwnerLoadAttempt(rec))
 		}
-		require.NoError(t, err, label)
-		require.Len(t, keys, want, label)
-		durations = append(durations, duration)
-	}
+		if integrity != nil {
+			t.Errorf("phase=predicate-forward-observation integrity: %v", integrity)
+		}
+	}, func() {
+		for repetition := 0; repetition < profile.repetitions; repetition++ {
+			started := time.Now()
+			observationErr := ownerLoadAttemptScope(ctx, observer, repetition, filter, started,
+				func(err error) {
+					t.Errorf("phase=predicate-forward-observation repetition=%d cleanup=%v", repetition, err)
+				},
+				func() {
+					keys, err := store.KeysByFilter(ctx, filter)
+					duration := time.Since(started) // Before diagnostic joining, formatting, or output.
+					if observer != nil {
+						observer.operationReturned(time.Now(), keys, err)
+					}
+					if err != nil || len(keys) != want {
+						failure := err
+						if failure == nil {
+							failure = fmt.Errorf("count=%d want=%d", len(keys), want)
+						}
+						logOwnerLoadFault(t, ownerLoadFaultAt(ctx, "measured-list", label, bucket, filter,
+							fmt.Sprintf("repetition=%d", repetition), duration, failure))
+					}
+					require.NoError(t, err, label)
+					require.Len(t, keys, want, label)
+					durations = append(durations, duration)
+				})
+			require.NoError(t, observationErr, "diagnostic ownership before next admission")
+		}
+	})
 	assertOwnerLoadLatency(t, label, durations, profile)
 }
 
@@ -748,4 +786,35 @@ func assertOwnerLoadServerBounds(
 
 func ownerLoadEntityID(index int) string {
 	return fmt.Sprintf("acme.ops.load.graph.entity.%06d", index)
+}
+
+func TestOwnerLoadObserverExactActivation(t *testing.T) {
+	observer := newOwnerLoadObserver()
+	ci := ownerLoadCIProfile()
+	fixture := ownerLoadFixture{name: "predicate", observer: observer}
+	require.Same(t, observer, ownerLoadMeasurementObserver(ci, fixture, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, fixture, false))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, ownerLoadFixture{name: "name", observer: observer}, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, ownerLoadFixture{name: "incoming", observer: observer}, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ownerLoadFullProfile(), fixture, true))
+	raw := &ownerLoadFakeBucket{makeWatcher: func() jetstream.KeyWatcher { return &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates("diag.one")} }}
+	store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
+	measureOwnerLoadFilter(t, t.Context(), store, "PREDICATE", "predicate-forward", "diag.>", ci, 1, ownerLoadMeasurementObserver(ci, fixture, true))
+	records, integrity := observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 5)
+	require.Equal(t, 5, raw.calls)
+	for i, rec := range records {
+		require.Equal(t, i, rec.repetition)
+		require.Equal(t, "returned", rec.phase())
+		require.True(t, rec.callbackJoined)
+	}
+	// An ordinary unarmed call still delegates and cannot create a sixth record.
+	keys, err := store.KeysByFilter(t.Context(), "diag.>")
+	require.NoError(t, err)
+	require.Equal(t, []string{"diag.one"}, keys)
+	records, integrity = observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 5)
+	require.Equal(t, 6, raw.calls)
 }

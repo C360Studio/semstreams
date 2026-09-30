@@ -1,0 +1,11 @@
+--- owner-filter-load-observer.go.txt
++++ publication-mutant.go.txt
+@@ -231,7 +231,7 @@
+ 		body()
+ 		return
+ 	}
+-	defer func() { records, err := o.snapshot(); publish(records, err) }()
++	defer func() { _, _ = o.snapshot() }()
+ 	body()
+ }
+ 

@@ -1,0 +1,437 @@
+package natsclient
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
+	"github.com/stretchr/testify/require"
+)
+
+const (
+	abortEventPrefix = "KV_ABORT_EVENT "
+	abortFilter      = "diag.>"
+	abortCount       = 5000
+	abortStackBytes  = 2 << 20
+	abortStreamBytes = 4 << 20
+)
+
+type abortEvent struct {
+	Case    string `json:"case"`
+	Kind    string `json:"kind"`
+	Elapsed string `json:"elapsed"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+type abortReporter struct {
+	mu    sync.Mutex
+	name  string
+	start time.Time
+}
+
+func (r *abortReporter) emit(kind, detail string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	data, _ := json.Marshal(abortEvent{Case: r.name, Kind: kind, Elapsed: time.Since(r.start).String(), Detail: detail})
+	fmt.Printf("%s%s\n", abortEventPrefix, data)
+}
+
+// The exec copy goroutines never block on the parent event consumer. Both
+// streams have byte ceilings; overflow is an integrity failure, not silence.
+type abortOutput struct {
+	mu          sync.Mutex
+	events      chan abortEvent
+	name        string
+	parseEvents bool
+	limit       int
+	used        int
+	partial     string
+	overflow    bool
+	parseErr    error
+}
+
+func (o *abortOutput) Write(data []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	original := len(data)
+	if o.used+len(data) > o.limit {
+		o.overflow = true
+		data = data[:max(0, o.limit-o.used)]
+	}
+	o.used += len(data)
+	if !o.parseEvents {
+		return original, nil
+	}
+	o.partial += string(data)
+	for {
+		n := strings.IndexByte(o.partial, '\n')
+		if n < 0 {
+			break
+		}
+		line := strings.TrimSuffix(o.partial[:n], "\r")
+		o.partial = o.partial[n+1:]
+		if !strings.HasPrefix(line, abortEventPrefix) {
+			o.enqueue(abortEvent{Case: o.name, Kind: "output", Detail: line})
+			continue
+		}
+		var event abortEvent
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, abortEventPrefix)), &event); err != nil {
+			o.parseErr = errors.Join(o.parseErr, err)
+			continue
+		}
+		o.enqueue(event)
+	}
+	return original, nil
+}
+func (o *abortOutput) enqueue(event abortEvent) {
+	select {
+	case o.events <- event:
+	default:
+		o.overflow = true
+	}
+}
+func (o *abortOutput) finish() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.parseEvents && o.partial != "" {
+		o.enqueue(abortEvent{Case: o.name, Kind: "output_partial", Detail: o.partial})
+	}
+	if o.overflow {
+		return errors.Join(o.parseErr, errors.New("child output exceeded bounded stream or event buffer"))
+	}
+	return o.parseErr
+}
+
+type abortStopObserver struct {
+	jetstream.KeyLister // Keys is the identical native channel.
+	mu                  sync.Mutex
+	calls               int
+	lastErr             error
+	emit                func(string, string)
+}
+
+func (o *abortStopObserver) Stop() error {
+	o.mu.Lock()
+	o.calls++
+	o.mu.Unlock()
+	o.emit("stop_entry", "native KeyLister.Stop")
+	err := o.KeyLister.Stop()
+	o.mu.Lock()
+	o.lastErr = err
+	o.mu.Unlock()
+	o.emit("stop_return", fmt.Sprintf("error=%v", err))
+	return err
+}
+func (o *abortStopObserver) result() (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.calls, o.lastErr
+}
+
+type abortGateBucket struct {
+	jetstream.KeyValue
+	mu                sync.Mutex
+	hold              bool
+	releaseOnce       sync.Once
+	releaseC          chan struct{}
+	acquired          chan struct{}
+	childCtx          context.Context
+	observer          *abortStopObserver
+	native            jetstream.KeyLister
+	nativeErr         error
+	constructorReturn time.Time
+	emit              func(string, string)
+}
+
+func newAbortGateBucket(raw jetstream.KeyValue, hold bool, emit func(string, string)) *abortGateBucket {
+	return &abortGateBucket{KeyValue: raw, hold: hold, releaseC: make(chan struct{}), acquired: make(chan struct{}), emit: emit}
+}
+func (b *abortGateBucket) release() { b.releaseOnce.Do(func() { close(b.releaseC) }) }
+func (b *abortGateBucket) capturedContext() context.Context {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.childCtx
+}
+func (b *abortGateBucket) observed() *abortStopObserver {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.observer
+}
+func (b *abortGateBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+	deadline, ok := ctx.Deadline()
+	b.mu.Lock()
+	b.childCtx = ctx
+	b.mu.Unlock()
+	b.emit("construction_entry", fmt.Sprintf("filters=%q deadline=%s present=%t", filters, deadline.Format(time.RFC3339Nano), ok))
+	native, err := b.KeyValue.ListKeysFiltered(ctx, filters...)
+	b.mu.Lock()
+	b.native, b.nativeErr, b.constructorReturn = native, err, time.Now()
+	b.mu.Unlock()
+	b.emit("construction_return", fmt.Sprintf("error=%v", err))
+	if err != nil {
+		return nil, err
+	}
+	observed := &abortStopObserver{KeyLister: native, emit: b.emit}
+	b.mu.Lock()
+	b.observer = observed
+	b.mu.Unlock()
+	close(b.acquired)
+	if b.hold {
+		<-b.releaseC
+	}
+	b.emit("constructor_release", fmt.Sprintf("child_error=%v", ctx.Err()))
+	return observed, nil
+}
+
+var abortHeader = regexp.MustCompile(`^goroutine ([0-9]+) \[`)
+
+func abortStacks() (map[string]string, bool) {
+	buf := make([]byte, abortStackBytes)
+	n := runtime.Stack(buf, true)
+	if n == len(buf) {
+		return nil, false
+	}
+	result := make(map[string]string)
+	for _, block := range strings.Split(string(buf[:n]), "\n\n") {
+		first, _, _ := strings.Cut(block, "\n")
+		match := abortHeader.FindStringSubmatch(first)
+		if len(match) == 2 {
+			result[match[1]] = block
+		}
+	}
+	return result, true
+}
+
+type abortPair struct{ forwardID, watcherID, forwardStack, watcherStack string }
+
+func abortFindPair(stacks map[string]string, complete bool) (abortPair, error) {
+	if !complete {
+		return abortPair{}, errors.New("GATE_NOT_REACHED: truncated stack snapshot")
+	}
+	var forward, watcher []string
+	for id, stack := range stacks {
+		if strings.Contains(stack, "[chan send]") && strings.Contains(stack, "jetstream.(*kvs).ListKeysFiltered.func1") && strings.Contains(stack, "jetstream/kv.go:1451") {
+			forward = append(forward, id)
+		}
+		if strings.Contains(stack, "[chan send]") && strings.Contains(stack, "jetstream.(*kvs).WatchFiltered.func1") && strings.Contains(stack, "jetstream/kv.go:1290") {
+			watcher = append(watcher, id)
+		}
+	}
+	if len(forward) > 1 || len(watcher) > 1 {
+		return abortPair{}, fmt.Errorf("GATE_NOT_REACHED: ambiguous native witnesses forward=%d watcher=%d", len(forward), len(watcher))
+	}
+	if len(forward) != 1 || len(watcher) != 1 || forward[0] == watcher[0] {
+		return abortPair{}, nil
+	}
+	return abortPair{forward[0], watcher[0], stacks[forward[0]], stacks[watcher[0]]}, nil
+}
+func abortWitnessLive(workCtx, childCtx context.Context) error {
+	if err := workCtx.Err(); err != nil {
+		return fmt.Errorf("GATE_NOT_REACHED: work authority: %w", err)
+	}
+	if childCtx == nil {
+		return errors.New("GATE_NOT_REACHED: framework child absent")
+	}
+	deadline, ok := childCtx.Deadline()
+	if !ok || childCtx.Err() != nil || time.Until(deadline) <= 0 || time.Until(deadline) > DefaultKVOptions().Timeout {
+		return errors.New("GATE_NOT_REACHED: framework child not live with five-second deadline")
+	}
+	return nil
+}
+func abortWaitPair(workCtx, childCtx context.Context) (abortPair, error) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := abortWitnessLive(workCtx, childCtx); err != nil {
+			return abortPair{}, err
+		}
+		stacks, complete := abortStacks()
+		pair, err := abortFindPair(stacks, complete)
+		if err != nil {
+			return abortPair{}, err
+		}
+		if pair.forwardID != "" {
+			if err := abortWitnessLive(workCtx, childCtx); err != nil {
+				return abortPair{}, err
+			}
+			return pair, nil
+		}
+		select {
+		case <-workCtx.Done():
+			return abortPair{}, fmt.Errorf("GATE_NOT_REACHED: %w", workCtx.Err())
+		case <-childCtx.Done():
+			return abortPair{}, fmt.Errorf("GATE_NOT_REACHED: child expired before witnesses: %w", childCtx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+// Presence is never promoted to join. A tracked blocked sender after Close is
+// a surviving owner; a missing ID only means absent from this snapshot.
+func abortSenderState(stacks map[string]string, complete bool, id, frame string) string {
+	if !complete {
+		return "unknown_truncated"
+	}
+	stack, ok := stacks[id]
+	if !ok {
+		return "absent_from_snapshot"
+	}
+	if strings.Contains(stack, "[chan send]") && strings.Contains(stack, frame) {
+		return "absent_from_snapshot"
+	}
+	return "present_other_state"
+}
+func abortJoinWait(done <-chan error, budget time.Duration) (error, bool) {
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err, true
+	case <-timer.C:
+		return nil, false
+	}
+}
+func abortTerminate(kill func() error, done <-chan error, budget time.Duration) (error, error, bool) {
+	k := kill()
+	w, j := abortJoinWait(done, budget)
+	return k, w, j
+}
+
+type abortFakeBucket struct {
+	jetstream.KeyValue
+	mu      sync.Mutex
+	ctx     context.Context
+	filters []string
+	lister  jetstream.KeyLister
+	err     error
+}
+
+func (b *abortFakeBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+	b.mu.Lock()
+	b.ctx = ctx
+	b.filters = append([]string(nil), filters...)
+	b.mu.Unlock()
+	return b.lister, b.err
+}
+func (b *abortFakeBucket) observed() (context.Context, []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ctx, append([]string(nil), b.filters...)
+}
+
+type abortFakeLister struct {
+	keys    chan string
+	mu      sync.Mutex
+	stops   int
+	stopErr error
+}
+
+func (l *abortFakeLister) Keys() <-chan string { return l.keys }
+func (l *abortFakeLister) Stop() error         { l.mu.Lock(); defer l.mu.Unlock(); l.stops++; return l.stopErr }
+func (l *abortFakeLister) count() int          { l.mu.Lock(); defer l.mu.Unlock(); return l.stops }
+func abortNoop(string, string)                 {}
+
+func TestAbortDiagnosticTransparentAndExpiredGate(t *testing.T) {
+	t.Run("transparent", func(t *testing.T) {
+		ch := make(chan string, 1)
+		ch <- "diag.one"
+		close(ch)
+		native := &abortFakeLister{keys: ch, stopErr: errors.New("recorded stop error")}
+		raw := &abortFakeBucket{lister: native}
+		gate := newAbortGateBucket(raw, false, abortNoop)
+		before := time.Now()
+		keys, err := (&Client{}).NewKVStore(gate).KeysByFilter(t.Context(), abortFilter)
+		after := time.Now()
+		require.NoError(t, err)
+		require.Equal(t, []string{"diag.one"}, keys)
+		require.Equal(t, 1, native.count())
+		got, filters := raw.observed()
+		require.Equal(t, []string{abortFilter}, filters)
+		deadline, ok := got.Deadline()
+		require.True(t, ok)
+		require.False(t, deadline.Before(before.Add(DefaultKVOptions().Timeout)))
+		require.False(t, deadline.After(after.Add(DefaultKVOptions().Timeout)))
+		require.Equal(t, ch, gate.observed().Keys())
+		calls, stopErr := gate.observed().result()
+		require.Equal(t, 1, calls)
+		require.ErrorIs(t, stopErr, native.stopErr)
+	})
+	t.Run("expired_gate", func(t *testing.T) {
+		ch := make(chan string, 1)
+		ch <- "diag.partial"
+		close(ch)
+		native := &abortFakeLister{keys: ch}
+		raw := &abortFakeBucket{lister: native}
+		gate := newAbortGateBucket(raw, true, abortNoop)
+		type result struct {
+			keys []string
+			err  error
+		}
+		done := make(chan result, 1)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go func() {
+			keys, err := (&Client{}).NewKVStore(gate).KeysByFilter(ctx, abortFilter)
+			done <- result{keys, err}
+		}()
+		defer gate.release()
+		select {
+		case <-gate.acquired:
+		case <-time.After(time.Second):
+			t.Fatal("native constructor did not return")
+		}
+		child := gate.capturedContext()
+		select {
+		case <-child.Done():
+		case <-time.After(7 * time.Second):
+			t.Fatal("default child failed to expire")
+		}
+		require.ErrorIs(t, child.Err(), context.DeadlineExceeded)
+		gate.release()
+		select {
+		case got := <-done:
+			require.Nil(t, got.keys)
+			require.ErrorIs(t, got.err, context.DeadlineExceeded)
+		case <-time.After(time.Second):
+			t.Fatal("listing task failed to join")
+		}
+		require.Equal(t, 1, native.count())
+		require.Equal(t, ch, gate.observed().Keys())
+	})
+}
+func TestAbortDiagnosticEvidenceAndContainment(t *testing.T) {
+	f := "goroutine 11 [chan send]:\njetstream.(*kvs).ListKeysFiltered.func1\njetstream/kv.go:1451"
+	w := "goroutine 12 [chan send]:\njetstream.(*kvs).WatchFiltered.func1\njetstream/kv.go:1290"
+	pair, err := abortFindPair(map[string]string{"11": f, "12": w}, true)
+	require.NoError(t, err)
+	require.Equal(t, "11", pair.forwardID)
+	require.Equal(t, "12", pair.watcherID)
+	_, err = abortFindPair(map[string]string{"11": f, "13": f, "12": w}, true)
+	require.ErrorContains(t, err, "ambiguous")
+	_, err = abortFindPair(map[string]string{"11": f, "12": w}, false)
+	require.ErrorContains(t, err, "truncated")
+	require.Equal(t, "surviving_blocked_sender", abortSenderState(map[string]string{"11": f}, true, "11", "jetstream/kv.go:1451"))
+	require.Equal(t, "absent_from_snapshot", abortSenderState(map[string]string{}, true, "11", "jetstream/kv.go:1451"))
+	require.Equal(t, "unknown_truncated", abortSenderState(map[string]string{}, false, "11", "jetstream/kv.go:1451"))
+	out := &abortOutput{events: make(chan abortEvent, 1), name: "x", parseEvents: true, limit: 8}
+	_, err = out.Write([]byte("123456789"))
+	require.NoError(t, err)
+	require.ErrorContains(t, out.finish(), "bounded")
+	stderr := &abortOutput{limit: 3}
+	_, err = stderr.Write([]byte("abcd"))
+	require.NoError(t, err)
+	require.ErrorContains(t, stderr.finish(), "bounded")
+	done := make(chan error)
+	k, werr, joined := abortTerminate(func() error { return nil }, done, time.Millisecond)
+	require.NoError(t, k)
+	require.NoError(t, werr)
+	require.False(t, joined)
+}

@@ -1,0 +1,41 @@
+{
+  "label": "gh1421-repair-native",
+  "command": [
+    "scripts/run-integration-tests.sh",
+    "-timeout=90s",
+    "-run",
+    "^TestIntegration_KVStoreFilteredNativeDeliveryClosure$",
+    "-v",
+    "./natsclient"
+  ],
+  "cwd": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams",
+  "started_utc": "2026-09-30T04:41:02.813418+00:00",
+  "ended_utc": "2026-09-30T04:41:15.033783+00:00",
+  "duration_seconds": 12.22,
+  "exit_status": 0,
+  "source_sha256_before": {
+    "natsclient/kv.go": "99fdbb314007561c460698b91cc770a07d8590331f50bdf3a3e2864582b88ace",
+    "natsclient/kv_watcher_ownership_test.go": "5c86c18d3b39d587a01534caa099d05d39ec064777adc33fc301367e0826b37a",
+    "natsclient/kv_watcher_ownership_integration_test.go": "e1a81df39edc53b78a2b733fdd6319ba30ac29799ac8bd675117fae1ceec0e9f",
+    "processor/graph-index/owner_filter_load_observer_test.go": "f70308a9839fd7933c60a636cec5ee1bb145c315693d5aa96140ec2355e822c7",
+    "processor/graph-index/owner_filter_load_integration_test.go": "640d291e86c0febd4505b544a270c426acf6cdf54f19322f25b1a6984b6ce9f0",
+    "processor/graph-index/component_test.go": "a748b4a665e772cc1b19fecd4c644f61f80978c996ae05ee76ab6b19ea04df57",
+    "processor/graph-ingest/component_test.go": "4f8214323da1c8a2ae4782295fd7360e06b2b7440ea00fd6558f68c7e45387c8",
+    "test/testinfra/cleanup_baseline.json": "83e50bdd44f8e5d909acc274898b66e3570342634f5d0a1003508384ebb165ed"
+  },
+  "source_sha256_after": {
+    "natsclient/kv.go": "99fdbb314007561c460698b91cc770a07d8590331f50bdf3a3e2864582b88ace",
+    "natsclient/kv_watcher_ownership_test.go": "5c86c18d3b39d587a01534caa099d05d39ec064777adc33fc301367e0826b37a",
+    "natsclient/kv_watcher_ownership_integration_test.go": "e1a81df39edc53b78a2b733fdd6319ba30ac29799ac8bd675117fae1ceec0e9f",
+    "processor/graph-index/owner_filter_load_observer_test.go": "f70308a9839fd7933c60a636cec5ee1bb145c315693d5aa96140ec2355e822c7",
+    "processor/graph-index/owner_filter_load_integration_test.go": "640d291e86c0febd4505b544a270c426acf6cdf54f19322f25b1a6984b6ce9f0",
+    "processor/graph-index/component_test.go": "a748b4a665e772cc1b19fecd4c644f61f80978c996ae05ee76ab6b19ea04df57",
+    "processor/graph-ingest/component_test.go": "4f8214323da1c8a2ae4782295fd7360e06b2b7440ea00fd6558f68c7e45387c8",
+    "test/testinfra/cleanup_baseline.json": "83e50bdd44f8e5d909acc274898b66e3570342634f5d0a1003508384ebb165ed"
+  },
+  "log_sha256": "5d77b38e9f4cc580bf766d6f4b3b34cef3e0e668ad242f9ffbf8980caae63aee",
+  "git_head": "81a4deb877e56bc2074e86a62f962e2c0161f869",
+  "git_branch": "codex/gh1421-listing-expiry-recurrence",
+  "git_status_porcelain": " M natsclient/kv.go\n M openspec/changes/shared-kv-abort-ownership/proposal.md\n M openspec/changes/shared-kv-abort-ownership/tasks.md\n M processor/graph-index/component_test.go\n M processor/graph-index/owner_filter_load_integration_test.go\n M processor/graph-index/owner_filter_load_observer_test.go\n M processor/graph-ingest/component_test.go\n M test/testinfra/cleanup_baseline.json\n?? natsclient/kv_watcher_ownership_integration_test.go\n?? natsclient/kv_watcher_ownership_test.go\n?? openspec/changes/shared-kv-abort-ownership/evidence/repair/\n?? openspec/changes/shared-kv-abort-ownership/repair-decision.md\n?? openspec/changes/shared-kv-abort-ownership/repair-design.md\n?? openspec/changes/shared-kv-abort-ownership/review/repair-design-final.md\n?? openspec/changes/shared-kv-abort-ownership/review/repair-design-round-1.md\n?? openspec/changes/shared-kv-abort-ownership/review/repair-source-final.md\n?? openspec/changes/shared-kv-abort-ownership/review/repair-source-round-1.md\n?? openspec/changes/shared-kv-abort-ownership/specs/\n",
+  "source_unchanged": true
+}

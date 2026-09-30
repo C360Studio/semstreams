@@ -1,0 +1,357 @@
+//go:build integration
+
+package natsclient
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+const (
+	abortBucket      = "KV_SHARED_ABORT_DIAG"
+	abortServer      = "2.14.4-alpine@sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66"
+	abortChildKill   = 45 * time.Second
+	abortWaitReserve = 5 * time.Second
+	abortCloseBudget = 15 * time.Second
+)
+
+// One opt-in experiment: a file-backed control and a constructor-return gate,
+// each in a fresh process/connection. Parent alone owns the NATS fixture.
+func TestIntegration_SharedKVAbortDiagnostic(t *testing.T) {
+	if os.Getenv("SEMSTREAMS_SHARED_KV_ABORT_DIAGNOSTIC") != "1" {
+		t.Skip("opt-in shared KV abort diagnostic")
+	}
+	started := time.Now()
+	setupCtx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	fixture, err := newTestClient(setupCtx, productionTestClientFactoryDeps, WithKV(), WithFileStorage(), WithNATSVersion(abortServer))
+	if err != nil {
+		t.Fatalf("fixture setup: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := fixture.Terminate(); err != nil {
+			t.Errorf("fixture cleanup: %v", err)
+		}
+	})
+	bucket, err := fixture.Client.CreateKeyValueBucket(setupCtx, jetstream.KeyValueConfig{Bucket: abortBucket, Storage: jetstream.FileStorage})
+	if err != nil {
+		t.Fatalf("file-backed bucket: %v", err)
+	}
+	for i := range abortCount {
+		if _, err := bucket.Put(setupCtx, fmt.Sprintf("diag.%04d", i), []byte("v")); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+	if err := setupCtx.Err(); err != nil {
+		t.Fatalf("setup 20s allowance: %v", err)
+	}
+	t.Logf("ABORT fixture count=%d file_backed=true setup=%s server=%s sdk=nats.go/v1.52.0", abortCount, time.Since(started), abortServer)
+	cooperative := started.Add(145 * time.Second)
+	for _, name := range []string{"control", "gated"} {
+		if time.Until(cooperative) < abortChildKill+abortWaitReserve {
+			t.Fatalf("case %s admission stopped: remaining=%s need=50s", name, time.Until(cooperative))
+		}
+		if err := runSharedKVAbortChild(t, name, fixture.URL); err != nil {
+			t.Fatalf("case %s failed: %v; later cases not admitted", name, err)
+		}
+	}
+}
+
+func TestIntegration_SharedKVAbortDiagnosticChild(t *testing.T) {
+	name := os.Getenv("SEMSTREAMS_SHARED_KV_ABORT_CHILD")
+	if name == "" {
+		t.Skip("shared KV abort child only")
+	}
+	r := &abortReporter{name: name, start: time.Now()}
+	r.emit("child_entry", fmt.Sprintf("pid=%d", os.Getpid()))
+	if name != "control" && name != "gated" {
+		t.Errorf("unknown child case %q", name)
+		return
+	}
+	if err := runSharedKVAbortCase(t.Context(), r, os.Getenv("SEMSTREAMS_SHARED_KV_ABORT_URL")); err != nil {
+		r.emit("failure", err.Error())
+		t.Error(err)
+		return
+	}
+	r.emit("done", "case complete; absence is not native join")
+}
+
+func runSharedKVAbortChild(t *testing.T, name, url string) (retErr error) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(exe, "-test.run=^TestIntegration_SharedKVAbortDiagnosticChild$", "-test.v", "-test.timeout=40s")
+	cmd.Env = append(os.Environ(), "SEMSTREAMS_SHARED_KV_ABORT_CHILD="+name, "SEMSTREAMS_SHARED_KV_ABORT_URL="+url)
+	events := make(chan abortEvent, 256)
+	stdout := &abortOutput{events: events, name: name, parseEvents: true, limit: abortStreamBytes}
+	stderr := &abortOutput{limit: 1 << 20}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	joined := false
+	defer func() {
+		if joined {
+			return
+		}
+		killErr, waitErr, ok := abortTerminate(cmd.Process.Kill, waitDone, abortWaitReserve)
+		if !ok {
+			retErr = errors.Join(retErr, fmt.Errorf("OWNERSHIP_UNRESOLVED child pid=%d kill=%v Wait did not join", cmd.Process.Pid, killErr))
+			return
+		}
+		joined = true
+		retErr = errors.Join(retErr, fmt.Errorf("contained child pid=%d kill=%v wait=%v stdout=%v stderr=%v", cmd.Process.Pid, killErr, waitErr, stdout.finish(), stderr.finish()))
+	}()
+	alarm := time.NewTimer(abortChildKill)
+	defer alarm.Stop()
+	entry := time.NewTimer(5 * time.Second)
+	defer entry.Stop()
+	entryC := entry.C
+	var last abortEvent
+	doneSeen := false
+	var waitErr error
+	for waitDone != nil {
+		select {
+		case event := <-events:
+			last = event
+			t.Logf("ABORT event=%+v", event)
+			if event.Kind == "child_entry" {
+				entry.Stop()
+				entryC = nil
+			}
+			if event.Kind == "done" {
+				doneSeen = true
+			}
+		case waitErr = <-waitDone:
+			joined = true
+			waitDone = nil
+		case <-entryC:
+			return fmt.Errorf("child pid=%d did not enter within 5s; last=%+v", cmd.Process.Pid, last)
+		case <-alarm.C:
+			return fmt.Errorf("child pid=%d exceeded 45s; last=%+v", cmd.Process.Pid, last)
+		}
+	}
+	for len(events) > 0 {
+		event := <-events
+		t.Logf("ABORT event=%+v", event)
+		if event.Kind == "done" {
+			doneSeen = true
+		}
+	}
+	if err := stdout.finish(); err != nil {
+		return fmt.Errorf("bounded stdout integrity: %w", err)
+	}
+	if err := stderr.finish(); err != nil {
+		return fmt.Errorf("bounded stderr integrity: %w", err)
+	}
+	if waitErr != nil || !doneSeen {
+		return fmt.Errorf("child pid=%d wait=%v done=%t", cmd.Process.Pid, waitErr, doneSeen)
+	}
+	return nil
+}
+
+type abortListResult struct {
+	keys []string
+	err  error
+}
+type abortCaseOwner struct {
+	reporter    *abortReporter
+	client      *Client
+	conn        *nats.Conn
+	gate        *abortGateBucket
+	cancelList  context.CancelFunc
+	listDone    <-chan abortListResult
+	listJoined  bool
+	closeCalled bool
+	closeErr    error
+	finished    bool
+}
+
+func (o *abortCaseOwner) closeOnce() error {
+	if o.closeCalled {
+		return o.closeErr
+	}
+	o.closeCalled = true
+	ctx, cancel := context.WithTimeout(context.Background(), abortCloseBudget)
+	defer cancel()
+	o.reporter.emit("close_entry", fmt.Sprintf("status=%s", o.conn.Status()))
+	o.closeErr = o.client.Close(ctx)
+	o.reporter.emit("close_return", fmt.Sprintf("error=%v status=%s connection_closed=%t", o.closeErr, o.conn.Status(), o.conn.IsClosed()))
+	return o.closeErr
+}
+func (o *abortCaseOwner) finish() error {
+	if o.finished {
+		return nil
+	}
+	o.finished = true
+	o.gate.release()
+	o.cancelList()
+	var joinErr error
+	if !o.listJoined {
+		timer := time.NewTimer(3 * time.Second)
+		defer timer.Stop()
+		select {
+		case result := <-o.listDone:
+			o.listJoined = true
+			o.reporter.emit("listing_cleanup_join", fmt.Sprintf("keys=%d nil=%t error=%v", len(result.keys), result.keys == nil, result.err))
+		case <-timer.C:
+			joinErr = errors.New("OWNERSHIP_UNRESOLVED listing task did not join within 3s")
+			o.reporter.emit("ownership_unresolved", joinErr.Error())
+		}
+	}
+	closeErr := o.closeOnce()
+	if joinErr != nil && !o.conn.IsClosed() {
+		o.conn.Close()
+	}
+	return errors.Join(joinErr, closeErr)
+}
+
+func abortObservePair(r *abortReporter, phase string, pair abortPair) error {
+	stacks, complete := abortStacks()
+	if !complete {
+		r.emit(phase, "unknown: truncated all-goroutine snapshot")
+		return errors.New("incomplete all-goroutine snapshot")
+	}
+	forward := abortSenderState(stacks, true, pair.forwardID, "jetstream/kv.go:1451")
+	watcher := abortSenderState(stacks, true, pair.watcherID, "jetstream/kv.go:1290")
+	r.emit(phase, fmt.Sprintf("forward_id=%s state=%s stack=%q watcher_id=%s state=%s stack=%q", pair.forwardID, forward, stacks[pair.forwardID], pair.watcherID, watcher, stacks[pair.watcherID]))
+	return nil
+}
+func runSharedKVAbortCase(parent context.Context, r *abortReporter, url string) (retErr error) {
+	workCtx, workCancel := context.WithTimeout(parent, 20*time.Second)
+	defer workCancel()
+	client, err := NewClient(url, WithMaxReconnects(0), WithHealthInterval(0))
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	// Every return after construction has one bounded Close owner, including Connect failure.
+	var owner *abortCaseOwner
+	defer func() {
+		if owner != nil {
+			retErr = errors.Join(retErr, owner.finish())
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), abortCloseBudget)
+		defer cancel()
+		retErr = errors.Join(retErr, client.Close(ctx))
+	}()
+	if err := client.Connect(workCtx); err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	conn := client.GetConnection()
+	js, err := client.JetStream()
+	if err != nil {
+		return fmt.Errorf("JetStream: %w", err)
+	}
+	raw, err := js.KeyValue(workCtx, abortBucket)
+	if err != nil {
+		return fmt.Errorf("bucket: %w", err)
+	}
+	gated := r.name == "gated"
+	gate := newAbortGateBucket(raw, gated, r.emit)
+	store := client.NewKVStore(gate)
+	listCtx, cancelList := context.WithCancel(workCtx)
+	done := make(chan abortListResult, 1)
+	owner = &abortCaseOwner{reporter: r, client: client, conn: conn, gate: gate, cancelList: cancelList, listDone: done}
+	// Lexical finalizer is installed before the listing task can start.
+	go func() { keys, err := store.KeysByFilter(listCtx, abortFilter); done <- abortListResult{keys, err} }()
+	r.emit("operation_entry", fmt.Sprintf("default_child=%s", DefaultKVOptions().Timeout))
+	var pair abortPair
+	if gated {
+		select {
+		case <-gate.acquired:
+		case result := <-done:
+			owner.listJoined = true
+			return fmt.Errorf("GATE_NOT_REACHED: constructor returned no handle: %v", result.err)
+		case <-workCtx.Done():
+			return fmt.Errorf("GATE_NOT_REACHED: acquisition: %w", workCtx.Err())
+		}
+		child := gate.capturedContext()
+		pair, err = abortWaitPair(workCtx, child)
+		if err != nil {
+			return err
+		}
+		// abortWaitPair captured both blocked sends in one complete snapshot
+		// and checked that this exact framework child remained live.
+		r.emit("before_expiry", fmt.Sprintf("forward_id=%s state=surviving_blocked_sender stack=%q watcher_id=%s state=surviving_blocked_sender stack=%q", pair.forwardID, pair.forwardStack, pair.watcherID, pair.watcherStack))
+		select {
+		case <-child.Done():
+		case <-workCtx.Done():
+			return fmt.Errorf("child expiry missed work allowance: %w", workCtx.Err())
+		}
+		if !errors.Is(child.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("expected natural child expiry: %v", child.Err())
+		}
+		r.emit("child_deadline", "actual framework child reports DeadlineExceeded")
+		gate.release()
+	}
+	var result abortListResult
+	select {
+	case result = <-done:
+		owner.listJoined = true
+		owner.listDone = nil
+	case <-workCtx.Done():
+		return fmt.Errorf("production return missed work allowance: %w", workCtx.Err())
+	}
+	r.emit("production_return", fmt.Sprintf("keys=%d nil=%t error=%v", len(result.keys), result.keys == nil, result.err))
+	// Preserve this snapshot before any assertion can return into Close cleanup.
+	if gated {
+		if err := abortObservePair(r, "after_return_before_close", pair); err != nil {
+			return err
+		}
+	}
+	observer := gate.observed()
+	if observer == nil {
+		return errors.New("native observer absent")
+	}
+	calls, stopErr := observer.result()
+	r.emit("stop_observation", fmt.Sprintf("calls=%d error=%v", calls, stopErr))
+	if calls != 1 {
+		return fmt.Errorf("framework delegated Stop count=%d want=1", calls)
+	}
+	if !gated {
+		if result.err != nil {
+			return fmt.Errorf("control listing: %w", result.err)
+		}
+		want := make([]string, abortCount)
+		for i := range want {
+			want[i] = fmt.Sprintf("diag.%04d", i)
+		}
+		slices.Sort(want)
+		slices.Sort(result.keys)
+		if !slices.Equal(result.keys, want) {
+			return fmt.Errorf("control exact set mismatch keys=%d want=%d", len(result.keys), len(want))
+		}
+		r.emit("control_exact_set", fmt.Sprintf("matched=%d", len(want)))
+		if err := owner.closeOnce(); err != nil {
+			return fmt.Errorf("control Close: %w", err)
+		}
+	} else {
+		if result.keys != nil || !errors.Is(result.err, context.DeadlineExceeded) {
+			return fmt.Errorf("typed expiry mismatch nil=%t error=%v", result.keys == nil, result.err)
+		}
+		closeErr := owner.closeOnce()
+		if err := abortObservePair(r, "after_close", pair); err != nil {
+			return errors.Join(closeErr, err)
+		}
+		if closeErr != nil {
+			r.emit("close_observation", closeErr.Error())
+		}
+	}
+	return nil
+}

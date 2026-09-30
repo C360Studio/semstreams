@@ -1,0 +1,11 @@
+--- baseline.go
++++ mutant.go
+@@ -310,7 +310,7 @@
+ 		strings.Contains(stack, "(*Subscription).Unsubscribe"):
+ 		return "context_completion_unsubscribe"
+ 	default:
+-		return "unknown"
++		return "framework_delegated_stop"
+ 	}
+ }
+ 
