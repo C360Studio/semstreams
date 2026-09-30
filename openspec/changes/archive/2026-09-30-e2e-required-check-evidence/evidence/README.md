@@ -31,7 +31,8 @@ The following records describe the paused snapshot. Resumed validation and curre
 - CLI C5/C6 and I1 bridge: [author](task-reporting.md),
   [C5/C6 approved; I1 remains HIGH](cli-review-round3.md).
 
-The remaining I1 finding is a deterministic source trace: the real `semantic-fallback` execution path reaches an
+At that pause, the remaining I1 finding was a deterministic source trace: the real `semantic-fallback` execution path
+reached an
 unregistered authority variant and panics. It predates the declaration correction. The bridge test proves selection
 and classification only. Reconcile the statistical Compose deployment and Claude's held authority work before
 repairing the real lifecycle. The review did not execute Docker or claim an observed composed failure.
@@ -64,7 +65,8 @@ No other required control, producer proof or assembled gate is waived.
 Automatic approval also rejected broad workflow export of the entire E2E results directory, citing potential
 sensitive logs, manifests, metadata or binaries without specific authorization. No workflow edit landed and no bypass
 was attempted at that checkpoint. On 2026-09-30 the owner approved the bounded two-job JSON/report/log upload
-to GitHub Actions artifacts; that authorization hold is cleared. Hosted retention proof remains due.
+to GitHub Actions artifacts; that authorization hold is cleared. The later hosted retention proof is recorded in
+[resumed validation](resumed-validation.md#final-pre-archive-verification).
 
 Core's [duplicate-count mutation](core-duplicate-mutant-red.log), [restoration](core-duplicate-restored-green.log),
 and K1 bridge controls remain bounded core evidence. No Docker/integration/assembled E2E or implementation push gate

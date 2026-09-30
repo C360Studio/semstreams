@@ -102,8 +102,8 @@ That checkpoint was published to draft PR #1406; the worktree was clean.
 The owner then explicitly approved retaining the statistical and slow-consumer jobs' JSON reports and logs as
 GitHub Actions artifacts. The workflow adds `always()` uploads for the named result/member/manifest JSON files,
 task/log files and child stdout. Copied application binaries, report inputs and unrelated results are excluded.
-The allowlist matches files from the retained local slow-consumer and composite runs. Hosted retention remains to
-be verified; authorization alone is not an observed upload.
+The allowlist matches files from the retained local slow-consumer and composite runs. The later hosted upload and
+download verification is recorded below; authorization alone was not treated as proof.
 
 The first hosted implementation E2E run (`36719273975`, source `c441841d`) failed both jobs. The console reaches
 Task report finalization but omits the underlying command log. The failure log is retained in the recovery artifact
@@ -119,11 +119,32 @@ Cleanup ordering and command/cleanup/report failure precedence are unchanged.
 
 The strengthened actual-Task fixture suite passed all 10 cases on Task 3.53.1; the release guard passed under
 `-race` in 1.187 seconds. Task listing, Python syntax and diff checks passed. The focused RED/GREEN logs and source
-hashes are retained in `continuation/ci-retention-finalizer/`. The underlying hosted E2E command failure remains
-unattributed until the next run exposes its log and retained artifact.
+hashes are retained in `continuation/ci-retention-finalizer/`. The underlying failure of that first hosted E2E run
+remains unattributed. Later passing runs do not establish its root cause.
 
-## Remaining proof
+## Final pre-archive verification
 
-The PR checkpoint records the full push-gate result for each published source. Final CI correction and hosted
-artifact verification remain due, followed by archive/spec synchronization. Earlier bounded Writer mutation
-deferrals remain unchanged. No merge-readiness, full implementation completion or issue closure is claimed.
+At published branch head `a2a71a08b06741c177a22e525cce4a365375511c`, the complete local
+`task check:push` passed in 887.29 seconds using Task 3.53.1 with source hashes unchanged. The raw log and receipt
+are retained in `recovery-1222/continuation/check-push-round6/`. The prior failed gate attempts remain separate.
+
+Hosted [CI run 36724318557](https://github.com/C360Studio/semstreams/actions/runs/36724318557) passed all checks,
+including its Test job. Hosted [E2E run 36724318564](https://github.com/C360Studio/semstreams/actions/runs/36724318564)
+passed both statistical and slow-consumer jobs. GitHub checked out tested merge
+`e07383b048ef0e4c1b91d65d15a6c3ca9a3512fb`, whose parents were main `5457b345` and branch `a2a71a08`;
+the reports' `source_sha` correctly records the merge commit. These are results for that published branch head and
+tested merge, not for the later archive commit.
+
+The downloaded [statistical artifact](https://github.com/C360Studio/semstreams/actions/runs/36724318564/artifacts/11102538231)
+and [slow-consumer artifact](https://github.com/C360Studio/semstreams/actions/runs/36724318564/artifacts/11101528780)
+each contain exactly eight allowlisted report, manifest and log files. All four Task/CLI reports are complete,
+required-proof-passed and exited zero. Parent/child identities and manifest/log digests match the retained bytes.
+Statistical CLI has four nonfatal warnings; the other three reports have none. Downloaded ZIPs, raw hosted logs and
+`verification.json` are retained under `recovery-1222/continuation/hosted-a2a71a08/`. This establishes observed
+hosted retention; it does not relabel the earlier failed composite or first hosted run as passing.
+
+The owner [superseded the keep-open hold for #1421](https://github.com/C360Studio/semstreams/issues/1421#issuecomment-5912919455);
+the issue was closed at 14:07:29 UTC on 2026-09-30. This disposition does not claim a root cause for the historical
+recurrence. The accepted outer-launcher-argv limit and bounded Writer guard-removal mutation deferrals remain
+unchanged; exact sensitivity for those refused mutations is UNVERIFIED. Final archive/spec review and fresh hosted
+checks after publication remain outside this pre-archive proof.

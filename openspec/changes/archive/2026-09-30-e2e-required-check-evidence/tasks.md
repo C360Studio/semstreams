@@ -11,25 +11,49 @@
 
 ## Implementation and proof
 
-- [ ] Implement the remaining agreed behavior and failure controls after current-main reconciliation.
+- [x] Implement the remaining agreed behavior and failure controls after current-main reconciliation.
 - [x] Reconcile the active config/recovery changes before editing shared scenario/authority files.
 - [x] Update canonical testing documentation and the accepted capability delta to match implemented behavior.
-- [ ] Complete appropriate verification and independent implementation review, preserving exact evidence and limits.
-- [ ] Reconcile and archive the accepted change with spec synchronization as the final content commit.
+- [x] Complete appropriate verification and independent implementation review, preserving exact evidence and limits.
+- [x] Reconcile and archive the accepted change with spec synchronization.
 
-## Current checkpoint
+## Final pre-archive checkpoint — 2026-09-30
+
+The accepted implementation is complete at published branch head `a2a71a08`. The full local `task check:push`
+passed in 887.29 seconds on pinned Task 3.53.1 with source unchanged. Hosted CI run
+[36724318557](https://github.com/C360Studio/semstreams/actions/runs/36724318557) and both jobs in hosted E2E run
+[36724318564](https://github.com/C360Studio/semstreams/actions/runs/36724318564) passed. GitHub tested merge
+`e07383b048ef0e4c1b91d65d15a6c3ca9a3512fb` (parents `5457b345` and `a2a71a08`); the retained E2E reports
+correctly name that tested merge as their source SHA, not the branch head. The two downloaded artifacts contain eight
+allowlisted files each. All four Task/CLI reports have complete required proof, and their manifest/log digests match.
+The statistical CLI report retains four nonfatal warnings; the other three reports retain none. See
+[final validation](evidence/resumed-validation.md) and the durable
+`recovery-1222/continuation/hosted-a2a71a08/verification.json`.
+
+The earlier `6b495b77` five-family composite and first hosted E2E attempt at `c441841d` remain failed historical runs;
+the composite's four passing families plus corrected agentic and slow-consumer Tasks establish the reviewed per-family
+proof. The first hosted attempt's underlying command failure was not attributed. Writer guard-removal mutation
+sensitivity remains UNVERIFIED under the accepted bounded deferral, and original outer Task launcher argv remains
+explicitly unavailable under the owner-approved limit. Owner decision
+[#1421](https://github.com/C360Studio/semstreams/issues/1421#issuecomment-5912919455) superseded its keep-open hold;
+the issue was closed at 14:07:29 UTC without a root-cause claim. These checks predate the archive commit, which still
+requires final review and fresh hosted checks after publication. The archive/spec synchronization is the intended
+final content commit; its commit and publication remain with the PR owner.
+
+## Recovery history
 
 Recovered and claimed by the owner's request on 2026-09-30. Write owner is Codex in chat
 `01a0f196-05ca-7693-a29d-414465c3e207`; the previous effort recorded all writers stopped on 2026-09-27.
-This recovery supersedes the travel pause for preservation and ownership. The accepted design in `acceptance.md`
-remains authoritative; no new design cycle, scope expansion, completed implementation or gate waiver is claimed.
+This recovery superseded the travel pause for preservation and ownership. The accepted design in `acceptance.md`
+remains authoritative; at this checkpoint no new design cycle, scope expansion, completed implementation or gate
+waiver was claimed.
 
 Branch: `codex/gh1222-required-e2e-proof`. Worktree:
 `/Users/coby/.codex/worktrees/e2e-required-proof/semstreams`.
 The exact 78-path paused implementation is committed locally at
 `4b8204ba0da9a579bfb1ca869b646c36d3110b98`, on the original base through `3dc4ccbe`.
 Draft PR #1406 was opened at claim head `12ae633381b8b8b26c333efe5f5c8691cfa47fb4`.
-Implementation publication requires the full push gate; the PR records the current published checkpoint and gate result.
+Implementation was later published after the full push gate; the PR records its published checkpoint and gate result.
 A separate verified recovery archive preserves all 150 captured files, including ignored evidence logs, and a Git
 bundle preserves the local commits; their manifest is retained in this chat's `recovery-1222` artifact directory.
 
@@ -52,16 +76,17 @@ See [the continuation evidence](evidence/resumed-validation.md). This chat owns 
 The accepted design remains in force with the launcher-history addendum in `acceptance.md`. On 2026-09-30 the owner
 approved retaining the statistical and slow-consumer jobs' JSON reports and logs as GitHub Actions artifacts.
 The workflow now includes that bounded retention: named reports, manifests and task/child logs only, excluding
-binaries and unrelated results. The prior upload-authorization hold is cleared; hosted retention proof remains due.
+binaries and unrelated results. The prior upload-authorization hold is cleared; hosted retention proof is above.
 
 The owner approved explicitly incomplete outer Task launcher history while retaining actual test/child argv,
 source/configuration identity and observed results. Implementation must distinguish the resolved Task target from
 observed command arguments; the active delta and guide record this narrow limit.
 
-Task truth remains 7/10 pending final CI correction and verification. The recovered implementation was published
+At the earlier checkpoint, task truth remained 7/10 pending final CI correction and verification. The
+implementation was published
 at `c441841d` after a complete local push gate passed in 891.229 seconds with unchanged source hashes.
-The first hosted implementation E2E jobs failed; their console logs stop at report finalization without exposing
-the underlying command error. This remains an unresolved CI finding, not an attributed flake.
+The first hosted implementation E2E jobs failed; their console logs stopped at report finalization without exposing
+the underlying command error. This remains a historical failed run, not an attributed flake.
 The 2026-09-27 pause and earlier evidence records below are historical checkpoints.
 
 ## Completed bounded corrections
@@ -127,7 +152,6 @@ agentic scenario, tier-authority and platform-identity behavior before editing t
 Claude's #1117 / PR #1425 retains semantic CI ownership; this claim retains #1222 required-check evidence.
 No transfer of that adjacent work is implied.
 
-Remaining work includes hosted retention verification, final CI correction and full-gate/verification reconciliation,
-and archive/spec synchronization.
-The historical #1397 issue is closed. Required-job recurrence #1421 remains open and has no waiver for this PR. Earlier GREEN and claim-head hosted checks do not prove
-this dirty implementation. No implementation-complete or merge-ready claim is made.
+The historical #1397 issue is closed. The former #1421 hold was superseded by the owner's linked decision and the
+issue is closed; its root cause is not claimed. The final pre-archive checkpoint above supersedes these earlier
+verification limits. Final archive review and post-publication hosted checks remain for the landing PR.
