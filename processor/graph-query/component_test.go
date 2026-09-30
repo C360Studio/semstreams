@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"testing"
 	"time"
 
@@ -240,9 +241,26 @@ func TestGraphQueryProviderPortIsOneVersionedRequiredFamily(t *testing.T) {
 func TestGraphQueryStartRegistersStableLocalSearchResponder(t *testing.T) {
 	mockClient := newMockNATSClient()
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
+	if mode := os.Getenv(graphQueryOwnerChildEnv); mode != "" {
+		if err := graphQueryOwnerChildRequest(mode, os.Args[1:]); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if !comp.lifecycleTerminal {
+				t.Error("GRAPH_QUERY_CHILD_COMPONENT_NOT_TERMINAL")
+			} else {
+				fmt.Println("GRAPH_QUERY_CHILD_COMPONENT_TERMINAL_BEFORE_SUBSTRATE")
+			}
+		})
+		t.Fatal("intentional setup assertion exit")
+	}
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	t.Cleanup(func() { require.NoError(t, comp.Stop(context.Background())) })
+	require.NoError(t, comp.Start(startCtx))
 
 	require.Len(t, mockClient.handlers, 16)
 	handler, ok := mockClient.handlers["graph.query.localSearch"]
@@ -369,11 +387,14 @@ func TestComponent_Initialize_InvalidConfig(t *testing.T) {
 
 func TestComponent_Start_Success(t *testing.T) {
 	comp := createTestComponent(t)
-	ctx := context.Background()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 
 	require.NoError(t, comp.Initialize())
-	err := comp.Start(ctx)
-	defer comp.Stop(context.Background())
+	err := comp.Start(startCtx)
 
 	assert.NoError(t, err)
 }
@@ -390,36 +411,46 @@ func TestComponent_Start_BeforeInitialize(t *testing.T) {
 
 func TestComponent_Start_AlreadyStarted(t *testing.T) {
 	comp := createTestComponent(t)
-	ctx := context.Background()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	// A component instance is one-shot even while its first run is active.
-	err := comp.Start(ctx)
+	err := comp.Start(startCtx)
 
 	assert.ErrorContains(t, err, "already used")
 }
 
 func TestComponent_Stop_Success(t *testing.T) {
 	comp := createTestComponent(t)
-	ctx := context.Background()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(ctx))
+	require.NoError(t, comp.Start(startCtx))
 
-	err := comp.Stop(context.Background())
-
+	err := owner.stop(operationCtx, startCtx, false)
 	assert.NoError(t, err)
 }
 
 func TestComponent_Stop_BeforeStart(t *testing.T) {
 	comp := createTestComponent(t)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 
-	// Stop without Start
-	err := comp.Stop(context.Background())
-
+	// Stop without Start is the deliberate API probe.
+	err := owner.stop(operationCtx, startCtx, false)
 	assert.NoError(t, err, "Stop should be safe even if not started")
 }
 
@@ -518,9 +549,13 @@ func TestComponent_QueryEntity_PassthroughSuccess(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	queryData := []byte(`{"id":"acme.ops.test.system.widget.001"}`)
@@ -540,9 +575,13 @@ func TestComponent_QueryEntity_ComponentUnavailable(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	queryData := []byte(`{"id":"test.fixture.graph.query.entity.001"}`)
@@ -558,9 +597,13 @@ func TestComponent_QueryEntity_InvalidRequest(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	invalidData := []byte(`{invalid json}`)
@@ -590,9 +633,13 @@ func TestComponent_QueryRelationships_TransformSuccess(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	queryData := []byte(`{"entity_id":"test.fixture.graph.query.entity.001"}`)
@@ -638,9 +685,13 @@ func TestComponent_PathSearch_SimpleTraversal(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":2}`)
@@ -698,10 +749,14 @@ func TestComponent_PathSearch_MaxDepthEnforced(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	comp.config.MaxDepth = 3 // Override default
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":3}`)
@@ -739,9 +794,13 @@ func TestComponent_PathSearch_ContextCancellation(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	// Cancel context immediately
 	ctx, cancel := context.WithCancel(context.Background())
@@ -766,9 +825,13 @@ func TestComponent_PathSearch_Timeout(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -792,9 +855,13 @@ func TestComponent_PathSearch_StartEntityNotFound(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.absent","max_depth":2}`)
@@ -836,9 +903,13 @@ func TestComponent_PathSearch_CyclicGraph(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":10}`)
@@ -868,19 +939,25 @@ func TestComponent_RespectsContext_Cancellation(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
-	ctx, cancel := context.WithCancel(context.Background())
-
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	abortParent, cancelAbort := context.WithCancel(operationCtx)
+	defer cancelAbort()
+	startCtx := owner.startContext(abortParent)
+	defer owner.finish(operationCtx, startCtx, true, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(ctx))
+	require.NoError(t, comp.Start(startCtx))
+	runtimeDone := comp.runtimeDone
+	require.NotNil(t, runtimeDone)
 
-	// Cancel context
-	cancel()
-
-	// Allow time for cancellation to propagate
-	time.Sleep(100 * time.Millisecond)
-
-	// Component should handle cancellation gracefully
-	err := comp.Stop(context.Background())
+	cancelAbort()
+	select {
+	case <-runtimeDone:
+	case <-operationCtx.Done():
+		t.Fatalf("runtime did not observe accepted Start cancellation: %v", operationCtx.Err())
+	}
+	err := owner.stop(operationCtx, startCtx, true)
 	assert.NoError(t, err)
 }
 
@@ -888,19 +965,21 @@ func TestComponent_RespectsContext_Timeout(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	comp := createTestComponentWithMockClient(t, mockClient)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	shortParent, cancelShort := context.WithTimeout(operationCtx, 100*time.Millisecond)
+	defer cancelShort()
+	startCtx := owner.startContext(shortParent)
+	defer owner.finish(operationCtx, startCtx, true, t)
 	require.NoError(t, comp.Initialize())
 
-	// Start with timeout context
-	err := comp.Start(ctx)
-
-	// Should either succeed or handle timeout gracefully
+	// Preserve the short Start input and its accepted-or-context-error outcome.
+	err := comp.Start(startCtx)
 	if err != nil {
-		// If error, it should be context-related
 		assert.Contains(t, err.Error(), "context")
 	}
+	require.NoError(t, owner.stop(operationCtx, startCtx, true))
 }
 
 // ====================================================================================
@@ -980,9 +1059,13 @@ func TestComponent_PathSearch_DirectionIncoming(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.002","max_depth":2,"direction":"incoming"}`)
@@ -1036,9 +1119,13 @@ func TestComponent_PathSearch_DirectionBoth(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.002","max_depth":2,"direction":"both"}`)
@@ -1091,9 +1178,13 @@ func TestComponent_PathSearch_PredicateFilter_Single(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	// Filter to only "graph.community.member-of" predicate
@@ -1146,9 +1237,13 @@ func TestComponent_PathSearch_PredicateFilter_NoMatch(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	// Filter to predicate that doesn't exist
@@ -1205,9 +1300,13 @@ func TestComponent_PathSearch_MaxPathsLimit(t *testing.T) {
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelOperation()
+	owner := newGraphQueryTestOwner(comp)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(context.Background()))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(startCtx))
 
 	ctx := context.Background()
 	// Limit to 3 paths (start + 2 more)

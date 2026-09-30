@@ -33,8 +33,10 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(operationCtx)
 	defer cancel()
 
 	// COMMUNITY_INDEX present at start; COMMUNITY_SUMMARIES intentionally ABSENT.
@@ -60,7 +62,11 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 	require.NoError(t, err)
 	gq, ok := comp.(*Component)
 	require.True(t, ok)
+	owner := newGraphQueryTestOwner(gq)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	attached := make(chan *graphview.View[clustering.CommunitySummaryRecord], 1)
+	stopped := make(chan *graphview.View[clustering.CommunitySummaryRecord], 1)
 	applied := make(chan uint64, 1)
 	gq.summaryViewChanged = func(view *graphview.View[clustering.CommunitySummaryRecord]) {
 		if view != nil {
@@ -68,9 +74,9 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 		}
 	}
 	gq.summaryViewApplied = func(_ string, revision uint64) { applied <- revision }
+	gq.summaryViewStopped = func(view *graphview.View[clustering.CommunitySummaryRecord]) { stopped <- view }
 	require.NoError(t, gq.Initialize())
-	require.NoError(t, gq.Start(ctx))
-	defer func() { _ = gq.Stop(context.Background()) }()
+	require.NoError(t, gq.Start(startCtx))
 
 	// Sanity: with COMMUNITY_SUMMARIES still absent, SummaryFor misses (statistical floor).
 	_, ok = gq.summaryFor(comm)
@@ -102,4 +108,19 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 
 	// And resolveCommunitySummary must now prefer the LLM summary over the statistical floor.
 	require.Equal(t, wantSummary, gq.resolveCommunitySummary(comm))
+
+	runtimeDone := gq.runtimeDone
+	require.NotNil(t, runtimeDone)
+	require.NoError(t, owner.stop(operationCtx, startCtx, false))
+	select {
+	case stoppedView := <-stopped:
+		require.Same(t, view, stoppedView, "Stop must finish the attached serving view")
+	default:
+		t.Fatal("the exact attached summary view did not report Stop completion")
+	}
+	select {
+	case <-runtimeDone:
+	default:
+		t.Fatal("summary-view runtime was not joined before component Stop returned")
+	}
 }

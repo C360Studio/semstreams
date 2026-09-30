@@ -35,8 +35,10 @@ func TestIntegration_BatchQueryPassthrough_ForwardsToGraphIngest(t *testing.T) {
 
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
-	ctx := context.Background()
+	ctx := operationCtx
 
 	// Stub graph.ingest.query.batch responder. Echoes the IDs back
 	// as minimal entity records so the test can verify both the
@@ -68,9 +70,11 @@ func TestIntegration_BatchQueryPassthrough_ForwardsToGraphIngest(t *testing.T) {
 	comp, err := CreateGraphQuery(configJSON, component.Dependencies{NATSClient: natsClient})
 	require.NoError(t, err)
 	gq := comp.(*Component)
+	owner := newGraphQueryTestOwner(gq)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, gq.Initialize())
-	require.NoError(t, gq.Start(ctx))
-	t.Cleanup(func() { _ = gq.Stop(context.Background()) })
+	require.NoError(t, gq.Start(startCtx))
 
 	// Fire a request at the PUBLIC graph.query.batch subject — exactly
 	// what semconnect's collection-hydration path would do.
@@ -114,8 +118,10 @@ func TestIntegration_BatchQueryPassthrough_RejectsMalformedRequest(t *testing.T)
 
 	natsClient, cleanup := setupTestNATS(t)
 	defer cleanup()
+	operationCtx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 
-	ctx := context.Background()
+	ctx := operationCtx
 
 	// Stub graph.ingest.query.batch — should NOT be invoked. If it
 	// is, the passthrough is forwarding malformed bodies, which we
@@ -134,9 +140,11 @@ func TestIntegration_BatchQueryPassthrough_RejectsMalformedRequest(t *testing.T)
 	comp, err := CreateGraphQuery(configJSON, component.Dependencies{NATSClient: natsClient})
 	require.NoError(t, err)
 	gq := comp.(*Component)
+	owner := newGraphQueryTestOwner(gq)
+	startCtx := owner.startContext(operationCtx)
+	defer owner.finish(operationCtx, startCtx, false, t)
 	require.NoError(t, gq.Initialize())
-	require.NoError(t, gq.Start(ctx))
-	t.Cleanup(func() { _ = gq.Stop(context.Background()) })
+	require.NoError(t, gq.Start(startCtx))
 
 	// Fire a malformed JSON request. The natsclient.Request call
 	// itself may not surface an error (gh#93 dual-encoding window
