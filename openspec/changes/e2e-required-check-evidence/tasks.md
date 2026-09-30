@@ -11,7 +11,7 @@
 
 ## Implementation and proof
 
-- [ ] HOLD: implement the remaining agreed behavior and failure controls after the owner resumes this effort.
+- [ ] Implement the remaining agreed behavior and failure controls after current-main reconciliation.
 - [ ] Reconcile the active config/recovery changes before editing shared scenario/authority files.
 - [ ] Update canonical testing documentation and the accepted capability delta to match implemented behavior.
 - [ ] Complete appropriate verification and independent implementation review, preserving exact evidence and limits.
@@ -19,17 +19,31 @@
 
 ## Current checkpoint
 
-HOLD on the owner's 2026-09-27 instruction: "once latest fixes are in let's pause". Current review fixes are
-implemented and bounded re-reviews are complete. A remaining fallback authority panic is recorded below. No additional
-Task/composite adoption or assembled
-runs are authorized during this hold. The accepted design remains authorized by `acceptance.md`; no gate is waived.
+Recovered and claimed by the owner's request on 2026-09-30. Write owner is Codex in chat
+`01a0f196-05ca-7693-a29d-414465c3e207`; the previous effort recorded all writers stopped on 2026-09-27.
+This recovery supersedes the travel pause for preservation and ownership. The accepted design in `acceptance.md`
+remains authoritative; no new design cycle, scope expansion, completed implementation or gate waiver is claimed.
 
-Local HEAD is `fe6e2cc03e16f5db47e293f55939548572f204cc`, including main through `3dc4ccbe`.
 Branch: `codex/gh1222-required-e2e-proof`. Worktree:
 `/Users/coby/.codex/worktrees/e2e-required-proof/semstreams`.
-The branch is four commits ahead of its upstream. Current implementation, accepted delta, documentation and evidence
-are uncommitted/unpushed. Draft PR #1406 remains at claim head `12ae633381b8b8b26c333efe5f5c8691cfa47fb4`.
-Required push gates have not run. The local worktree is required for pickup; the remote claim does not contain it.
+The exact 78-path paused implementation is committed locally at
+`4b8204ba0da9a579bfb1ca869b646c36d3110b98`, on the original base through `3dc4ccbe`.
+Draft PR #1406 remains at remote claim head `12ae633381b8b8b26c333efe5f5c8691cfa47fb4`.
+The implementation is still unpushed because its full push gates have not run. Local access is required.
+A separate verified recovery archive preserves all 150 captured files, including ignored evidence logs, and a Git
+bundle preserves the local commits; their manifest is retained in this chat's `recovery-1222` artifact directory.
+
+The recovered bytes passed `go test -race ./cmd/e2e ./test/e2e/results ./test/e2e/scenarios -count=1 -timeout=90s -json`
+on 2026-09-30 in 8.044 seconds, all three packages successful. This was a unit/race check on the preserved snapshot;
+it does not establish assembled E2E, report rollout or push readiness. The command output and summary are retained
+with the recovery archive. All 150 captured file hashes matched immediately before the recovery commit.
+
+Next work is reconciliation with current main, then the existing fallback finding and unfinished report adoption.
+Main inspected at `1b1accf4`; #1404 and #1427 are merged. Seven touched files changed on main; a read-only text-merge
+preview found one conflict in `test/e2e/scenarios/validate_search.go`. Preserve both the required-check identity
+observation and main's search-quality verdict. The other six clean text merges still need semantic review.
+No merge, rebase, remaining scenario adoption or assembled run was performed during recovery.
+Task truth remains 5/10. The 2026-09-27 pause and earlier evidence records below are historical checkpoints.
 
 ## Completed bounded corrections
 
@@ -49,8 +63,7 @@ Two Writer guard-removal mutations were refused by automatic approval before edi
 accepted a bounded deferral, with exact sensitivity still UNVERIFIED. Behavioral controls are not relabeled as
 executed mutants, and no other required controls or assembled gates are deferred.
 
-All implementation and review agents have stopped; no operation from this effort remains running. The final dirty
-source/document snapshot is `evidence/pause-final-source.sha256`. Retained reports/logs are local to this worktree;
+At the 2026-09-27 pause all implementation and review agents stopped. The preserved source/document snapshot is `evidence/pause-final-source.sha256`. Retained reports/logs are local to this worktree;
 `evidence/pause-final-artifacts.sha256` identifies the final correction artifacts. Earlier pause records are historical.
 
 ## Remaining review finding
@@ -60,7 +73,7 @@ passes its behavior variant to `EffectiveTierAuthority`, whose registered author
 The path predates the declaration fix. The current bridge test stops at constructor/catalog classification; it does
 not run the real fallback lifecycle. The Task selects statistical Compose configuration, so reconcile deployment
 authority and the held #1404 surface before fixing/testing this path. No Docker reproduction or owner ruling on
-that authority choice is claimed. The work is paused with this finding open, not approved for integration.
+that authority choice is claimed. This finding remains open; the recovered work is not approved for integration.
 
 ## Preserved partial work and remaining boundaries
 
@@ -74,12 +87,12 @@ Automatic approval rejected exporting all of `test/e2e/results/` from `.github/w
 possible sensitive logs, manifests, metadata or binaries without specific authorization. No workflow edit landed;
 CI retention remains blocked. No bypass was attempted.
 
-#1404 / #1188 remains open at remote `ada5c46a`. Its latest PR record reports local `a319048e`, Q8(b) ruled and
-implemented locally, reviewer round 3 in flight, and a race-gate failure from #1397 awaiting its owner's disposition.
-The overlapping agentic scenario, tier-authority and platform-identity files remain untouched here. Recheck live
-ownership and landed base before editing them. No shared-file ownership transfer is inferred.
+#1404 / #1188 merged as `03bd62bb` on 2026-09-29. Its former ownership hold is historical; reconcile the landed
+agentic scenario, tier-authority and platform-identity behavior before editing those surfaces. #1427 also merged.
+Claude's #1117 / PR #1425 retains semantic CI ownership; this claim retains #1222 required-check evidence.
+No transfer of that adjacent work is implied.
 
 Remaining work includes held scenario adoption, Task/composite completion, representative failure controls,
 exploratory fuzzing where required, assembled E2E, full push gates, final review and archive/spec synchronization.
-Known required-job flake #1397 is not waived for this PR. Earlier GREEN and claim-head hosted checks do not prove
+The historical #1397 issue is closed. Required-job recurrence #1421 remains open and has no waiver for this PR. Earlier GREEN and claim-head hosted checks do not prove
 this dirty implementation. Task truth remains 5/10; no implementation-complete or merge-ready claim is made.

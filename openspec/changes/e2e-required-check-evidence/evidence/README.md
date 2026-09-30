@@ -1,16 +1,20 @@
 # Evidence checkpoints
 
-## Current pause
+## Recovered checkpoint
 
-**Paused on the owner's 2026-09-27 instruction after the latest fixes and bounded re-review.**
-[Tasks](../tasks.md) are current truth and name the remaining HIGH fallback finding. All agents and operations from
-this effort are stopped. HEAD is `fe6e2cc03e16f5db47e293f55939548572f204cc`, four commits ahead of upstream;
-implementation, documentation and these artifacts remain uncommitted/unpushed. Draft PR #1406 still contains only
-claim head `12ae633381b8b8b26c333efe5f5c8691cfa47fb4`. Local worktree access is required for pickup.
+The owner requested recovery and claiming on 2026-09-30. [Tasks](../tasks.md) identify the current Codex write owner,
+worktree, remaining work and gates. The exact 78-path paused implementation is now committed locally at
+`4b8204ba0da9a579bfb1ca869b646c36d3110b98`. The draft PR's remote head remains the initial claim; implementation
+publication awaits the required gates. The 2026-09-27 pause is historical, not evidence of a current competing writer.
 
-The [final source/document hashes](pause-final-source.sha256) identify the dirty checkpoint relative to that HEAD.
-The [final correction artifact hashes](pause-final-artifacts.sha256) identify retained reports and raw logs.
-The older [14-file pause snapshot](paused-source.sha256) belongs to the previous pause and is superseded.
+The [final source/document hashes](pause-final-source.sha256) identify the preserved implementation before recovery
+record updates. The [final correction artifact hashes](pause-final-artifacts.sha256) identify the historical reports
+and raw logs. All 150 files in the separate recovery archive matched their manifest before committing the snapshot.
+The archive also retains ignored logs and local commits. Later task/evidence-index updates do not alter source code.
+
+The recovered snapshot passed the three focused E2E Go packages with `-race` on 2026-09-30; see tasks for the exact
+command and evidence location. This does not complete the pending Docker, Task propagation or broader report review.
+The older [14-file pause snapshot](paused-source.sha256) and review records below retain their original limits.
 
 ## Latest corrections and their limits
 
@@ -61,7 +65,7 @@ was attempted. CI artifact retention remains blocked, separately from the local 
 Core's [duplicate-count mutation](core-duplicate-mutant-red.log), [restoration](core-duplicate-restored-green.log),
 and K1 bridge controls remain bounded core evidence. No Docker/integration/assembled E2E or implementation push gate
 has run. Full coverage and release readiness are not established. Partial Task wrappers remain preserved; the
-five-family composite and held scenario adoption remain unfinished. #1397 is not waived for this PR.
+five-family composite and remaining scenario adoption are unfinished. #1397 is closed; #1421 has no waiver here.
 
 ## Design and historical checkpoints
 
