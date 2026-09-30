@@ -12,6 +12,9 @@ against isolated fixtures, so `task` must be on `PATH` even when invoking `go te
 use that version for local/CI parity before its additive unit/integration job. These admission fixtures do
 not require Docker or provider credentials; they fence expensive commands after exercising the real cleanup guard.
 
+`task check:push` also requires OpenSpec CLI 1.7.0, matching CI. It runs `task openspec:validate` first;
+missing tooling or invalid specs stop the push gate before lint, build and test execution.
+
 ## Testing Discipline
 
 > Prompts focus attention. Contracts state what must hold. Property tests search for counterexamples.
@@ -304,6 +307,15 @@ preflight, the host lock, and the Reaper policy. Go's `-timeout=20m` is a per-pa
 deadline. A local aggregate run has no additional whole-suite deadline and can be interrupted by the caller. CI's
 25-minute outer job timeout is the whole-job and process-tree bound, including setup and cleanup. The 20-minute
 per-package value is transitional and is not a budget for a new test.
+
+### Structural admission
+
+CI runs the existing pinned strict OpenSpec validator in its `OpenSpec Validation` job before admitting `Test`.
+Local `task check:push` uses the same strict, noninteractive command through `task openspec:validate` before its
+other stages. Other CI jobs retain their independent parallelism. The final `CI Status Check` includes validation
+and all existing required jobs; failed, cancelled, skipped, missing or unknown required results cannot pass.
+This ordering saves test execution on invalid candidates; it does not replace the cleanup guard or alter the
+canonical runner's test selection, lock, cancellation or teardown ownership.
 
 ### Cleanup admission
 

@@ -149,8 +149,9 @@ tasks:
       - task: test:default
 
   check:push:
-    desc: "Full pre-push gate, mirrors CI (~11min, needs Docker): cleanup guard, lint, build, vet integration+live_llm, schema drift, contract, race unit + integration. Use /preflight for the judgment layer (diff scope, breaking->e2e)."
+    desc: "Full pre-push gate (needs OpenSpec CLI + Docker): strict OpenSpec, cleanup guard, lint, build, tagged vet, schema drift, contract, race unit + integration. Use /preflight for diff-scope and breaking-change E2E judgment."
     cmds:
+      - task: openspec:validate
       - task: lint:default
       - task: build:default
       - go vet -tags=integration ./...

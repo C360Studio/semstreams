@@ -240,6 +240,10 @@ exit 73
 printf 'docker %s\n' "$*" > "$SEMSTREAMS_TEST_CLEANUP_ROOT/expensive-command"
 exit 73
 `
+	openspecShim := `#!/bin/sh
+printf '%s\n' "$*" > "$SEMSTREAMS_TEST_CLEANUP_ROOT/openspec-command"
+exit 0
+`
 	mkdirShim := `#!/bin/sh
 for arg do
   if [ "$arg" = "$SEMSTREAMS_INTEGRATION_LOCK_DIR" ]; then
@@ -250,6 +254,7 @@ exec /bin/mkdir "$@"
 `
 	writeCleanupAdmissionFile(t, filepath.Join(bin, "go"), goShim, 0o700)
 	writeCleanupAdmissionFile(t, filepath.Join(bin, "docker"), dockerShim, 0o700)
+	writeCleanupAdmissionFile(t, filepath.Join(bin, "openspec"), openspecShim, 0o700)
 	writeCleanupAdmissionFile(t, filepath.Join(bin, "mkdir"), mkdirShim, 0o700)
 	return root
 }
@@ -527,7 +532,7 @@ func TestCleanupAdmissionUniformWiring(t *testing.T) {
 		{"taskfiles/test.yml", "live", "scripts/check-cleanup-roots.sh"},
 		{"taskfiles/test.yml", "integration", "scripts/run-integration-tests.sh"},
 		{"Taskfile.yml", "check", map[string]any{"task": "lint:default"}},
-		{"Taskfile.yml", "check:push", map[string]any{"task": "lint:default"}},
+		{"Taskfile.yml", "check:push", map[string]any{"task": "openspec:validate"}},
 	} {
 		t.Run(item.file+"/"+item.task, func(t *testing.T) {
 			body, err := os.ReadFile(filepath.Join(root, item.file))

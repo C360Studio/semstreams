@@ -35,4 +35,4 @@ tasks:
   validate:
     desc: Validate all OpenSpec changes and specs strictly
     cmds:
-      - openspec validate --all --strict
+      - openspec validate --all --strict --no-interactive
