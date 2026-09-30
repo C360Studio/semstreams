@@ -18,16 +18,17 @@ name: E2E Ladder
 #   - e2e:core's coverage is subsumed by the statistical run (owner, 2026-07-28):
 #     the tiered/statistical variant boots the full stack and validates
 #     health/dataflow along the way, so a separate core job would be redundant.
-#   - e2e:semantic's heavy quality variants (:8b, :frontier) are too heavy for
-#     per-PR and stay pre-tag/manual (docs/contributing/02-e2e-tests.md: a relevant e2e tier green
-#     before any BREAKING tag). The DEFAULT semantic variant is already the
-#     CI-shaped small-model configuration (semembed + seminstruct
-#     qwen3-0.6b/1.7b) for exactly this reason, but runs in no workflow yet.
-#     Owner ruling (2026-08-27, #1117): wiring it here is PER-PR, not
-#     nightly — schedule-triggered runs are reserved for out-of-band security
-#     scanning (CVE and similar), never functional e2e. The open question is
-#     which assertions the per-PR gate carries (path vs quality), not
-#     per-PR-vs-nightly. Tracked in issue #1117.
+#   - e2e:semantic's full run and its heavy quality variants (:8b, :frontier)
+#     stay pre-tag/manual (docs/contributing/02-e2e-tests.md: a relevant e2e
+#     tier green before any BREAKING tag). Per PR, job `e2e semantic
+#     (path-only)` runs the DEFAULT semantic variant (semembed + seminstruct
+#     qwen3-0.6b/1.7b) with E2E_PATH_ONLY=1, which skips the three quality
+#     stages the owner ruled out of the per-PR gate (#1117, 2026-09-29/30):
+#     validate-llm-enhancement, validate-thematic-answer-eval,
+#     validate-globalsearch-known-answer. Its green is evidence the
+#     framework-owned semantic path works, never of answer or summary quality.
+#     Per-PR, not nightly (owner, 2026-08-27): schedule-triggered runs are
+#     reserved for out-of-band security scanning, never functional e2e.
 
 on:
   pull_request:
@@ -120,3 +121,51 @@ jobs:
 
       - name: Run e2e statistical tier
         run: task e2e:statistical
+
+  # gh#1117: the default semantic variant, path-only (see the header). The
+  # skipped stages are logged, never recorded as passed: the log carries one
+  # "[PATH-ONLY] skipping 3 quality stages: ..." line and a [n/41] stage
+  # counter; [n/44] means the flag did not reach the run. No artifact step:
+  # the only results file is written on success and carries no skip record,
+  # so the log is the evidence.
+  # timeout-minutes: 20. Measured full runs on this runner (E2E Ladder run
+  # 36654106894, 682/677 s) minus the three quality stages (~488 s) and the
+  # test-http-gateway synthesis (~18 s), plus ~60 s of registry pull, predict
+  # ~5 min (the first run measured 4m17s, run 36728438332); 20 is ~4x that and exceeds one full-variant run (13.4 min), so a
+  # flag that fails to take effect finishes and is diagnosed from [n/44]
+  # instead of being killed. The ghcr login is kept: every measured run had it.
+  e2e-semantic:
+    name: e2e semantic (path-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    env:
+      E2E_PATH_ONLY: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install task
+        run: GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.53.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # gh#1279: reserve the published host ports against ephemeral allocation
+      # (see e2e-statistical for the failure this prevents).
+      - name: Reserve e2e host ports against ephemeral allocation
+        run: scripts/e2e-reserve-ports.sh
+
+      - name: Run e2e semantic tier (path-only)
+        run: task e2e:semantic

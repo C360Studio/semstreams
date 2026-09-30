@@ -14,7 +14,7 @@ observe system behavior from the outside, just like production monitoring.
 task e2e:core        # Platform boots, data flows (~10s)
 task e2e:structural  # Rules + structural inference (~30s)
 task e2e:statistical # BM25 + community detection (~60s)
-task e2e:semantic    # Neural embeddings + LLM (~90s)
+task e2e:semantic    # Neural embeddings + LLM (~11.5 min; E2E_PATH_ONLY=1 4m17s on CI)
 
 # Cleanup
 task e2e:clean
@@ -55,7 +55,7 @@ Neural embeddings + LLM. Full ML stack validation.
 
 | Duration | Purpose | Dependencies |
 |----------|---------|--------------|
-| ~90s | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
+| ~11.5 min on CI; 4m17s with `E2E_PATH_ONLY=1` (first CI run, gh#1117) | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
 
 ## Assertion Strategy
 
@@ -181,10 +181,11 @@ gated by a `CI Status Check` job. **No e2e task runs in this workflow.**
 |-----|------|----------------------------|
 | `e2e slow consumer attribution` | `task e2e:slow-consumer` | No |
 | `e2e statistical` | `task e2e:statistical` | **Yes** |
+| `e2e semantic (path-only)` | `task e2e:semantic` with `E2E_PATH_ONLY=1` (skips the three quality stages) | No |
 
 The `statistical` variant of the `tiered` scenario boots the full stack and validates health/dataflow along the
 way, so a separate `core` job would be redundant (see the header comment in `e2e-ladder.yml`). There is no
-`structural` or `semantic` job in this workflow.
+`structural` job; the `semantic` job runs the default variant path-only (gh#1117).
 
 ### Required checks (branch ruleset on `main`)
 
@@ -202,27 +203,20 @@ workflow automates.
 
 ### Local-only tiers
 
-`task e2e:core`, `task e2e:structural`, and `task e2e:semantic` (default, `:8b`, `:frontier`) run in no automatic
-workflow:
+`task e2e:core`, `task e2e:structural`, the full `task e2e:semantic`, and its `:8b` / `:frontier` variants run in no
+automatic workflow:
 
 ```bash
 task e2e:core        # Health + dataflow + graph round-trip
 task e2e:structural  # Rules + structural inference
-task e2e:semantic    # Neural embeddings + LLM, small-model CI-shaped default
 ```
+
+`E2E_PATH_ONLY=1 task e2e:semantic` reproduces the ladder's path-only job; plain `task e2e:semantic` is the full run
+with its quality stages.
 
 `task e2e:core` also runs, manually only, as the `semstreams-core` job in `sister-validation.yml`
 (`workflow_dispatch`-only). That job's comment notes "the per-PR statistical gate lives in `e2e-ladder.yml`; this
 dispatch-only workflow is not its owner" — it is diagnostic holdout tooling, not this repo's own gate.
-
-### Pending: wiring the semantic tier into the ladder
-
-Owner-ruled target (2026-08-27, [#1117](https://github.com/C360Studio/semstreams/issues/1117)): the default
-`semantic` variant — already the CI-shaped small-model configuration in `taskfiles/e2e/semantic.yml` — gets wired
-into `e2e-ladder.yml` as a **per-PR** job, not a nightly one; schedule-triggered runs are reserved for out-of-band
-security scanning, never functional e2e. The open question is which assertions the per-PR gate carries (path vs
-quality), not per-PR-vs-nightly. As of this writing #1117 is **open, not done** — the semantic tier still runs in
-no workflow.
 
 ## References
 

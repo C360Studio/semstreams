@@ -20,7 +20,7 @@ E2E tests follow the **Observer Pattern**: they run against real services in Doc
 task e2e:core        # Platform boots, data flows (~10s)
 task e2e:structural  # Rules + PathRAG (~30s)
 task e2e:statistical # BM25 + community detection (~60s)
-task e2e:semantic    # Neural embeddings + LLM (~90s)
+task e2e:semantic    # Neural embeddings + LLM (~11.5 min on CI; E2E_PATH_ONLY=1 4m17s, the per-PR shape, first run 2026-09-30; gh#1117)
 
 # Cleanup
 task e2e:clean
@@ -81,7 +81,7 @@ Neural embeddings + LLM. Full ML stack validation.
 
 | Duration | Purpose | Dependencies |
 |----------|---------|--------------|
-| ~90s | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
+| ~11.5 min on CI (682/677 s, 2026-09-30); 4m17s with `E2E_PATH_ONLY=1`, the per-PR ladder shape, measured on the first run 2026-09-30 (run 36728438332, gh#1117) | Neural embeddings + LLM summaries | NATS + SemEmbed + SemInstruct |
 
 **Coverage**:
 - All statistical tier coverage
@@ -96,7 +96,7 @@ Neural embeddings + LLM. Full ML stack validation.
 | **Core** | Health endpoints, data flows | - |
 | **Structural** | Entities in KV, predicates indexed, anomaly flags in index, PathRAG edges | LLM response quality |
 | **Statistical** | Above + BM25 embeddings, communities detected | LLM summaries |
-| **Semantic** | Above + LLM summary quality, semantic search relevance | - |
+| **Semantic** | Above + LLM summary quality, semantic search relevance (per PR: path only; quality rows in `:8b`/`:frontier`) | - |
 
 **Key insight**: Anomaly worker can run at structural tier with LLM, but we only assert on *index state* (flag exists), not LLM reasoning. LLM output assertions wait until semantic tier.
 
@@ -299,29 +299,21 @@ Check graph processor logs for errors. Increase timeout if processing is slow.
 
 ## CI Integration
 
-### PR Checks
+`.github/workflows/e2e-ladder.yml` runs on every `pull_request` (and `workflow_dispatch`), three jobs in parallel:
 
-```yaml
-steps:
-  - task e2e:core
-  - task e2e:structural
-```
+| Job | Runs | Required check on `main`? |
+|-----|------|----------------------------|
+| `e2e statistical` | `task e2e:statistical` | **Yes** |
+| `e2e slow consumer attribution` | `task e2e:slow-consumer` | No |
+| `e2e semantic (path-only)` | `task e2e:semantic` with `E2E_PATH_ONLY=1` | No (the owner's ruleset edit, after a run history; gh#1117) |
 
-### Main Branch
-
-```yaml
-steps:
-  - task e2e:core
-  - task e2e:structural
-  - task e2e:statistical
-```
-
-### Release
-
-```yaml
-steps:
-  - task e2e:semantic
-```
+The path-only semantic job skips the three quality stages `validate-llm-enhancement`,
+`validate-thematic-answer-eval`, and `validate-globalsearch-known-answer` and logs them as skipped
+(`[PATH-ONLY] skipping 3 quality stages: …`, stage counter `[n/41]`). Its red is a framework path break; its green
+is not evidence of answer or summary quality, nor that the model-client calls (community summarizer, answer
+synthesis) returned. Reproduce it with `E2E_PATH_ONLY=1 task e2e:semantic`. The full `task e2e:semantic`, `:8b`, and
+`:frontier` runs measure quality pre-tag. `e2e:core` and `e2e:structural` run in no workflow (the statistical job
+subsumes them); `ci.yml` runs no e2e task.
 
 ## Breaking Changes Require an E2E Tier Before Merge
 
@@ -350,8 +342,8 @@ grep -rn "iotsensor\." cmd/   # Or whichever package was migrated
 ```
 
 If only `cmd/e2e-semstreams` has it, the framework binary is half-migrated. Follow the
-[payload registration checklist](../../.agents/skills/new-payload/SKILL.md). The per-PR ladder does not yet run the
-semantic or agentic tier on a `!` PR; the per-PR gate is gh#1117, the nightly run gh#769.
+[payload registration checklist](../../.agents/skills/new-payload/SKILL.md). The per-PR ladder runs the
+semantic path-only job on every PR (gh#1117); agentic is gh#769.
 
 ## External Dependencies
 
