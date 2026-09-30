@@ -48,9 +48,13 @@ Base for every pin: `1b1accf4ea4ea878c26236b5a9e6cb83d2d89d7a` (`origin/main`, 2
 - D3 **`LoopExecutionEntity` takes the sibling shape (P5).** `EntityID()` uses `TryLoopExecutionEntityID` and returns
   `""` on error, with the sentinel annotation `go run ./cmd/entity-id-audit .` requires (annotations are line-pinned:
   regenerate the `line=` after the edit). `Triples()` uses the `Try` form for parent and reply-to and omits the triple
-  on error, matching its own run branch (P4 `:136-139`). `Validate()` keeps its text; it no longer panics because
-  `Triples()` cannot. The producer-side writer still validates before birthing the entity, so a malformed parent or
-  reply-to is refused at publish and, if it arrives anyway, rejected at ingest with an empty ID or a validation error.
+  on error, matching its own run branch (P4 `:136-139`). `Validate()` additionally checks a non-empty parent and
+  reply-to through the `Try` form and returns that error (owner ruling via the coordinator, 2026-09-30): a malformed
+  reference is a writer-contract violation, and rejecting it at `MarshalJSON` and at ingest is loud where omitting the
+  triple would be silent. The omit-on-error `Triples()` stays as the never-panic floor for a direct caller; on the lane
+  it is unreachable because `Validate()` runs first. `processor/agentic-loop/graph_writer.go:479-485` now gets an error
+  from `Validate()` (the same check `MarshalJSON` applies) instead of a panic from `Triples()`; intake already refuses
+  such a token upstream via `TaskMessage.validateLoopTokens`.
 - D4 **No new metric.** The Graphable lane accounts decode failures in `c.errors` plus a WARN (P1); D1 and D2 land on
   that path unchanged. A reason-labelled counter for this lane (the mutation lane has `mutation_rejections_total`)
   is an observability ask this fix does not ratchet in; recorded here as the residual, not filed.

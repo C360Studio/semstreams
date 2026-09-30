@@ -12,8 +12,8 @@ component's error count, logged at WARN with the subject and the reason, acknowl
 `ENTITY_STATES`. The lane also recovers a panic raised by a decoded payload's `EntityID()`, `Triples()`,
 `StorageRef()` or `IndexingProfile()` and drops that message the same way, instead of crashing the process.
 
-`LoopExecutionEntity.EntityID()` now returns `""` for an identity it cannot construct, and `Triples()` omits a
-`parent` or `reply_to` triple whose loop ID is malformed. The exported `LoopExecutionEntityID` constructor still
+`LoopExecutionEntity.EntityID()` now returns `""` for an identity it cannot construct, `Validate()` rejects a
+malformed parent or reply-to loop ID, and `Triples()` omits such a triple instead of panicking. The exported `LoopExecutionEntityID` constructor still
 panics on malformed input; its contract is unchanged.
 
 ## Who is affected

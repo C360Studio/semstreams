@@ -23,7 +23,7 @@ are in `design.md` at `1b1accf4ea4ea878c26236b5a9e6cb83d2d89d7a`.
 - `LoopExecutionEntity` adopts the identity-failure shape its four sibling registered types already have:
   `EntityID()` returns `""` through `TryLoopExecutionEntityID` (graph-ingest rejects the empty ID); `Triples()`
   omits the `parent` and `reply_to` triples whose constructor fails, the way its `run` branch already does;
-  `Validate()` therefore cannot panic.
+  `Validate()` rejects a malformed parent or reply-to and cannot panic.
 - One sentence in the new-payload skill and the payload-registry concept doc: a registered Graphable's identity
   methods never panic on decoded input.
 

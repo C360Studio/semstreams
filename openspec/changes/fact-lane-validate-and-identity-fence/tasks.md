@@ -19,8 +19,6 @@
       sentinel annotation; `Triples()` omits `parent`/`reply_to` on a constructor error (D3). Tests: malformed
       org/platform/loop ID → `""`, no panic; malformed `ParentLoopID`/`InReplyTo` → the triple is absent, the others
       present, no panic; `Validate()` returns an error on each, no panic. `go run ./cmd/entity-id-audit .` exit 0.
-      (Malformed reference: `Validate()` errors when no other spawn-identity fact remains, else the triple is omitted
-      per D3; scope note in `evidence.md`.)
 - [x] 2.3 Docs (D5): one sentence each in `.agents/skills/new-payload/SKILL.md` and
       `docs/concepts/15-payload-registry.md`; `docs/operations/migration-fact-lane-validate.md` (the contract
       tightening, who is affected, the one check).

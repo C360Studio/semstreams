@@ -14,4 +14,4 @@ form. `Validate()` remains the writer's full contract and MUST NOT panic either.
 
 #### Scenario: A registered type decodes a malformed referenced identity
 - **WHEN** a registered Graphable payload's `Triples()` would stamp an entity ID built from a malformed decoded field
-- **THEN** that triple is omitted, the remaining triples are returned, and the call does not panic
+- **THEN** that triple is omitted from `Triples()`, `Validate()` returns an error, and neither call panics

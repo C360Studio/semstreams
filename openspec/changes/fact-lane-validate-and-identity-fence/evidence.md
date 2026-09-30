@@ -72,3 +72,31 @@ is omitted and the rest ingests). Neither case panics.
 
 Not run by the developer (coordinator's gate, task 3.2): any e2e tier; `task test:integration` (testcontainers,
 Docker).
+
+## Revision 1: `Validate()` rejects a malformed reference (owner ruling via the coordinator, 2026-09-30)
+
+`LoopExecutionEntity.Validate()` now checks a non-empty `ParentLoopID` and `InReplyTo` through
+`TryLoopExecutionEntityID`. `TestLoopExecutionEntity_MalformedReferenceOmitsTriple` now also asserts that
+`Validate()` returns an error. The sentinel annotation moved to `line=94` (one import line added).
+
+Same `cp` + md5 ritual; only `agentic/loop_execution_entity.go` swapped, tests fixed across runs.
+
+| Bytes | md5 |
+|-------|-----|
+| pre-revision (`ccd0d1da`) | `d33465d7b7dbcc2af797f4cd9f960aa5` |
+| revised, and again after restore | `4ff0edd7ac217d2fba126d46a1b3240c` |
+
+- GREEN, revised: all three `TestLoopExecutionEntity_Malformed*` / `ValidateRefuses*` tests PASS.
+- RED, pre-revision bytes: `TestLoopExecutionEntity_MalformedReferenceOmitsTriple/{dotted_parent,dotted_reply-to}`
+  FAIL with `Validate() = nil, want an error: a malformed reference violates the writer contract`; the other two tests
+  PASS (they do not depend on the revision).
+- GREEN, restored: all PASS.
+
+Re-run gates on the revision tree (the committed bytes; only this table was filled in afterwards):
+
+| Command | Exit |
+|---------|------|
+| `task check` | 0 |
+| `go test -race -count=1 ./processor/graph-ingest/... ./agentic/...` | 0 |
+| `openspec validate fact-lane-validate-and-identity-fence --strict` | 0 |
+| `go run ./cmd/entity-id-audit .` | 0 (`line=94` pin verified) |

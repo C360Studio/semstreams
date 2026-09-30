@@ -426,13 +426,17 @@ func TestLoopExecutionEntity_MalformedReferenceOmitsTriple(t *testing.T) {
 					t.Errorf("%s triple missing; only the malformed reference may be omitted", want)
 				}
 			}
-			mustNotPanic(t, "Validate", func() { _ = e.Validate() })
+			var err error
+			mustNotPanic(t, "Validate", func() { err = e.Validate() })
+			if err == nil {
+				t.Error("Validate() = nil, want an error: a malformed reference violates the writer contract")
+			}
 		})
 	}
 }
 
-// A task whose only spawn-identity fact is a malformed reference has nothing
-// left to emit once the reference is omitted, so Validate refuses it.
+// A task whose only spawn-identity fact is a malformed reference is refused
+// too, whatever else it carries.
 func TestLoopExecutionEntity_ValidateRefusesOnlyMalformedReference(t *testing.T) {
 	for name, task := range map[string]agentic.TaskMessage{
 		"parent only":   {ParentLoopID: "parent.loop"},

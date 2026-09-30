@@ -3,6 +3,7 @@ package agentic
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 	"unicode/utf8"
 
@@ -89,7 +90,7 @@ type LoopExecutionEntity struct {
 func (e *LoopExecutionEntity) EntityID() string {
 	id, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.LoopID)
 	if err != nil {
-		// entity-id-audit:classify intentional-sentinel "" line=93 column=10 surface=go-return:EntityID entity_id_invalid:empty documented loop-execution failure return; graph-ingest rejects an empty ID and a decoded payload must not panic
+		// entity-id-audit:classify intentional-sentinel "" line=94 column=10 surface=go-return:EntityID entity_id_invalid:empty documented loop-execution failure return; graph-ingest rejects an empty ID and a decoded payload must not panic
 		return ""
 	}
 	return id
@@ -193,6 +194,18 @@ func (e *LoopExecutionEntity) Validate() error {
 	}
 	if e.Task == nil {
 		return errors.New("task is required (the spawning TaskMessage)")
+	}
+	// A malformed parent or reply-to reference is a writer-contract violation:
+	// refuse it loudly here rather than let Triples() omit it silently.
+	if e.Task.ParentLoopID != "" {
+		if _, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.Task.ParentLoopID); err != nil {
+			return fmt.Errorf("parent_loop_id: %w", err)
+		}
+	}
+	if e.Task.InReplyTo != "" {
+		if _, err := TryLoopExecutionEntityID(e.Org, e.Platform, e.Task.InReplyTo); err != nil {
+			return fmt.Errorf("in_reply_to: %w", err)
+		}
 	}
 	if len(e.Triples()) == 0 {
 		return errors.New("task carries no spawn-identity facts (role, task, parent, run, reply-to, workflow, user, and description are all empty)")
