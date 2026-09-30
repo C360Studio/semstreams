@@ -152,7 +152,11 @@ probe: request shape, status, GraphQL errors, decode, `strategy == "graphrag"` (
 semantic. Stops observing: community enrichment and answer synthesis on the Tier-1 path (never decoded; on an unready
 generation today they are stripped, not errored, `:700-722`). Still observes: the gh#1336 readiness transient on the
 Tier-2 fallback (`:979-982`). Under statistical `test-graphrag-global` asserts summaries through the same handler
-(`tiered.go:400-406`). Expected: ms in both variants. Alternative: a measured budget with margin — keeps a model cost
+(`tiered.go:400-406`). Measured on the first path-only run (E2E Ladder run 36728438332, semantic): one attempt,
+`graphql_gateway_latency_ms:7998`, `graphql_gateway_readiness_wait_ms:8000`, `graphql_gateway_index_not_ready_retries:0`,
+hits 30; the ~8 s is server-side and its cause is unattributed (a cold semembed query embedding on the semantic Tier-1
+path is a hypothesis, not verified); headroom against the 60 s client timeout is ~7×. Statistical: 5 ms (evidence § 1).
+Alternative: a measured budget with margin — keeps a model cost
 on a path stage; rejected.
 
 **D5 Ladder job `e2e-semantic` / name `e2e semantic (path-only)`**, replacing `e2e-semantic-measure` in the same
@@ -202,7 +206,7 @@ and the job log (`[PATH-ONLY]` line, per-stage `completed in`), recorded on #111
 | test-predicate-stats | path | 10 / 15 ms | index |
 | test-predicate-compound | path | 6 / 7 ms | index |
 | verify-search-quality | path (hits arm) + RECORDER (known-answer, avg score; #1426) | 62 / 96 ms | ruled #1426 |
-| test-http-gateway | path (after D4: strategy `graphrag` and, under semantic, entities > 0; statistical records the count, measured 0, #1441) | 18.7 / 27.5 s → ms | P6; the zero-entity fallback `graphrag.go:1391`; round-2 H3 |
+| test-http-gateway | path (after D4: strategy `graphrag` and, under semantic, entities > 0; statistical records the count, measured 0, #1441) | 18.7 / 27.5 s → 8.0 s (first path-only run) | P6; the zero-entity fallback `graphrag.go:1391`; round-2 H3 |
 | validate-gateway-response-shape | path | 169 / 153 ms | 3 probes, no globalSearch (`gateway_response_shape.go:57-77`) |
 | test-embedding-fallback | path | 4 / 2 ms | reads `semembed_available` (health) + component health (`validate_infra.go:398-433`) |
 | validate-community-structure | path (exists, non-singleton) + RECORDER (ground truth) | 26.9 / 14.1 s | community wait; reads `communities_llm_enhanced`, unasserted → R2 |

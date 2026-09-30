@@ -30,8 +30,10 @@
       `includeSummaries:false` / `summarizeThreshold:0` recorded `graphql_gateway_search_hits` = 0 (evidence § 1)
       before the gate's scope was written. Final scope: semantic only; statistical measured 0 locally (evidence § 1),
       filed as #1441, recorded in the row comment (owner, 2026-09-30); a second unit case pins the statistical
-      exemption. Measured on the PR's ladder run, semantic: `graphql_gateway_search_hits` 30,
-      `graphql_gateway_latency_ms` < 1000, strategy `graphrag`.
+      exemption. Measured on the PR's ladder run (36728438332), semantic: one attempt,
+      `graphql_gateway_search_hits` 30, `graphql_gateway_latency_ms` 7998, `graphql_gateway_readiness_wait_ms` 8000,
+      `graphql_gateway_index_not_ready_retries` 0, strategy `graphrag`; the ~8 s cause is unattributed (a cold semembed
+      query embedding is a hypothesis, not verified); ~7× headroom against the 60 s client timeout.
 - [ ] 2.4 `e2e-ladder.yml`: job `e2e-semantic` per D5 (no artifact step) replaces `e2e-semantic-measure` in the same
   commit; header `:21-30` rewritten. Evidence: `! git grep -q 'MEASUREMENT ONLY' -- .github/` and `! git grep -q
   prev1-program -- .github/` both exit 0; the PR's ladder shows the job once.

@@ -15,7 +15,7 @@ stage assert the outcome it exists to detect or leave the per-PR variants, so th
 ## What Changes
 
 - The three quality stages the owner named leave the per-PR semantic run behind an env flag the ladder sets:
-  `validate-thematic-answer-eval`, `validate-llm-enhancement`'s 120 s enhancement wait, and
+  `validate-thematic-answer-eval`, the whole `validate-llm-enhancement` stage (R1), and
   `validate-globalsearch-known-answer`. They stay in the `:8b` and `:frontier` variants, which run pre-tag. The
   flag's name, the skip mechanism (stage-table membership vs. an in-stage early return), and what the skipped stages
   record are design questions; the inventory (`inventory.md`) grounds them.
@@ -27,11 +27,11 @@ stage assert the outcome it exists to detect or leave the per-PR variants, so th
   path stage's name; the candidate fix recorded on #1117 is `includeSummaries:false` + `summarizeThreshold:0` on that
   request.
 - `e2e-ladder.yml` gains the per-PR job `e2e semantic (path-only)` in the shape the measurement supports (registry
-  login, port reservation, disk reclaim, timeout), and the `gh#1117 MEASUREMENT ONLY` job on this branch is deleted
+  login, port reservation, timeout), and the `gh#1117 MEASUREMENT ONLY` job on this branch is deleted
   in the same commit. Expected cost about 5 min; ladder critical path from about 4 min to about 5.
 - The dangling `TODO` about the semantic gate and its baton reference are deleted (scope box 5); the tracking is #1117.
 - Docs: the tier table in `docs/contributing/02-e2e-tests.md` and the taskfile `desc` say which stages the per-PR
-  semantic run skips and why; the ~90s figure is already corrected on this branch.
+  semantic run skips and why; the ~90s figure is corrected in this change at every site.
 
 No **BREAKING** change: no exported Go surface, no payload, no bucket, no port. The gate is additive CI.
 
