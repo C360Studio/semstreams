@@ -17,7 +17,7 @@ depend on that branch, as the supplemental mutation demonstrates.
 | Virtual-time five-second failure histories | natsclient/kv_watcher_ownership_test.go, final focused log |
 | Passive observer and reached test adapters | observer-preparation.zip; graph-ingest source/fail/fix evidence |
 | Existing cleanup classifications only | cleanup fingerprint record; all 273 entries unchanged, 96 resolutions |
-| Actual native delivery closure after five-second expiry | evidence/repair/native.log and native-result.md |
+| Actual native delivery closure after five-second expiry | evidence/repair/verification/raw-logs.zip and native-result.md |
 
 The active task ledger owns remaining gates. The ordinary RED, preparation corrections, survived mutation, final
 mutants, exact restorations, source reviews and native result are retained under evidence/repair and review.

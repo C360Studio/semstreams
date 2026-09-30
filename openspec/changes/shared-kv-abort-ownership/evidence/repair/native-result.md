@@ -9,6 +9,7 @@ scripts/run-integration-tests.sh -timeout=90s -run '^TestIntegration_KVStoreFilt
 UTC execution: 2026-09-30 04:41:02.813 through 04:41:15.034. Exit 0; total wall time 12.220 seconds.
 The test took 6.54 seconds and package output reported 7.976 seconds. Native log SHA-256:
 `5d77b38e9f4cc580bf766d6f4b3b34cef3e0e668ad242f9ffbf8980caae63aee`.
+The exact log is retained as verification/raw-logs.zip/gh1421-repair-native.log.
 The recorded eight source/baseline hashes were unchanged across execution; exact command metadata is native.json.
 
 The fixture reported 5,000 file-backed keys, server 2.14.4, SDK v1.52.0 and image/image ID at the normative
