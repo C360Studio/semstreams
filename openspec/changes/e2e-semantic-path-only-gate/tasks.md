@@ -47,6 +47,6 @@
   unit test) and the job's wall-clock; record them on #1117; replace the "~5 min" prediction in the three doc sites
   with the measured number. Second sample: run 36732308747 at `0912fe29` (the head with `stagesToRun` and the print
   guard), 4m30s, one `[PATH-ONLY]` line, `[41/41]` (evidence § 10; #1117 comment 2026-09-30).
-- [ ] 2.7 Review through the reviewer contract; owner rulings R1-R7 applied as ruled; owner acceptance on #1117.
+- [x] 2.7 Review through the reviewer contract; owner rulings R1-R7 applied as ruled; owner acceptance on #1117.
 
 Landing tasks (archive, spec sync, ticks) live on the PR checklist per the #1230 ruling, not here.
