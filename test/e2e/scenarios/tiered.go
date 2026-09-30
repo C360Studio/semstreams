@@ -62,7 +62,7 @@ type TieredScenario struct {
 	detectedVariant *variantInfo
 
 	// effectiveAuthority is `org.platform` as the running stack RECORDS it —
-	// read once per run from semstreams_config/platform_identity, never
+	// read once per run from semstreams_config_<org>_<stem>/platform_identity, never
 	// predicted from a configuration file. Since ADR-104 the framework mints an
 	// entropy suffix onto platform.id at first boot, so a fixture composed from
 	// the shipped config is right about nothing and reports "entity not found"
@@ -240,6 +240,16 @@ type stage struct {
 	variants []string // Empty = run for all variants
 }
 
+// tierAuthorityVariant names the Compose profile whose config the selected
+// behavior runs against. The fallback Task boots the statistical profile while
+// retaining its distinct, execution-only semantic-fallback behavior selection.
+func tierAuthorityVariant(variant string) string {
+	if variant == "semantic-fallback" {
+		return config.VariantStatistical
+	}
+	return variant
+}
+
 // getStagesForVariant returns the filtered list of stages for a given variant.
 //
 // Stages are organized following the progressive enhancement model:
@@ -309,6 +319,10 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// clogging the answer model — exactly what B0 needs to synthesize over real
 		// summaries. On a heavy qwen3-8b run summaries keep generating on that
 		// separate instance throughout B0's own run as well.
+		// RECORDER of enhancement throughput and summary quality: the enhanced
+		// count and the quality issues are the small model's output, recorded in
+		// Metrics/Warnings without gating. Only an unreachable transport or a
+		// failed read (no communities, a failed wait or re-fetch) fails (#1426).
 		{"validate-llm-enhancement", s.executeValidateLLMEnhancement, []string{"semantic"}},
 		// Epic B increment B0 — the GraphRAG thematic-answer eval — runs HERE, before
 		// ANY stage that drives LLM answer synthesis (the NL-intent, graphrag, and
@@ -332,9 +346,21 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// validate_partition_colocation.go header). Only an unreachable partition
 		// index (GetAllCommunities) fails.
 		{"validate-partition-colocation", s.executePartitionColocation, []string{"semantic"}},
-		// NL intent routing tests (validates classifier → strategy routing through globalSearch)
+		// NL intent routing tests (validates classifier → strategy routing through globalSearch).
+		// The probes send includeSummaries:false (no synthesis), and 0 probes
+		// returning entities fails the stage (#1426). The path probes are answered
+		// by the keyword tier in every variant, so test-nl-path-intent runs in all.
+		// test-nl-temporal-intent is statistical-only. Its "today" probe matches the
+		// keyword tier (graph/query/classifier.go:30) and is routed temporal in every
+		// variant. Its "last hour" probe matches no keyword pattern (lastNHoursPattern,
+		// classifier.go:31, needs a number): under statistical it takes the chain's
+		// non-keyword route and returns entities in ms; under semantic it goes to the
+		// LLM classifier on the answer model (measured 17.5 s cold, 5.6 s warm against
+		// the 10 s client deadline, count=0, cause unattributed; design § 9). A
+		// model-owned outcome is not graded per-PR. The stage fails only when neither
+		// probe returns entities (passedCount == 0); 2/2 is a measurement, not the gate.
 		{"test-nl-path-intent", s.executeTestNLPathIntent, nil},
-		{"test-nl-temporal-intent", s.executeTestNLTemporalIntent, []string{"statistical", "semantic"}},
+		{"test-nl-temporal-intent", s.executeTestNLTemporalIntent, []string{"statistical"}},
 		// Alias resolution via ALIAS_INDEX (structural - no ML)
 		{"test-entity-by-alias", s.executeTestEntityByAlias, nil},
 		// Predicate query API (structural - direct index queries)
@@ -346,9 +372,12 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// These verify structural tier has NO ML inference
 		{"validate-zero-embeddings", s.executeValidateZeroEmbeddings, []string{"structural"}},
 		{"validate-zero-clusters", s.executeValidateZeroClusters, []string{"structural"}},
-		{"validate-rule-transitions", s.executeValidateRuleTransitions, []string{"structural"}},
 		{"validate-entity-triples", s.executeValidateEntityTriples, []string{"structural"}},
 		// === Tier 1+: Statistical capabilities (statistical + semantic) ===
+		// verify-search-quality: a query that errors or returns no hits fails in both
+		// variants; a missed known answer fails under statistical (BM25 ranks, pure
+		// Go) and is a RECORDER under semantic (the embedding model ranks); the
+		// average-score arm is a RECORDER in both (#1426).
 		{"verify-search-quality", s.executeVerifySearchQuality, []string{"statistical", "semantic"}},
 		{"test-http-gateway", s.executeTestHTTPGateway, []string{"statistical", "semantic"}},
 		// gh#768: gateway response SHAPE. Every other gateway stage decodes into
@@ -359,6 +388,10 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// stage's value is running on the PR that changes the shape.
 		{"validate-gateway-response-shape", s.executeValidateGatewayResponseShape, []string{"statistical", "semantic"}},
 		{"test-embedding-fallback", s.executeTestEmbeddingFallback, []string{"statistical", "semantic"}},
+		// Asserts communities exist and are not all singletons. Its ground-truth
+		// arm is a RECORDER: LPA's partition varies 1/3 <-> 0/3 across identical
+		// code (fresh authority suffix, ID-ordered tie-breaks); ADR-099/#606
+		// make it deterministic, after which it asserts (#1426).
 		{"validate-community-structure", s.executeValidateCommunityStructure, []string{"statistical", "semantic"}},
 		// ADR-090 breaking gate: statistical is the checked-in graph-clustering
 		// deployment and a fresh stack must never recreate retired persistence.
@@ -376,8 +409,15 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		{"validate-inverse-edges-materialized", s.validateInverseEdgesMaterialized, []string{"structural", "statistical", "semantic"}},
 
 		// === Tier 2: Semantic capabilities (semantic only) ===
-		{"test-graphrag-local", s.executeTestGraphRAGLocal, []string{"semantic"}},
-		{"test-graphrag-global", s.executeTestGraphRAGGlobal, []string{"semantic"}},
+		// GraphRAG local/global assert the community path (entity -> community ->
+		// summary -> answer) under the statistical template synthesizer, in ms.
+		// They leave semantic (and the :8b/:frontier overlays): under a model the
+		// probe's outcome is the synthesizer's latency, which no PR owns (#1426,
+		// ruling D1). globalSearch under a model stays covered by B0 and
+		// validate-globalsearch-known-answer; localSearch under a model is covered
+		// by nothing pre-tag until LocalSearchRequest gains include_summaries (#1431).
+		{"test-graphrag-local", s.executeTestGraphRAGLocal, []string{"statistical"}},
+		{"test-graphrag-global", s.executeTestGraphRAGGlobal, []string{"statistical"}},
 		// validate-globalsearch-known-answer is the load-bearing guard against
 		// the "globalSearch returns count=0 for content that exists" bug class
 		// (see semspec Meshtastic report). Probes deterministic single-word
@@ -389,7 +429,13 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// queryable and the semantic index ranks. The fusion.Fuse envelope third is
 		// re-homed to gh#391 (unreachable — no fusion route in configs/semantic.json).
 		{"validate-batch-read-reconciliation", s.executeValidateBatchReadReconciliation, []string{"semantic"}},
-		{"validate-anomaly-detection", s.executeValidateAnomalyDetection, []string{"statistical", "semantic"}},
+		// validate-anomaly-detection left the table (#1426, ruling D2): the anomaly
+		// engine is enable_anomaly_detection:false in every tier config since #237,
+		// so the stage graded a disabled engine. Its code stays until #620 decides
+		// the engine; re-enabling it means re-adding this row and asserting.
+		// With the anomaly engine off, zero virtual edges and zero auto-applied
+		// anomalies is the configured outcome (a print, not a failure); a failed
+		// read or auto-applied anomalies without edges fails (#1426).
 		{"validate-virtual-edges", s.executeValidateVirtualEdges, []string{"semantic"}},
 
 		// Wait for rule evaluations to stabilize before validating
@@ -397,6 +443,9 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		{"wait-for-rule-stabilization", s.executeWaitForRuleStabilization, nil},
 
 		// === Common validation stages (all tiers) ===
+		// validate-rules is the one home of the rule-activity thresholds
+		// (MinRuleFirings, MinActionsDispatched); its structural-only duplicate
+		// validate-rule-transitions was removed (#1426, ruling D3).
 		{"validate-rules", s.executeValidateRules, nil},
 		{"validate-metrics", s.executeValidateMetrics, nil},
 		{"verify-outputs", s.executeVerifyOutputs, nil},
@@ -437,7 +486,7 @@ func (s *TieredScenario) executeGraphRoundTrip(ctx context.Context, result *Resu
 			"authority the canary must be minted under is unknown")
 	}
 	probe := NewGraphRoundTripProbe(s.natsClient, s.msgLogger, s.config.GraphQLURL,
-		config.TierAuthorityStem(variant))
+		config.TierAuthorityStem(tierAuthorityVariant(variant)))
 	err := probe.Run(ctx, result)
 	evidence := map[string]string{}
 	if detail, ok := result.Details["graph_roundtrip"].(map[string]any); ok {
@@ -577,7 +626,7 @@ func (s *TieredScenario) Execute(ctx context.Context) (*Result, error) {
 
 	// Observe the authority this deployment mints under before any stage
 	// composes an entity ID from it.
-	authority, err := config.EffectiveTierAuthority(ctx, s.natsClient, variant)
+	authority, err := config.EffectiveTierAuthority(ctx, s.natsClient, tierAuthorityVariant(variant))
 	if err != nil {
 		result.Error = fmt.Sprintf("resolve the deployment authority: %v", err)
 		result.EndTime = time.Now()

@@ -1,0 +1,555 @@
+{
+  "base": "21c89f79945600fc42bff4b3a82730c2db2e3fc1",
+  "manifest_sha256": "f665fada99aeaa3fcc34848700cee57828060e67b3cfcddbdf1e869499a6c660",
+  "manifest_debt_count": 329,
+  "manifest_resolution_count": 89,
+  "selected_count": 32,
+  "selected_files": 16,
+  "graph_ingest_resolution_references": 0,
+  "entries": [
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/authority_gate_integration_test.go|startAuthorityGateComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "1824feae2ccd1015afc5cc12554966c0279265eb5176b4469eadfec819edae60",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/authority_gate_integration_test.go",
+      "line": 177,
+      "function": "startAuthorityGateComponent",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/batch_integration_test.go|startBatchTestComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/batch_integration_test.go",
+      "line": 46,
+      "function": "startBatchTestComponent",
+      "source_line": "_ = c.Stop(context.Background())",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/cas_integration_test.go|TestIntegration_ConcurrentCanonicalAppend|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "1824feae2ccd1015afc5cc12554966c0279265eb5176b4469eadfec819edae60",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/cas_integration_test.go",
+      "line": 33,
+      "function": "TestIntegration_ConcurrentCanonicalAppend",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/component_test.go|TestComponent_Health_Running|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "d8628907d833462e7e3cf2b13dcd4c4cc13f74c06198c818cf519a082eddb659",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/component_test.go",
+      "line": 547,
+      "function": "TestComponent_Health_Running",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "default",
+      "unconditionally_skipped": true
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/component_test.go|TestComponent_Start_AlreadyStarted|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "d8628907d833462e7e3cf2b13dcd4c4cc13f74c06198c818cf519a082eddb659",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/component_test.go",
+      "line": 627,
+      "function": "TestComponent_Start_AlreadyStarted",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "default",
+      "unconditionally_skipped": true
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/component_test.go|TestComponent_Start_Success|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "d8628907d833462e7e3cf2b13dcd4c4cc13f74c06198c818cf519a082eddb659",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/component_test.go",
+      "line": 605,
+      "function": "TestComponent_Start_Success",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "default",
+      "unconditionally_skipped": true
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_replay_integration_test.go|TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f26651f018b02430b8e2cd33aa144568598aef87a9cd56d46f3bce71063ce0bf",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_replay_integration_test.go",
+      "line": 143,
+      "function": "TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision",
+      "source_line": "defer func() { _ = replay.Stop(context.Background()) }()",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_ContainerCreation|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "line": 212,
+      "function": "TestComponent_SynchronousHierarchy_ContainerCreation",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_ContextCancellation|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "line": 596,
+      "function": "TestComponent_SynchronousHierarchy_ContextCancellation",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_DisabledConfig|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "32c81ffd0b98c98f42d6efa1f62372828bc1d5f892a8e92d53dc66c491ef95f5",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "line": 445,
+      "function": "TestComponent_SynchronousHierarchy_DisabledConfig",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_IncludedBeforeWrite|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "line": 57,
+      "function": "TestComponent_SynchronousHierarchy_IncludedBeforeWrite",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_InvalidEntityID|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "line": 535,
+      "function": "TestComponent_SynchronousHierarchy_InvalidEntityID",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_MultipleEntitiesSameType|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "line": 270,
+      "function": "TestComponent_SynchronousHierarchy_MultipleEntitiesSameType",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_NoWatcherLifecycle|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "line": 430,
+      "function": "TestComponent_SynchronousHierarchy_NoWatcherLifecycle",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_SiblingEdges|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "line": 644,
+      "function": "TestComponent_SynchronousHierarchy_SiblingEdges",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_SiblingEdges|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|2",
+        "fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "line": 742,
+      "function": "TestComponent_SynchronousHierarchy_SiblingEdges",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 2,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/hierarchy_sync_integration_test.go|TestComponent_SynchronousHierarchy_SingleWrite|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "1090d1151f5fd91d7c00cad40ce7203de74043dbcde31bad173fe836748ea89d",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/hierarchy_sync_integration_test.go",
+      "line": 137,
+      "function": "TestComponent_SynchronousHierarchy_SingleWrite",
+      "source_line": "defer comp.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/keyed_ingest_integration_test.go|TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+      "line": 59,
+      "function": "TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/keyed_ingest_integration_test.go|startKeyedWireComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/keyed_ingest_integration_test.go",
+      "line": 202,
+      "function": "startKeyedWireComponent",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/merge_entity_integration_test.go|TestIntegration_MergeEntity_HierarchyDoesNotDuplicate|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/merge_entity_integration_test.go",
+      "line": 261,
+      "function": "TestIntegration_MergeEntity_HierarchyDoesNotDuplicate",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/poison_scoping_integration_test.go|TestIntegration_BootSweepInventoriesResidentPoisonRealNATS|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+      "line": 131,
+      "function": "TestIntegration_BootSweepInventoriesResidentPoisonRealNATS",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/poison_scoping_integration_test.go|TestIntegration_NoGuardConsumerOnEntityStatesAfterStart|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/poison_scoping_integration_test.go",
+      "line": 60,
+      "function": "TestIntegration_NoGuardConsumerOnEntityStatesAfterStart",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/query_integration_test.go|TestIntegration_QueryHandlers|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "618a6627e3a6a0dc3926231167669d0ac2b42d5838a353530ef1ba6d6ce219fa",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/query_integration_test.go",
+      "line": 51,
+      "function": "TestIntegration_QueryHandlers",
+      "source_line": "_ = component.Stop(context.Background())",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/query_prefix_integration_test.go|startPrefixTestComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/query_prefix_integration_test.go",
+      "line": 46,
+      "function": "startPrefixTestComponent",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/query_wire_contract_integration_test.go|TestIntegration_QueryEntityNATS_WireContract|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "76a0ade59997b97a7c8e1927cf7abbfe7ffeaddced4cba468cdc8c637226cdca",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/query_wire_contract_integration_test.go",
+      "line": 54,
+      "function": "TestIntegration_QueryEntityNATS_WireContract",
+      "source_line": "defer func() { _ = c.Stop(context.Background()) }()",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/readiness_gauges_integration_test.go|TestIntegration_ReadinessGaugesAreEmitted|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "76a0ade59997b97a7c8e1927cf7abbfe7ffeaddced4cba468cdc8c637226cdca",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/readiness_gauges_integration_test.go",
+      "line": 55,
+      "function": "TestIntegration_ReadinessGaugesAreEmitted",
+      "source_line": "defer func() { _ = c.Stop(context.Background()) }()",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/readiness_integration_test.go|TestIntegration_ReadinessEnvelope_BacklogIsNotReady|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "76a0ade59997b97a7c8e1927cf7abbfe7ffeaddced4cba468cdc8c637226cdca",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/readiness_integration_test.go",
+      "line": 181,
+      "function": "TestIntegration_ReadinessEnvelope_BacklogIsNotReady",
+      "source_line": "defer func() { _ = c.Stop(context.Background()) }()",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/readiness_integration_test.go|TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "76a0ade59997b97a7c8e1927cf7abbfe7ffeaddced4cba468cdc8c637226cdca",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/readiness_integration_test.go",
+      "line": 258,
+      "function": "TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp",
+      "source_line": "defer func() { _ = c.Stop(context.Background()) }()",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/readiness_integration_test.go|TestIntegration_ReadyImpliesTheWritesAreDurable|defer|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "76a0ade59997b97a7c8e1927cf7abbfe7ffeaddced4cba468cdc8c637226cdca",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/readiness_integration_test.go",
+      "line": 340,
+      "function": "TestIntegration_ReadyImpliesTheWritesAreDurable",
+      "source_line": "defer func() { _ = c.Stop(context.Background()) }()",
+      "origin": "defer",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/readiness_integration_test.go|startIngestForReadiness|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/readiness_integration_test.go",
+      "line": 87,
+      "function": "startIngestForReadiness",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/registered_type_gate_integration_test.go|startGateTestComponent|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/registered_type_gate_integration_test.go",
+      "line": 51,
+      "function": "startGateTestComponent",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    },
+    {
+      "baseline": {
+        "identity": "processor/graph-ingest/resident_stamp_integration_test.go|TestResidentUnregisteredStampIsNotPoison|cleanup|github.com/c360studio/semstreams/processor/graph-ingest.Stop|*github.com/c360studio/semstreams/processor/graph-ingest.Component|unbounded|1",
+        "fingerprint": "f5cd8e44cc29918a88d793614684657991762213aef66933871b07bdbecca392",
+        "classification": "unbounded-terminal-cleanup",
+        "reason": "Existing direct Background context in terminal cleanup, independently source-reviewed in the #1064 known-debt review packet; retained for the package repair plan.",
+        "owner_issue": "#1064"
+      },
+      "path": "processor/graph-ingest/resident_stamp_integration_test.go",
+      "line": 57,
+      "function": "TestResidentUnregisteredStampIsNotPoison",
+      "source_line": "t.Cleanup(func() { _ = c.Stop(context.Background()) })",
+      "origin": "cleanup",
+      "ordinal": 1,
+      "build": "integration",
+      "unconditionally_skipped": false
+    }
+  ]
+}

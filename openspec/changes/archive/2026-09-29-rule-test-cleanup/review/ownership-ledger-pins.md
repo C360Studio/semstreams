@@ -1,0 +1,376 @@
+# Rule cleanup ownership ledger source pins
+
+base: caa98f5acae60efbc669ad1e1795ab6e903abd42
+
+Mechanical companion for ownership-ledger.md; narrative and source claims remain in that exact artifact.
+
+- `processor/rule/cron_scheduler_test.go:76` — `func newSchedulerForTest(t *testing.T, exec ActionExecutorInterface) *CronScheduler {`
+- `processor/rule/cron_scheduler_test.go:82` — `func newUnstartedSchedulerForTest(t *testing.T, exec ActionExecutorInterface) *CronScheduler {`
+- `processor/rule/cron_scheduler_test.go:91` — `return s`
+- `processor/rule/cron_scheduler_test.go:94` — `func startSchedulerForTest(ctx context.Context, t *testing.T, scheduler *CronScheduler) {`
+- `processor/rule/cron_scheduler_test.go:96` — `if err := scheduler.Start(ctx); err != nil {`
+- `processor/rule/cron_scheduler_test.go:97` — `t.Fatalf("Start = %v, want nil", err)`
+- `processor/rule/cron_scheduler_test.go:99` — `t.Cleanup(func() {`
+- `processor/rule/cron_scheduler_test.go:100` — `if err := scheduler.Stop(context.Background()); err != nil {`
+- `processor/rule/cron_scheduler_test.go:101` — `t.Errorf("Stop = %v, want nil", err)`
+- `processor/rule/cron_scheduler_test.go:627` — `func newSchedulerWithTrackerForTest(t *testing.T, exec ActionExecutorInterface) (*CronScheduler, *ScheduleTracker) {`
+- `processor/rule/cron_scheduler_test.go:629` — `bucket := newMockKVBucket()`
+- `processor/rule/cron_scheduler_test.go:639` — `return s, tracker`
+- `processor/rule/cron_scheduler_test.go:937` — `func newSchedulerWithMetricsForTest(t *testing.T, exec ActionExecutorInterface) (*CronScheduler, *cronMetrics) {`
+- `processor/rule/cron_scheduler_test.go:948` — `return s, m`
+- `processor/rule/cron_scheduler_test.go:1305` — `func newDenySchedulerForTest(t *testing.T, exec ActionExecutorInterface) (*CronScheduler, *cronMetrics) {`
+- `processor/rule/cron_scheduler_test.go:1316` — `return s, m`
+- `processor/rule/cron_scheduler_integration_test.go:41` — `func getIntegrationNATSClient(t *testing.T) *natsclient.Client {`
+- `processor/rule/cron_scheduler_integration_test.go:43` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/cron_scheduler_integration_test.go:52` — `t.Cleanup(func() { testClient.Terminate() })`
+- `processor/rule/cron_scheduler_integration_test.go:60` — `func startCronProcessorForTest(t *testing.T, natsClient *natsclient.Client, rules []Definition) (*Processor, *metric.MetricsRegistry) {`
+- `processor/rule/cron_scheduler_integration_test.go:76` — `proc, err := NewProcessorWithMetrics(natsClient, &cfg, registry)`
+- `processor/rule/cron_scheduler_integration_test.go:77` — `require.NoError(t, err)`
+- `processor/rule/cron_scheduler_integration_test.go:82` — `require.NoError(t, proc.Initialize())`
+- `processor/rule/cron_scheduler_integration_test.go:84` — `ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)`
+- `processor/rule/cron_scheduler_integration_test.go:85` — `t.Cleanup(cancel)`
+- `processor/rule/cron_scheduler_integration_test.go:86` — `require.NoError(t, proc.Start(ctx))`
+- `processor/rule/cron_scheduler_integration_test.go:87` — `t.Cleanup(func() { _ = proc.Stop(context.Background()) })`
+- `processor/rule/cron_scheduler_integration_test.go:89` — `return proc, registry`
+- `processor/rule/actions_run_scope_integration_test.go:108` — `func newRunScopeHarness(t *testing.T) *runScopeHarness {`
+- `processor/rule/actions_run_scope_integration_test.go:110` — `ctx, cancel := context.WithCancel(t.Context())`
+- `processor/rule/actions_run_scope_integration_test.go:112` — `testClient := natsclient.NewTestClient(t,`
+- `processor/rule/actions_run_scope_integration_test.go:119` — `created, err := graphingest.CreateGraphIngest(rawConfig, component.Dependencies{`
+- `processor/rule/actions_run_scope_integration_test.go:124` — `require.NoError(t, err)`
+- `processor/rule/actions_run_scope_integration_test.go:125` — `ingest := created.(*graphingest.Component)`
+- `processor/rule/actions_run_scope_integration_test.go:126` — `require.NoError(t, ingest.Initialize())`
+- `processor/rule/actions_run_scope_integration_test.go:127` — `require.NoError(t, ingest.Start(ctx))`
+- `processor/rule/actions_run_scope_integration_test.go:128` — `require.NoError(t, testClient.GetNativeConnection().Flush())`
+- `processor/rule/actions_run_scope_integration_test.go:129` — `t.Cleanup(func() {`
+- `processor/rule/actions_run_scope_integration_test.go:130` — `_ = ingest.Stop(context.Background())`
+- `processor/rule/actions_run_scope_integration_test.go:131` — `cancel()`
+- `processor/rule/actions_run_scope_integration_test.go:134` — `bucket, err := graph.EnsureCatalogBucket(ctx, testClient.Client, graph.BucketEntityStates)`
+- `processor/rule/actions_run_scope_integration_test.go:138` — `require.NoError(t, agentrun.Register(manager))`
+- `processor/rule/actions_run_scope_integration_test.go:140` — `tracker := &Processor{ownRevisions: make(map[ruleRevKey]map[uint64]time.Time)}`
+- `processor/rule/actions_run_scope_integration_test.go:151` — `return &runScopeHarness{`
+- `processor/rule/actions_run_scope_integration_test.go:152` — `ctx: ctx, executor: executor, mutator: mutator, metrics: metrics,`
+- `processor/rule/triple_mutator_revision_integration_test.go:46` — `func newRevisionClaimHarness(t *testing.T) *revisionClaimHarness {`
+- `processor/rule/triple_mutator_revision_integration_test.go:48` — `ctx, cancel := context.WithCancel(t.Context())`
+- `processor/rule/triple_mutator_revision_integration_test.go:49` — `testClient := natsclient.NewTestClient(`
+- `processor/rule/triple_mutator_revision_integration_test.go:59` — `created, err := graphingest.CreateGraphIngest(`
+- `processor/rule/triple_mutator_revision_integration_test.go:68` — `require.NoError(t, err)`
+- `processor/rule/triple_mutator_revision_integration_test.go:69` — `ingest := created.(*graphingest.Component)`
+- `processor/rule/triple_mutator_revision_integration_test.go:70` — `require.NoError(t, ingest.Initialize())`
+- `processor/rule/triple_mutator_revision_integration_test.go:71` — `require.NoError(t, ingest.Start(ctx))`
+- `processor/rule/triple_mutator_revision_integration_test.go:72` — `require.NoError(t, testClient.GetNativeConnection().Flush())`
+- `processor/rule/triple_mutator_revision_integration_test.go:73` — `t.Cleanup(func() {`
+- `processor/rule/triple_mutator_revision_integration_test.go:74` — `_ = ingest.Stop(context.Background())`
+- `processor/rule/triple_mutator_revision_integration_test.go:75` — `cancel()`
+- `processor/rule/triple_mutator_revision_integration_test.go:78` — `bucket, err := graph.EnsureCatalogBucket(ctx, testClient.Client, graph.BucketEntityStates)`
+- `processor/rule/triple_mutator_revision_integration_test.go:80` — `mutations, err := graphmutation.NewClient(testClient.Client, MutationTimeout)`
+- `processor/rule/triple_mutator_revision_integration_test.go:83` — `tracker := &Processor{ownRevisions: make(map[ruleRevKey]map[uint64]time.Time)}`
+- `processor/rule/triple_mutator_revision_integration_test.go:84` — `return &revisionClaimHarness{`
+- `processor/rule/triple_mutator_revision_integration_test.go:85` — `ctx:       ctx,`
+- `processor/rule/rule_integration_test.go:31` — `func getTestNATSClient(t *testing.T) *natsclient.Client {`
+- `processor/rule/rule_integration_test.go:34` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/rule_integration_test.go:41` — `t.Fatalf("Failed to create test client: %v", err)`
+- `processor/rule/rule_integration_test.go:45` — `t.Cleanup(func() {`
+- `processor/rule/rule_integration_test.go:46` — `testClient.Terminate()`
+- `processor/rule/rule_integration_test.go:49` — `return testClient.Client`
+- `processor/rule/cron_scheduler_test.go:585` — `if err := s.Stop(context.Background()); err != nil {`
+- `processor/rule/cron_scheduler_test.go:565` — `s := newSchedulerForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:570` — `rule, err := NewCronRule(def)`
+- `processor/rule/cron_scheduler_test.go:572` — `t.Fatalf("NewCronRule = %v", err)`
+- `processor/rule/cron_scheduler_test.go:575` — `ctx, cancel := context.WithCancel(context.Background())`
+- `processor/rule/cron_scheduler_test.go:576` — `defer cancel()`
+- `processor/rule/cron_scheduler_test.go:578` — `if err := s.Register(rule); err != nil {`
+- `processor/rule/cron_scheduler_test.go:581` — `if err := s.Start(ctx); err != nil {`
+- `processor/rule/cron_scheduler_test.go:584` — `defer func() {`
+- `processor/rule/cron_scheduler_test.go:586` — `t.Errorf("Stop = %v, want nil", err)`
+- `processor/rule/cron_scheduler_test.go:245` — `if err := s.Stop(context.Background()); err != nil {`
+- `processor/rule/cron_scheduler_test.go:237` — `s := newSchedulerForTest(t, &recordingExecutor{})`
+- `processor/rule/cron_scheduler_test.go:238` — `ctx, cancel := context.WithCancel(context.Background())`
+- `processor/rule/cron_scheduler_test.go:239` — `defer cancel()`
+- `processor/rule/cron_scheduler_test.go:241` — `if err := s.Start(ctx); err != nil {`
+- `processor/rule/cron_scheduler_test.go:242` — `t.Fatalf("first Start = %v, want nil", err)`
+- `processor/rule/cron_scheduler_test.go:244` — `defer func() {`
+- `processor/rule/cron_scheduler_test.go:250` — `if err := s.Start(ctx); err == nil {`
+- `processor/rule/cron_scheduler_test.go:251` — `t.Fatal("second Start err = nil, want non-nil")`
+- `processor/rule/entity_watcher_debounce_integration_test.go:202` — `defer processor.Stop(context.Background())`
+- `processor/rule/entity_watcher_debounce_integration_test.go:182` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/entity_watcher_debounce_integration_test.go:189` — `defer testClient.Terminate()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:191` — `processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:197` — `ctx := context.Background()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:198` — `err = processor.Start(ctx)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:200` — `t.Fatalf("Start failed: %v", err)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:324` — `defer processor.Stop(context.Background())`
+- `processor/rule/entity_watcher_debounce_integration_test.go:303` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/entity_watcher_debounce_integration_test.go:310` — `defer testClient.Terminate()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:313` — `processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:315` — `t.Fatalf("NewProcessor should accept debounce=0, got error: %v", err)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:319` — `ctx := context.Background()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:320` — `err = processor.Start(ctx)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:322` — `t.Fatalf("Start should succeed with debounce=0, got error: %v", err)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:390` — `defer processor.Stop(context.Background())`
+- `processor/rule/entity_watcher_debounce_integration_test.go:338` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/entity_watcher_debounce_integration_test.go:346` — `defer testClient.Terminate()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:355` — `name:                  "exactly zero",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:361` — `name:                  "exactly 1ns",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:367` — `name:                  "exactly 1ms",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:375` — `t.Run(tt.name, func(t *testing.T) {`
+- `processor/rule/entity_watcher_debounce_integration_test.go:379` — `processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:385` — `ctx := context.Background()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:386` — `err = processor.Start(ctx)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:388` — `t.Fatalf("Start failed: %v", err)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:118` — `defer processor.Stop(context.Background())`
+- `processor/rule/entity_watcher_debounce_integration_test.go:98` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/entity_watcher_debounce_integration_test.go:105` — `defer testClient.Terminate()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:107` — `processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:113` — `ctx := context.Background()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:114` — `err = processor.Start(ctx)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:116` — `t.Fatalf("Start failed: %v", err)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:122` — `t.Fatalf("Expected entityCoalescer to be nil, but it was created")`
+- `processor/rule/entity_watcher_debounce_integration_test.go:70` — `defer processor.Stop(context.Background())`
+- `processor/rule/entity_watcher_debounce_integration_test.go:20` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/entity_watcher_debounce_integration_test.go:28` — `defer testClient.Terminate()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:36` — `name:               "debounce=0 (immediate processing)",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:41` — `name:               "debounce=100ms (batching enabled)",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:46` — `name:               "debounce=1ms (minimal batching)",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:53` — `t.Run(tt.name, func(t *testing.T) {`
+- `processor/rule/entity_watcher_debounce_integration_test.go:59` — `processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:65` — `ctx := context.Background()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:66` — `err = processor.Start(ctx)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:68` — `t.Fatalf("Start failed: %v", err)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:158` — `defer processor.Stop(context.Background())`
+- `processor/rule/entity_watcher_debounce_integration_test.go:138` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/entity_watcher_debounce_integration_test.go:145` — `defer testClient.Terminate()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:147` — `processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:153` — `ctx := context.Background()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:154` — `err = processor.Start(ctx)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:156` — `t.Fatalf("Start failed: %v", err)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:280` — `defer processor.Stop(context.Background())`
+- `processor/rule/entity_watcher_debounce_integration_test.go:216` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/entity_watcher_debounce_integration_test.go:224` — `defer testClient.Terminate()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:233` — `name:                  "zero to immediate",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:239` — `name:                  "1ms minimal",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:245` — `name:                  "10ms small window",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:251` — `name:                  "100ms default window",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:257` — `name:                  "1s large window",`
+- `processor/rule/entity_watcher_debounce_integration_test.go:265` — `t.Run(tt.name, func(t *testing.T) {`
+- `processor/rule/entity_watcher_debounce_integration_test.go:269` — `processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:275` — `ctx := context.Background()`
+- `processor/rule/entity_watcher_debounce_integration_test.go:276` — `err = processor.Start(ctx)`
+- `processor/rule/entity_watcher_debounce_integration_test.go:278` — `t.Fatalf("Start failed: %v", err)`
+- `processor/rule/entity_watcher_hardening_integration_test.go:75` — `_ = processor.Stop(context.Background())`
+- `processor/rule/entity_watcher_hardening_integration_test.go:26` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/entity_watcher_hardening_integration_test.go:33` — `t.Cleanup(func() {`
+- `processor/rule/entity_watcher_hardening_integration_test.go:34` — `require.NoError(t, testClient.Terminate())`
+- `processor/rule/entity_watcher_hardening_integration_test.go:37` — `ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)`
+- `processor/rule/entity_watcher_hardening_integration_test.go:38` — `defer cancel()`
+- `processor/rule/entity_watcher_hardening_integration_test.go:55` — `processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)`
+- `processor/rule/entity_watcher_hardening_integration_test.go:58` — `require.NoError(t, processor.Initialize())`
+- `processor/rule/entity_watcher_hardening_integration_test.go:71` — `require.NoError(t, processor.Start(ctx))`
+- `processor/rule/entity_watcher_hardening_integration_test.go:72` — `stopped := false`
+- `processor/rule/entity_watcher_hardening_integration_test.go:73` — `t.Cleanup(func() {`
+- `processor/rule/entity_watcher_hardening_integration_test.go:74` — `if !stopped {`
+- `processor/rule/entity_watcher_hardening_integration_test.go:118` — `require.NoError(t, processor.Stop(context.Background()))`
+- `processor/rule/entity_watcher_hardening_integration_test.go:119` — `stopped = true`
+- `processor/rule/entity_watcher_hardening_integration_test.go:120` — `active, idle := processor.entityEvaluationFence.counts()`
+- `processor/rule/entity_watcher_hardening_integration_test.go:121` — `require.Zero(t, active)`
+- `processor/rule/entity_watcher_hardening_integration_test.go:122` — `require.Zero(t, idle)`
+- `processor/rule/entity_watcher_hardening_integration_test.go:124` — `require.Zero(t, processor.entityCoalescer.PendingCount())`
+- `processor/rule/entity_watcher_integration_test.go:411` — `processor.Stop(context.Background())`
+- `processor/rule/entity_watcher_integration_test.go:280` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/entity_watcher_integration_test.go:287` — `t.Cleanup(func() {`
+- `processor/rule/entity_watcher_integration_test.go:288` — `testClient.Terminate()`
+- `processor/rule/entity_watcher_integration_test.go:292` — `ctx := context.Background()`
+- `processor/rule/entity_watcher_integration_test.go:396` — `processor, err := rule.NewProcessorWithMetrics(natsClient, &config, nil)`
+- `processor/rule/entity_watcher_integration_test.go:404` — `err = processor.Initialize()`
+- `processor/rule/entity_watcher_integration_test.go:405` — `require.NoError(t, err)`
+- `processor/rule/entity_watcher_integration_test.go:408` — `err = processor.Start(ctx)`
+- `processor/rule/entity_watcher_integration_test.go:409` — `require.NoError(t, err)`
+- `processor/rule/entity_watcher_integration_test.go:410` — `t.Cleanup(func() {`
+- `processor/rule/entity_watcher_integration_test.go:122` — `processor.Stop(context.Background())`
+- `processor/rule/entity_watcher_integration_test.go:48` — `testClient, err := natsclient.NewSharedTestClient(`
+- `processor/rule/entity_watcher_integration_test.go:55` — `t.Cleanup(func() {`
+- `processor/rule/entity_watcher_integration_test.go:56` — `testClient.Terminate()`
+- `processor/rule/entity_watcher_integration_test.go:60` — `ctx := context.Background()`
+- `processor/rule/entity_watcher_integration_test.go:107` — `processor, err := rule.NewProcessorWithMetrics(natsClient, &config, nil)`
+- `processor/rule/entity_watcher_integration_test.go:115` — `err = processor.Initialize()`
+- `processor/rule/entity_watcher_integration_test.go:116` — `require.NoError(t, err)`
+- `processor/rule/entity_watcher_integration_test.go:119` — `err = processor.Start(ctx)`
+- `processor/rule/entity_watcher_integration_test.go:120` — `require.NoError(t, err)`
+- `processor/rule/entity_watcher_integration_test.go:121` — `t.Cleanup(func() {`
+- `processor/rule/entity_watcher_integration_test.go:129` — `_, err = natsClient.Subscribe(ctx, "events.rule.triggered", func(_ context.Context, msg *nats.Msg) {`
+- `processor/rule/entity_watcher_integration_test.go:141` — `t.Run("rapid_updates_coalesce_within_fixed_windows", func(t *testing.T) {`
+- `processor/rule/entity_watcher_integration_test.go:186` — `t.Run("deletion_cancels_pending_evaluation", func(t *testing.T) {`
+- `processor/rule/entity_watcher_integration_test.go:222` — `t.Run("new_updates_after_settling", func(t *testing.T) {`
+- `processor/rule/rule_integration_test.go:247` — `defer processor.Stop(context.Background())`
+- `processor/rule/rule_integration_test.go:211` — `natsClient := getTestNATSClient(t)`
+- `processor/rule/rule_integration_test.go:230` — `processor, err := rule.NewProcessor(natsClient, &config)`
+- `processor/rule/rule_integration_test.go:237` — `require.NotNil(t, processor)`
+- `processor/rule/rule_integration_test.go:239` — `err = processor.Initialize()`
+- `processor/rule/rule_integration_test.go:240` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:242` — `ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)`
+- `processor/rule/rule_integration_test.go:243` — `defer cancel()`
+- `processor/rule/rule_integration_test.go:245` — `err = processor.Start(ctx)`
+- `processor/rule/rule_integration_test.go:246` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:541` — `defer processor.Stop(context.Background())`
+- `processor/rule/rule_integration_test.go:479` — `natsClient := getTestNATSClient(t)`
+- `processor/rule/rule_integration_test.go:480` — `ctx := context.Background()`
+- `processor/rule/rule_integration_test.go:525` — `processor, err := rule.NewProcessor(natsClient, &config)`
+- `processor/rule/rule_integration_test.go:533` — `err = processor.Initialize()`
+- `processor/rule/rule_integration_test.go:534` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:536` — `testCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)`
+- `processor/rule/rule_integration_test.go:537` — `defer cancel()`
+- `processor/rule/rule_integration_test.go:539` — `err = processor.Start(testCtx)`
+- `processor/rule/rule_integration_test.go:540` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:550` — `_, err = natsClient.Subscribe(testCtx, "events.rule.triggered", func(_ context.Context, msg *nats.Msg) {`
+- `processor/rule/rule_integration_test.go:681` — `defer processor.Stop(context.Background())`
+- `processor/rule/rule_integration_test.go:625` — `natsClient := getTestNATSClient(t)`
+- `processor/rule/rule_integration_test.go:664` — `processor, err := rule.NewProcessor(natsClient, &config)`
+- `processor/rule/rule_integration_test.go:671` — `require.NotNil(t, processor)`
+- `processor/rule/rule_integration_test.go:673` — `err = processor.Initialize()`
+- `processor/rule/rule_integration_test.go:674` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:676` — `ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)`
+- `processor/rule/rule_integration_test.go:677` — `defer cancel()`
+- `processor/rule/rule_integration_test.go:679` — `err = processor.Start(ctx)`
+- `processor/rule/rule_integration_test.go:680` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:689` — `_, err = natsClient.Subscribe(ctx, "graph.events.>", func(_ context.Context, msg *nats.Msg) {`
+- `processor/rule/rule_integration_test.go:147` — `defer processor.Stop(context.Background())`
+- `processor/rule/rule_integration_test.go:70` — `natsClient := getTestNATSClient(t)`
+- `processor/rule/rule_integration_test.go:71` — `ctx := context.Background()`
+- `processor/rule/rule_integration_test.go:128` — `metricsRegistry := metric.NewMetricsRegistry()`
+- `processor/rule/rule_integration_test.go:129` — `processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)`
+- `processor/rule/rule_integration_test.go:136` — `require.NotNil(t, processor)`
+- `processor/rule/rule_integration_test.go:139` — `err = processor.Initialize()`
+- `processor/rule/rule_integration_test.go:140` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:142` — `testCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)`
+- `processor/rule/rule_integration_test.go:143` — `defer cancel()`
+- `processor/rule/rule_integration_test.go:145` — `err = processor.Start(testCtx)`
+- `processor/rule/rule_integration_test.go:146` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:156` — `_, err = natsClient.Subscribe(testCtx, "events.rule.triggered", func(_ context.Context, msg *nats.Msg) {`
+- `processor/rule/rule_integration_test.go:447` — `defer processor.Stop(context.Background())`
+- `processor/rule/rule_integration_test.go:390` — `natsClient := getTestNATSClient(t)`
+- `processor/rule/rule_integration_test.go:393` — `metricsRegistry := metric.NewMetricsRegistry()`
+- `processor/rule/rule_integration_test.go:430` — `processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)`
+- `processor/rule/rule_integration_test.go:437` — `require.NotNil(t, processor)`
+- `processor/rule/rule_integration_test.go:439` — `err = processor.Initialize()`
+- `processor/rule/rule_integration_test.go:440` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:442` — `ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)`
+- `processor/rule/rule_integration_test.go:443` — `defer cancel()`
+- `processor/rule/rule_integration_test.go:445` — `err = processor.Start(ctx)`
+- `processor/rule/rule_integration_test.go:446` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:831` — `defer processor.Stop(context.Background())`
+- `processor/rule/rule_integration_test.go:729` — `natsClient := getTestNATSClient(t)`
+- `processor/rule/rule_integration_test.go:730` — `ctx := context.Background()`
+- `processor/rule/rule_integration_test.go:815` — `processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)`
+- `processor/rule/rule_integration_test.go:823` — `err = processor.Initialize()`
+- `processor/rule/rule_integration_test.go:824` — `require.NoError(t, err)`
+- `processor/rule/rule_integration_test.go:826` — `testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)`
+- `processor/rule/rule_integration_test.go:827` — `defer cancel()`
+- `processor/rule/rule_integration_test.go:829` — `err = processor.Start(testCtx)`
+- `processor/rule/rule_integration_test.go:830` — `require.NoError(t, err)`
+- `processor/rule/state_cleanup_integration_test.go:47` — `t.Cleanup(func() { _ = proc.Stop(context.Background()) })`
+- `processor/rule/state_cleanup_integration_test.go:26` — `testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())`
+- `processor/rule/state_cleanup_integration_test.go:27` — `t.Cleanup(func() { _ = testClient.Terminate() })`
+- `processor/rule/state_cleanup_integration_test.go:29` — `ctx := context.Background()`
+- `processor/rule/state_cleanup_integration_test.go:42` — `proc, err := NewProcessor(nc, &config)`
+- `processor/rule/state_cleanup_integration_test.go:43` — `require.NoError(t, err)`
+- `processor/rule/state_cleanup_integration_test.go:45` — `require.NoError(t, proc.Initialize())`
+- `processor/rule/state_cleanup_integration_test.go:46` — `require.NoError(t, proc.Start(ctx))`
+- `processor/rule/state_cleanup_integration_test.go:48` — `require.NotNil(t, proc.stateTracker, "state tracker must initialize")`
+- `processor/rule/state_cleanup_integration_test.go:75` — `require.NoError(t, kv.Delete(ctx, x))`
+- `processor/rule/state_cleanup_integration_test.go:88` — `require.NoErrorf(t, gerr, "prefix-sibling %q rule state must NOT be deleted", sib)`
+- `processor/rule/stateful_integration_test.go:44` — `defer processor.Stop(context.Background())`
+- `processor/rule/stateful_integration_test.go:19` — `ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)`
+- `processor/rule/stateful_integration_test.go:20` — `defer cancel()`
+- `processor/rule/stateful_integration_test.go:23` — `testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())`
+- `processor/rule/stateful_integration_test.go:24` — `defer testClient.Terminate()`
+- `processor/rule/stateful_integration_test.go:29` — `processor, err := NewProcessor(testClient.Client, &config)`
+- `processor/rule/stateful_integration_test.go:36` — `if err := processor.Initialize(); err != nil {`
+- `processor/rule/stateful_integration_test.go:37` — `t.Fatalf("Failed to initialize processor: %v", err)`
+- `processor/rule/stateful_integration_test.go:41` — `if err := processor.Start(ctx); err != nil {`
+- `processor/rule/stateful_integration_test.go:42` — `t.Fatalf("Failed to start processor: %v", err)`
+- `processor/rule/cron_scheduler_test.go:350` — `startSchedulerForTest(ctx, t, s)`
+- `processor/rule/cron_scheduler_test.go:388` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:415` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:436` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:466` — `wg.Wait()`
+- `processor/rule/cron_scheduler_test.go:458` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:487` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:501` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:524` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:651` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:681` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:697` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:829` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:861` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:894` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:986` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:1007` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:1032` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:1052` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:1079` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:1131` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:1194` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:1232` — `wg.Wait()`
+- `processor/rule/cron_scheduler_test.go:1225` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:1336` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_test.go:1366` — `startSchedulerForTest(context.Background(), t, s)`
+- `processor/rule/cron_scheduler_integration_test.go:121` — `startCronProcessorForTest(t, natsClient, rules)`
+- `processor/rule/cron_scheduler_integration_test.go:165` — `startCronProcessorForTest(t, natsClient, rules)`
+- `processor/rule/cron_scheduler_integration_test.go:229` — `proc1, _ := startCronProcessorForTest(t, natsClient, rules)`
+- `processor/rule/cron_scheduler_integration_test.go:260` — `_, registry2 := startCronProcessorForTest(t, natsClient, rules)`
+- `processor/rule/cron_scheduler_integration_test.go:313` — `proc1, _ := startCronProcessorForTest(t, natsClient, rules)`
+- `processor/rule/cron_scheduler_integration_test.go:327` — `proc2, _ := startCronProcessorForTest(t, natsClient, rules)`
+- `processor/rule/actions_run_scope_integration_test.go:210` — `h := newRunScopeHarness(t)`
+- `processor/rule/actions_run_scope_integration_test.go:285` — `h := newRunScopeHarness(t)`
+- `processor/rule/actions_run_scope_integration_test.go:360` — `h := newRunScopeHarness(t)`
+- `processor/rule/actions_run_scope_integration_test.go:400` — `h := newRunScopeHarness(t)`
+- `processor/rule/actions_run_scope_integration_test.go:422` — `h := newRunScopeHarness(t)`
+- `processor/rule/triple_mutator_revision_integration_test.go:158` — `h := newRevisionClaimHarness(t)`
+- `processor/rule/triple_mutator_revision_integration_test.go:189` — `h := newRevisionClaimHarness(t)`
+- `processor/rule/cron_scheduler_test.go:129` — `s := newSchedulerForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:256` — `s := newSchedulerForTest(t, &recordingExecutor{})`
+- `processor/rule/cron_scheduler_test.go:257` — `if err := s.Start(nil); err == nil {`
+- `processor/rule/cron_scheduler_test.go:264` — `s := newSchedulerForTest(t, &recordingExecutor{})`
+- `processor/rule/cron_scheduler_test.go:267` — `if err := s.Stop(stopCtx); err != nil {`
+- `processor/rule/cron_scheduler_test.go:270` — `if err := s.Stop(stopCtx); err != nil {`
+- `processor/rule/cron_scheduler_test.go:277` — `s := newSchedulerForTest(t, &recordingExecutor{})`
+- `processor/rule/cron_scheduler_test.go:278` — `if err := s.Stop(nil); err == nil {`
+- `processor/rule/cron_scheduler_test.go:537` — `s := newSchedulerForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:546` — `if err := s.Start(ctx); err != nil {`
+- `processor/rule/cron_scheduler_test.go:552` — `if err := s.Stop(stopCtx); err != nil {`
+- `processor/rule/cron_scheduler_test.go:745` — `s := newSchedulerForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:1388` — `s := newUnstartedSchedulerForTest(t, &recordingExecutor{})`
+- `processor/rule/cron_scheduler_test.go:1390` — `if err := s.Start(startCtx); err != nil {`
+- `processor/rule/cron_scheduler_test.go:1405` — `go func() { stopReturned <- s.Stop(stopCtx) }()`
+- `processor/rule/cron_scheduler_test.go:1409` — `if err := <-stopReturned; err != nil {`
+- `processor/rule/cron_scheduler_test.go:150` — `s := newUnstartedSchedulerForTest(t, &recordingExecutor{})`
+- `processor/rule/cron_scheduler_test.go:162` — `s := newUnstartedSchedulerForTest(t, &recordingExecutor{})`
+- `processor/rule/cron_scheduler_test.go:174` — `s := newUnstartedSchedulerForTest(t, &recordingExecutor{})`
+- `processor/rule/cron_scheduler_test.go:181` — `s := newUnstartedSchedulerForTest(t, &recordingExecutor{})`
+- `processor/rule/cron_scheduler_test.go:183` — `if err := s.Stop(context.Background()); err != nil {`
+- `processor/rule/cron_scheduler_test.go:196` — `s := newUnstartedSchedulerForTest(t, &recordingExecutor{})`
+- `processor/rule/cron_scheduler_test.go:219` — `go func() { stopReturned <- s.Stop(context.Background()) }()`
+- `processor/rule/cron_scheduler_test.go:222` — `if err := <-registerDone; err != nil {`
+- `processor/rule/cron_scheduler_test.go:225` — `if err := <-stopReturned; err != nil {`
+- `processor/rule/cron_scheduler_test.go:293` — `s := newUnstartedSchedulerForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:299` — `if err := s.Start(startCtx); err != nil {`
+- `processor/rule/cron_scheduler_test.go:313` — `go func() { stopReturned <- s.Stop(context.Background()) }()`
+- `processor/rule/cron_scheduler_test.go:316` — `case err := <-stopReturned:`
+- `processor/rule/cron_scheduler_test.go:320` — `if err := s.Stop(context.Background()); !errs.IsTransient(err) {`
+- `processor/rule/cron_scheduler_test.go:324` — `<-fireDone`
+- `processor/rule/cron_scheduler_test.go:325` — `if err := <-stopReturned; err != nil {`
+- `processor/rule/cron_scheduler_test.go:78` — `s := newUnstartedSchedulerForTest(t, exec)`
+- `processor/rule/deny_integration_test.go:114` — `nc := getTestNATSClient(t)`
+- `processor/rule/payload_projection_integration_test.go:55` — `nc := getTestNATSClient(t)`
+- `processor/rule/payload_projection_integration_test.go:121` — `require.NoError(t, lc.Start(startCtx))`
+- `processor/rule/payload_projection_integration_test.go:125` — `if err := lc.Stop(stopCtx); err != nil {`
+- `processor/rule/rule_integration_test.go:325` — `natsClient := getTestNATSClient(t)`
+- `processor/rule/cron_scheduler_test.go:723` — `s, _ := newSchedulerWithTrackerForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:738` — `s, _ := newSchedulerWithTrackerForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:759` — `s, tracker := newSchedulerWithTrackerForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:790` — `s, tracker := newSchedulerWithTrackerForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:1094` — `s, m := newSchedulerWithMetricsForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:1099` — `if err := s.Start(context.Background()); err != nil {`
+- `processor/rule/cron_scheduler_test.go:1106` — `if err := s.Stop(context.Background()); err != nil {`
+- `processor/rule/cron_scheduler_test.go:1149` — `s, m := newSchedulerWithMetricsForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:1170` — `s, m := newSchedulerWithMetricsForTest(t, exec)`
+- `processor/rule/cron_scheduler_test.go:956` — `s, m := newSchedulerWithMetricsForTest(t, exec)`

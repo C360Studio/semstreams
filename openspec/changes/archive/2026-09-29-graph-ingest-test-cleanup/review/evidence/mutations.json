@@ -1,0 +1,74 @@
+[
+  {
+    "name": "provisional_removed",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "./processor/graph-ingest",
+      "-run",
+      "^TestGraphIngestOwnerAssertionExitAndCleanupError$/^setup-exit$"
+    ],
+    "source_md5_before": "b17f0a753efc9f8ed0f758b0915fabff",
+    "mutant_md5": "9c90e0d18a02d26a4d0bc76a82b87dba",
+    "exit_code": 1,
+    "oracle": "child missing witness",
+    "oracle_reached": true,
+    "log": "/private/tmp/gh1423-mutation-provisional_removed.log"
+  },
+  {
+    "name": "premature_start_cancel",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "./processor/graph-ingest",
+      "-run",
+      "^TestGraphIngestTestOwnerControlledStopPreservesAuthority$"
+    ],
+    "source_md5_before": "b17f0a753efc9f8ed0f758b0915fabff",
+    "mutant_md5": "68fae848b491550a5a6a62b6af2002e1",
+    "exit_code": 1,
+    "oracle": "accepted Start authority ended before Stop",
+    "oracle_reached": true,
+    "log": "/private/tmp/gh1423-mutation-premature_start_cancel.log"
+  },
+  {
+    "name": "discard_stop_error",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "./processor/graph-ingest",
+      "-run",
+      "^TestGraphIngestTestOwnerCanceledOperationKeepsFreshTerminalAuthority$"
+    ],
+    "source_md5_before": "b17f0a753efc9f8ed0f758b0915fabff",
+    "mutant_md5": "ed946e963560876ad6c443df5dcedd6b",
+    "exit_code": 1,
+    "oracle": "want concrete and operation causes",
+    "oracle_reached": true,
+    "log": "/private/tmp/gh1423-mutation-discard_stop_error.log"
+  },
+  {
+    "name": "implicit_retry",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "./processor/graph-ingest",
+      "-run",
+      "^TestGraphIngestTestOwnerFailedAttemptIsNotRetried$"
+    ],
+    "source_md5_before": "b17f0a753efc9f8ed0f758b0915fabff",
+    "mutant_md5": "4ec4dfababf668ab32f8c42f81e1f863",
+    "exit_code": 1,
+    "oracle": "failed-start Drain attempts",
+    "oracle_reached": true,
+    "log": "/private/tmp/gh1423-mutation-implicit_retry.log"
+  }
+]

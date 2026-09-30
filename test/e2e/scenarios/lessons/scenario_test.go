@@ -489,7 +489,7 @@ type fakeValidationClient struct {
 	closeCalls int
 	closeErr   error
 	// identity is what the fake deployment records at
-	// semstreams_config/platform_identity; empty means the stem is adopted
+	// semstreams_config_<org>_<stem>/platform_identity; empty means the stem is adopted
 	// unsuffixed, which is the operator-provisioned form.
 	identity string
 }

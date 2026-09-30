@@ -49,12 +49,14 @@ func TestComponent_SynchronousHierarchy_IncludedBeforeWrite(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+			defer cancelOperation()
 			comp := createTestComponentWithHierarchyConfig(t, true)
-			ctx := context.Background()
+			owner := newGraphIngestTestOwner(comp)
+			defer owner.finish(ctx, t)
 
 			require.NoError(t, comp.Initialize())
-			require.NoError(t, comp.Start(ctx))
-			defer comp.Stop(context.Background())
+			require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 			// Create entity
 			entity := &graph.EntityState{
@@ -109,8 +111,8 @@ func TestComponent_SynchronousHierarchy_IncludedBeforeWrite(t *testing.T) {
 	}
 }
 
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone" line=512 column=24 surface=go-field:.entityID entity_id_invalid:arity five-part hierarchy ID rejection fixture
-// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.test001.extra" line=520 column=24 surface=go-field:.entityID entity_id_invalid:arity seven-part hierarchy ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone" line=529 column=24 surface=go-field:.entityID entity_id_invalid:arity five-part hierarchy ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.test001.extra" line=537 column=24 surface=go-field:.entityID entity_id_invalid:arity seven-part hierarchy ID rejection fixture
 
 func TestComponent_SynchronousHierarchy_SingleWrite(t *testing.T) {
 	tests := []struct {
@@ -129,12 +131,14 @@ func TestComponent_SynchronousHierarchy_SingleWrite(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+			defer cancelOperation()
 			comp := createTestComponentWithHierarchyConfig(t, true)
-			ctx := context.Background()
+			owner := newGraphIngestTestOwner(comp)
+			defer owner.finish(ctx, t)
 
 			require.NoError(t, comp.Initialize())
-			require.NoError(t, comp.Start(ctx))
-			defer comp.Stop(context.Background())
+			require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 			// Create entity
 			entity := &graph.EntityState{
@@ -204,12 +208,19 @@ func TestComponent_SynchronousHierarchy_ContainerCreation(t *testing.T) {
 		},
 	}
 
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+
+	defer cancelOperation()
+
 	comp := createTestComponentWithHierarchyConfig(t, true)
-	ctx := context.Background()
+
+	owner := newGraphIngestTestOwner(comp)
+
+	defer owner.finish(ctx, t)
 
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(context.Background())
+
+	require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 	// Create a single entity that triggers all container creation
 	entityID := "c360.platform.robotics.mav1.drone.test001"
@@ -262,12 +273,14 @@ func TestComponent_SynchronousHierarchy_ContainerCreation(t *testing.T) {
 }
 
 func TestComponent_SynchronousHierarchy_MultipleEntitiesSameType(t *testing.T) {
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 	comp := createTestComponentWithHierarchyConfig(t, true)
-	ctx := context.Background()
+	owner := newGraphIngestTestOwner(comp)
+	defer owner.finish(ctx, t)
 
 	require.NoError(t, comp.Initialize())
-	require.NoError(t, comp.Start(ctx))
-	defer comp.Stop(context.Background())
+	require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 	// Create multiple entities that share type container
 	entities := []string{
@@ -422,12 +435,14 @@ func TestComponent_SynchronousHierarchy_NoWatcherLifecycle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+			defer cancelOperation()
 			comp := createTestComponentWithHierarchyConfig(t, true)
-			ctx := context.Background()
+			owner := newGraphIngestTestOwner(comp)
+			defer owner.finish(ctx, t)
 
 			require.NoError(t, comp.Initialize())
-			require.NoError(t, comp.Start(ctx))
-			defer comp.Stop(context.Background())
+			require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 			tt.verify(t, comp)
 		})
@@ -437,12 +452,14 @@ func TestComponent_SynchronousHierarchy_NoWatcherLifecycle(t *testing.T) {
 func TestComponent_SynchronousHierarchy_DisabledConfig(t *testing.T) {
 	t.Run("no_hierarchy_triples_when_disabled", func(t *testing.T) {
 		// When enable_hierarchy: false, no hierarchy triples should be added
+		ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+		defer cancelOperation()
 		comp := createTestComponentWithHierarchyConfig(t, false)
-		ctx := context.Background()
+		owner := newGraphIngestTestOwner(comp)
+		defer owner.finish(ctx, t)
 
 		require.NoError(t, comp.Initialize())
-		require.NoError(t, comp.Start(ctx))
-		defer comp.Stop(context.Background())
+		require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 		entityID := "c360.platform.robotics.mav1.drone.test001"
 		entity := &graph.EntityState{
@@ -527,12 +544,14 @@ func TestComponent_SynchronousHierarchy_InvalidEntityID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+			defer cancelOperation()
 			comp := createTestComponentWithHierarchyConfig(t, true)
-			ctx := context.Background()
+			owner := newGraphIngestTestOwner(comp)
+			defer owner.finish(ctx, t)
 
 			require.NoError(t, comp.Initialize())
-			require.NoError(t, comp.Start(ctx))
-			defer comp.Stop(context.Background())
+			require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 			entity := &graph.EntityState{
 				ID:          tt.entityID,
@@ -588,12 +607,14 @@ func TestComponent_SynchronousHierarchy_InvalidEntityID(t *testing.T) {
 
 func TestComponent_SynchronousHierarchy_ContextCancellation(t *testing.T) {
 	t.Run("respects_cancelled_context", func(t *testing.T) {
+		ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+		defer cancelOperation()
 		comp := createTestComponentWithHierarchyConfig(t, true)
-		ctx := context.Background()
+		owner := newGraphIngestTestOwner(comp)
+		defer owner.finish(ctx, t)
 
 		require.NoError(t, comp.Initialize())
-		require.NoError(t, comp.Start(ctx))
-		defer comp.Stop(context.Background())
+		require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 		// Create cancelled context
 		cancelledCtx, cancel := context.WithCancel(context.Background())
@@ -636,12 +657,14 @@ func TestComponent_SynchronousHierarchy_ContextCancellation(t *testing.T) {
 
 func TestComponent_SynchronousHierarchy_SiblingEdges(t *testing.T) {
 	t.Run("creates_bidirectional_sibling_edges", func(t *testing.T) {
+		ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+		defer cancelOperation()
 		comp := createTestComponentWithHierarchyConfig(t, true)
-		ctx := context.Background()
+		owner := newGraphIngestTestOwner(comp)
+		defer owner.finish(ctx, t)
 
 		require.NoError(t, comp.Initialize())
-		require.NoError(t, comp.Start(ctx))
-		defer comp.Stop(context.Background())
+		require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 		// Create first entity - no siblings yet
 		entity1ID := "c360.platform.sensors.hvac.temperature.sensor001"
@@ -734,12 +757,14 @@ func TestComponent_SynchronousHierarchy_SiblingEdges(t *testing.T) {
 	})
 
 	t.Run("creates_sibling_edges_for_multiple_entities", func(t *testing.T) {
+		ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+		defer cancelOperation()
 		comp := createTestComponentWithHierarchyConfig(t, true)
-		ctx := context.Background()
+		owner := newGraphIngestTestOwner(comp)
+		defer owner.finish(ctx, t)
 
 		require.NoError(t, comp.Initialize())
-		require.NoError(t, comp.Start(ctx))
-		defer comp.Stop(context.Background())
+		require.NoError(t, comp.Start(owner.startContext(ctx)))
 
 		// Create 3 entities of same type
 		entityIDs := []string{

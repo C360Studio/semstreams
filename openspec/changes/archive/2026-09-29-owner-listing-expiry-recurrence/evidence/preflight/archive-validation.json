@@ -1,0 +1,10 @@
+{
+  "command": "openspec validate --all --strict",
+  "result": "59 passed, 0 failed",
+  "exit_code": 0,
+  "log_sha256": "398d0d1f111b789622fd72e69e41812662c0b91c431bfb69016507753562ba5b",
+  "queue": "empty in the claim worktree after archive",
+  "diff_check": "passed",
+  "archive": "2026-09-29-owner-listing-expiry-recurrence",
+  "remaining_issue": "#1421 cause and production repair remain open"
+}

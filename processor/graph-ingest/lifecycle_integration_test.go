@@ -23,6 +23,16 @@ import (
 var sharedLifecycleNATSClient *natsclient.TestClient
 
 func TestMain(m *testing.M) {
+	child, childErr := graphIngestOwnerChildRequest(os.Getenv(graphIngestOwnerChildEnv), os.Args[1:])
+	if childErr != nil {
+		fmt.Fprintln(os.Stderr, childErr)
+		os.Exit(2)
+	}
+	if child {
+		// The one exact self-exec assertion-exit proof needs no shared NATS.
+		os.Exit(m.Run())
+	}
+
 	// Declare the test-only predicates used by projection/ownership contracts.
 	// Runtime graph writes require canonical syntax, while authoring surfaces
 	// additionally require explicit vocabulary declaration.

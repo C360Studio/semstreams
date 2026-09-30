@@ -8,6 +8,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 	"github.com/c360studio/semstreams/vocabulary"
@@ -263,7 +264,19 @@ func (rp *Processor) isValidOperator(operator string) bool {
 // Discipline checks that apply to both paths (e.g. ADR-036's
 // rule-opaque field rejection) live here so a startup-time on-disk
 // rule cannot bypass what a hot-reload would catch.
+//
+// The rule ID is the member name of the configuration bucket's `rules` key
+// family, whose watch `rules.*` delivers exactly one token, so it must be one
+// KV literal token. A file or inline rule with a dotted ID is refused here,
+// loudly, rather than dropped by the first hot-reload reconcile; the family's
+// write-time refusal is the second line. Owner ruling on #1188, Q8 (b).
 func ValidateDefinition(def Definition) error {
+	if err := natsclient.ValidateKVLiteralToken(def.ID); err != nil {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %q id must be one KV literal token (ASCII letters, digits, '-', '/', '_', '='; no '.'): %w",
+				def.ID, err),
+			"RuleProcessor", "ValidateDefinition", "validate rule id")
+	}
 	if def.FireEveryNEvents < 0 {
 		return errs.WrapInvalid(
 			fmt.Errorf("rule %s fire_every_n_events must be >= 0, got %d", def.ID, def.FireEveryNEvents),

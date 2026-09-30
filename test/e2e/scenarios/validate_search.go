@@ -21,8 +21,11 @@ func (s *TieredScenario) executeVerifySearchQuality(ctx context.Context, result 
 	// Use similarity search for both statistical and semantic tiers (embedding-based with real scores)
 	// Statistical tier uses BM25 embeddings, semantic tier uses neural embeddings
 	// Structural tier has no embeddings, so uses global search (community-based)
+	// The variant is read through effectiveVariant: under auto-detect s.config.Variant
+	// stays "" and the raw read would send statistical down the recorder arm.
+	variant := s.effectiveVariant(result)
 	var executor *search.Executor
-	if s.config.Variant == "statistical" || s.config.Variant == "semantic" {
+	if variant == "statistical" || variant == "semantic" {
 		executor = search.NewSimilarityExecutor(s.config.GraphQLURL, 10*time.Second)
 	} else {
 		executor = search.NewExecutor(s.config.GraphQLURL, 10*time.Second)
@@ -37,6 +40,7 @@ func (s *TieredScenario) executeVerifySearchQuality(ctx context.Context, result 
 
 	// Record results in legacy format for backward compatibility
 	s.recordSearchQualityResultsFromStats(result, stats)
+	verdict := s.searchQualityVerdict(variant, stats)
 	if result.RunID != "" {
 		observation := s.controlledSearchObservation(stats)
 		observation.ID = s.config.Variant + ".controlled-search.identity"
@@ -47,6 +51,35 @@ func (s *TieredScenario) executeVerifySearchQuality(ctx context.Context, result 
 		if observation.Status != "passed" {
 			return fmt.Errorf("%s: %s", observation.ID, observation.Reason)
 		}
+	}
+	return verdict
+}
+
+// searchQualityVerdict is the stage's gate (#1426). Path arm, every variant the
+// stage runs in: a query that errors or returns no hits is the search path
+// failing, which the framework owns. Known-answer arm, by variant: under
+// statistical the ranker is BM25 (pure Go, deterministic over the fixed corpus),
+// so a missing known answer is a framework outcome and fails; under semantic the
+// ranking is the embedding model's, so the arm is a RECORDER (the warnings
+// recordSearchQualityResultsFromStats already wrote). The average-score warning
+// is a RECORDER in both: 0.5 is not calibrated to either scorer (BM25 measured
+// 0.28 on every run).
+func (s *TieredScenario) searchQualityVerdict(variant string, stats *search.Stats) error {
+	var broken []string
+	for _, r := range stats.Results {
+		switch {
+		case r.Error != "":
+			broken = append(broken, fmt.Sprintf("%q: %s", r.Query, r.Error))
+		case len(r.Hits) == 0:
+			broken = append(broken, fmt.Sprintf("%q: returned no hits", r.Query))
+		}
+	}
+	if len(broken) > 0 {
+		return fmt.Errorf("search failed for %d/%d queries: %s", len(broken), stats.TotalQueries, strings.Join(broken, "; "))
+	}
+	if variant == "statistical" && len(stats.KnownAnswerFailures) > 0 {
+		return fmt.Errorf("known-answer search failed under BM25 (%d/%d passed): %s",
+			stats.KnownAnswerTestsPassed, stats.KnownAnswerTestsTotal, strings.Join(stats.KnownAnswerFailures, "; "))
 	}
 	return nil
 }

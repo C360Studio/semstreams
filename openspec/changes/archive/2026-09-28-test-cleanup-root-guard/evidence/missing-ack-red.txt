@@ -1,0 +1,6 @@
+--- FAIL: TestCleanupAdmissionMissingAcknowledgement (0.12s)
+    cleanup_process_unix_test.go:503: missing acknowledgement passed cleanup despite supervisor failure:
+        cleanup supervisor failure: parent cleanup acknowledgement missing
+FAIL
+FAIL	github.com/c360studio/semstreams/test/testinfra	0.424s
+FAIL

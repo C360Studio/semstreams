@@ -1,0 +1,40 @@
+package main
+
+import (
+ "context"
+ "crypto/sha256"
+ "encoding/hex"
+ "encoding/json"
+ "fmt"
+ "go/types"
+ "os"
+ "sort"
+ "strings"
+ "time"
+
+ "golang.org/x/tools/go/packages"
+)
+
+func hash(items []string) string { sort.Strings(items); s:=sha256.Sum256([]byte(strings.Join(items,"\n"))); return hex.EncodeToString(s[:]) }
+func fail(err error) { if err!=nil { fmt.Fprintln(os.Stderr,err); os.Exit(1) } }
+func check(ps []*packages.Package) { packages.Visit(ps,nil,func(p *packages.Package){if len(p.Errors)>0 { fail(fmt.Errorf("%s: %v",p.ID,p.Errors)) }} ) }
+func mods(ps []*packages.Package) []string { m:=map[string]bool{}; packages.Visit(ps,nil,func(p *packages.Package){if p.Module!=nil { b,e:=json.Marshal(p.Module); fail(e);m[string(b)]=true }}); r:=[]string{};for k:=range m{r=append(r,k)};return r }
+func main() {
+ reduced:=len(os.Args)>1 && os.Args[1]=="reduced"
+ ctx,cancel:=context.WithTimeout(context.Background(),90*time.Second);defer cancel()
+ for _,selection:=range []string{"default","integration","live_llm"} {
+  start:=time.Now(); flags:=[]string{};if selection!="default" {flags=[]string{"-tags="+selection}}
+  mode:=packages.NeedName|packages.NeedFiles|packages.NeedCompiledGoFiles|packages.NeedImports|packages.NeedTypes|packages.NeedSyntax|packages.NeedTypesInfo|packages.NeedModule
+  if !reduced {mode|=packages.NeedDeps}
+  cfg:=&packages.Config{Context:ctx,Tests:true,BuildFlags:flags,Mode:mode}
+  ps,e:=packages.Load(cfg,"./...");fail(e);check(ps)
+  typedSeconds:=time.Since(start).Seconds()
+  files:=map[string]bool{};symbols:=[]string{};for _,p:=range ps {for _,f:=range p.CompiledGoFiles{files[f]=true};if p.TypesInfo!=nil{for id,obj:=range p.TypesInfo.Uses{if id.Name=="Stop"||id.Name=="Close"||id.Name=="Context"{symbols=append(symbols,p.ID+"|"+p.Fset.Position(id.Pos()).String()+"|"+types.ObjectString(obj,func(p *types.Package)string{return p.Path()}))}}}}
+  fileList:=[]string{};for f:=range files{fileList=append(fileList,f)}
+  modules:=mods(ps)
+  metadataSeconds:=float64(0)
+  if reduced {mstart:=time.Now();cfg.Mode=packages.NeedName|packages.NeedImports|packages.NeedDeps|packages.NeedModule;metadata,e:=packages.Load(cfg,"./...");fail(e);check(metadata);modules=mods(metadata);metadataSeconds=time.Since(mstart).Seconds()}
+  out:=map[string]any{"selection":selection,"reduced":reduced,"initial_packages":len(ps),"files":len(files),"files_sha256":hash(fileList),"symbol_refs":len(symbols),"symbols_sha256":hash(symbols),"modules":len(modules),"modules_sha256":hash(modules),"typed_seconds":typedSeconds,"metadata_seconds":metadataSeconds,"total_seconds":time.Since(start).Seconds()}
+  fail(json.NewEncoder(os.Stdout).Encode(out))
+ }
+}

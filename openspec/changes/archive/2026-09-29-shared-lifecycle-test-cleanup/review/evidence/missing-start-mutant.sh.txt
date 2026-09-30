@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source_file=component/lifecycle_test_suite.go
+backup=/private/tmp/gh1418-missing-start-backup.go
+cp "$source_file" "$backup"
+original=$(md5 -q "$source_file")
+restore() {
+ cp "$backup" "$source_file"
+ actual=$(md5 -q "$source_file")
+ if [[ "$actual" != "$original" ]]; then echo "restoration mismatch $actual != $original" >&2; exit 1; fi
+}
+trap restore EXIT
+python3 - "$source_file" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); source=p.read_text()
+old='if err := owner.component.Start(workCtx); err != nil {\n\t\treturn fmt.Errorf("%s Start: %w", label, err)'
+new='if err := error(nil); err != nil { // mutant: accepted Start omitted\n\t\treturn fmt.Errorf("%s Start: %w", label, err)'
+if source.count(old)!=1: raise SystemExit('expected one cycle Start')
+p.write_text(source.replace(old,new,1))
+PY
+if go test -race -count=1 ./component -run '^TestSharedLifecycleParallelReportedFailureKeepsLivePeerOwned$' > /private/tmp/gh1418-mutant-missing-start.log 2>&1; then
+ echo 'missing-Start mutant survived' >&2; exit 1
+fi
+if ! rg -q 'fixture missing accepted Start or reported peer failure; all workers joined' /private/tmp/gh1418-mutant-missing-start.log; then
+ cat /private/tmp/gh1418-mutant-missing-start.log >&2
+ echo 'missing-Start mutant failed for unrelated reason' >&2
+ exit 1
+fi
+echo 'MUTANT KILLED: omitted accepted Start; named missing-phase diagnostic after worker join'
+restore
+trap - EXIT
+go test -race -count=1 ./component -run '^TestSharedLifecycleParallelReportedFailureKeepsLivePeerOwned$' > /private/tmp/gh1418-missing-start-restored.log 2>&1
+printf 'RESTORED RACE PASS checksum=%s\n' "$original"

@@ -1,0 +1,833 @@
+//go:build integration
+
+package natsclient
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+const (
+	kvDiagnosticEventPrefix = "KV_DIAG_EVENT "
+	kvDiagnosticBucket      = "KV_FILTER_LIFECYCLE_DIAG"
+	kvDiagnosticFilter      = "diag.>"
+	kvDiagnosticCount       = 1024
+	kvDiagnosticServer      = "2.14.4-alpine@sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66"
+	kvDiagnosticWorkBudget  = 18 * time.Second
+	kvDiagnosticExitBudget  = 8 * time.Second
+	kvDiagnosticKillAfter   = 27 * time.Second
+	kvDiagnosticJoinReserve = 3 * time.Second
+)
+
+type kvDiagnosticEvent struct {
+	Case    string `json:"case"`
+	Kind    string `json:"kind"`
+	Elapsed string `json:"elapsed"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+type kvDiagnosticReporter struct {
+	mu    sync.Mutex
+	start time.Time
+	name  string
+}
+
+// exec copies stdout into this writer before Cmd.Wait returns. It keeps event
+// delivery live without racing Wait against reads from Cmd.StdoutPipe.
+type kvDiagnosticOutput struct {
+	name    string
+	events  chan kvDiagnosticEvent
+	partial string
+	err     error
+}
+
+func (o *kvDiagnosticOutput) Write(data []byte) (int, error) {
+	o.partial += string(data)
+	for {
+		end := strings.IndexByte(o.partial, '\n')
+		if end < 0 {
+			break
+		}
+		line := strings.TrimSuffix(o.partial[:end], "\r")
+		o.partial = o.partial[end+1:]
+		o.consume(line)
+	}
+	if len(o.partial) > 4<<20 {
+		o.err = errors.Join(o.err, errors.New("child output line exceeded 4 MiB"))
+		o.partial = ""
+	}
+	return len(data), nil
+}
+
+func (o *kvDiagnosticOutput) consume(line string) {
+	if !strings.HasPrefix(line, kvDiagnosticEventPrefix) {
+		select {
+		case o.events <- kvDiagnosticEvent{Case: o.name, Kind: "output", Detail: line}:
+		default:
+			o.err = errors.Join(o.err, errors.New("child output event buffer full"))
+		}
+		return
+	}
+	var event kvDiagnosticEvent
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(line, kvDiagnosticEventPrefix)), &event); err != nil {
+		o.err = errors.Join(o.err, fmt.Errorf("decode child event: %w", err))
+		return
+	}
+	select {
+	case o.events <- event:
+	default:
+		o.err = errors.Join(o.err, errors.New("child diagnostic event buffer full"))
+	}
+}
+
+func (r *kvDiagnosticReporter) emit(kind, detail string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	data, _ := json.Marshal(kvDiagnosticEvent{
+		Case: r.name, Kind: kind, Elapsed: time.Since(r.start).String(), Detail: detail,
+	})
+	fmt.Printf("%s%s\n", kvDiagnosticEventPrefix, data)
+}
+
+// This opt-in experiment uses one canonical NATS fixture, then isolates each
+// native listing in a fresh subprocess so a contextless SDK Stop can be contained.
+func TestIntegration_KVFilterLifecycleDiagnostic(t *testing.T) {
+	if os.Getenv("SEMSTREAMS_KV_LIFECYCLE_DIAGNOSTIC") != "1" {
+		t.Skip("opt-in native lifecycle diagnostic")
+	}
+	started := time.Now()
+	cooperativeDeadline := started.Add(140 * time.Second)
+	setupCtx, setupCancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer setupCancel()
+	fixture, err := newTestClient(setupCtx, productionTestClientFactoryDeps,
+		WithKV(), WithNATSVersion(kvDiagnosticServer))
+	if err != nil {
+		t.Fatalf("DIAGNOSTIC SETUP failure after %s: %v", time.Since(started), err)
+	}
+	t.Cleanup(func() {
+		if err := fixture.Terminate(); err != nil {
+			t.Errorf("DIAGNOSTIC substrate cleanup after %s: %v", time.Since(started), err)
+		}
+	})
+	bucket, err := fixture.Client.CreateKeyValueBucket(setupCtx, jetstream.KeyValueConfig{
+		Bucket: kvDiagnosticBucket, Storage: jetstream.MemoryStorage,
+	})
+	if err != nil {
+		t.Fatalf("DIAGNOSTIC bucket acquisition after %s: %v", time.Since(started), err)
+	}
+	for i := range kvDiagnosticCount {
+		key := fmt.Sprintf("diag.%04d", i)
+		if _, err := bucket.Put(setupCtx, key, []byte("v")); err != nil {
+			t.Fatalf("DIAGNOSTIC seed %d/%d after %s: %v", i, kvDiagnosticCount, time.Since(started), err)
+		}
+	}
+	if err := setupCtx.Err(); err != nil {
+		t.Fatalf("DIAGNOSTIC setup exceeded 20 s after %s: %v", time.Since(started), err)
+	}
+	t.Logf("DIAGNOSTIC fixture bucket=%s filter=%s count=%d setup=%s server=%s SDK=nats.go/v1.52.0",
+		kvDiagnosticBucket, kvDiagnosticFilter, kvDiagnosticCount, time.Since(started), kvDiagnosticServer)
+
+	for _, name := range []string{"control", "cancel", "deadline"} {
+		if time.Until(cooperativeDeadline) < kvDiagnosticKillAfter+kvDiagnosticJoinReserve {
+			t.Fatalf("DIAGNOSTIC admission stopped before %s: remaining=%s need=30s", name, time.Until(cooperativeDeadline))
+		}
+		if err := runKVFilterDiagnosticChild(t, name, fixture.URL, started); err != nil {
+			t.Fatalf("DIAGNOSTIC case=%s failed after %s: %v; following cases skipped", name, time.Since(started), err)
+		}
+	}
+}
+
+// Only this narrowly selected child entry point executes inside subprocesses.
+func TestIntegration_KVFilterLifecycleDiagnosticChild(t *testing.T) {
+	name := os.Getenv("SEMSTREAMS_KV_LIFECYCLE_DIAGNOSTIC_CHILD")
+	if name == "" {
+		t.Skip("diagnostic child only")
+	}
+	r := &kvDiagnosticReporter{start: time.Now(), name: name}
+	if err := runKVFilterDiagnosticCase(t, r, os.Getenv("SEMSTREAMS_KV_LIFECYCLE_DIAGNOSTIC_URL")); err != nil {
+		r.emit("failure", err.Error())
+		t.Error(err)
+	}
+}
+
+func runKVFilterDiagnosticChild(t *testing.T, name, url string, parentStart time.Time) (retErr error) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(exe, "-test.run=^TestIntegration_KVFilterLifecycleDiagnosticChild$", "-test.v", "-test.timeout=30s")
+	cmd.Env = append(os.Environ(),
+		"SEMSTREAMS_KV_LIFECYCLE_DIAGNOSTIC_CHILD="+name,
+		"SEMSTREAMS_KV_LIFECYCLE_DIAGNOSTIC_URL="+url)
+	events := make(chan kvDiagnosticEvent, 128)
+	output := &kvDiagnosticOutput{name: name, events: events}
+	cmd.Stdout = output
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// One goroutine owns Wait. Its completion also marks stdout EOF because the
+	// os/exec copy into output has joined by then. The immediate finalizer bounds
+	// kill and Wait even if the child's stdout copy cannot finish.
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	joined := false
+	var waitErr error
+	defer func() {
+		if joined {
+			return
+		}
+		killErr, joinedWait, ok := kvDiagnosticTerminate(cmd.Process.Kill, waitDone, kvDiagnosticJoinReserve)
+		waitErr = joinedWait
+		if !ok {
+			retErr = errors.Join(retErr, fmt.Errorf("OWNERSHIP_UNRESOLVED child pid=%d kill=%v Wait did not join within %s; parent_elapsed=%s",
+				cmd.Process.Pid, killErr, kvDiagnosticJoinReserve, time.Since(parentStart)))
+			return // The output writer and stderr may still be active; do not inspect them.
+		}
+		joined = true
+		retErr = errors.Join(retErr, fmt.Errorf("contained child pid=%d kill=%v wait=%v output=%v stderr=%q",
+			cmd.Process.Pid, killErr, waitErr, output.err, stderr.String()))
+	}()
+	deadline := time.NewTimer(kvDiagnosticKillAfter)
+	defer deadline.Stop()
+	seenDone := false
+	var lastEvent kvDiagnosticEvent
+	for waitDone != nil {
+		select {
+		case event := <-events:
+			lastEvent = event
+			if event.Kind == "done" {
+				seenDone = true
+			}
+			t.Logf("DIAGNOSTIC event=%+v", event)
+		case waitErr = <-waitDone:
+			joined = true
+			waitDone = nil
+		case <-deadline.C:
+			return fmt.Errorf("child pid=%d exceeded %s; last_event=%+v; parent_elapsed=%s",
+				cmd.Process.Pid, kvDiagnosticKillAfter, lastEvent, time.Since(parentStart))
+		}
+	}
+	if output.partial != "" {
+		output.consume(output.partial)
+	}
+	// The final event can be queued just before Cmd.Wait returns.
+	for len(events) > 0 {
+		event := <-events
+		if event.Kind == "done" {
+			seenDone = true
+		}
+		t.Logf("DIAGNOSTIC event=%+v", event)
+	}
+	if output.err != nil || waitErr != nil || !seenDone {
+		return fmt.Errorf("child pid=%d exit=%v output=%v done=%t stderr=%q", cmd.Process.Pid, waitErr, output.err, seenDone, stderr.String())
+	}
+	return nil
+}
+
+func kvDiagnosticJoinWait(done <-chan error, budget time.Duration) (error, bool) {
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err, true
+	case <-timer.C:
+		return nil, false
+	}
+}
+
+func kvDiagnosticTerminate(kill func() error, done <-chan error, budget time.Duration) (error, error, bool) {
+	killErr := kill()
+	waitErr, joined := kvDiagnosticJoinWait(done, budget)
+	return killErr, waitErr, joined
+}
+
+type kvDiagnosticBucketDecorator struct {
+	jetstream.KeyValue
+	r            *kvDiagnosticReporter
+	injected     bool
+	acquired     chan *kvDiagnosticFacade
+	observer     *kvDiagnosticStopObserver
+	frameworkCtx context.Context
+}
+
+func (b *kvDiagnosticBucketDecorator) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+	deadline, ok := ctx.Deadline()
+	b.r.emit("acquire", fmt.Sprintf("filter=%q deadline_present=%t remaining=%s", filters, ok, time.Until(deadline)))
+	b.frameworkCtx = ctx
+	native, err := b.KeyValue.ListKeysFiltered(ctx, filters...)
+	if err != nil {
+		b.r.emit("acquire_error", err.Error())
+		return nil, err
+	}
+	b.observer = &kvDiagnosticStopObserver{KeyLister: native, r: b.r}
+	if !b.injected {
+		return b.observer, nil
+	}
+	facade := &kvDiagnosticFacade{
+		observer: b.observer, output: make(chan string), release: make(chan struct{}), abort: make(chan struct{}),
+		nativeFirst: make(chan struct{}), first: make(chan struct{}), second: make(chan struct{}),
+		forwardDone: make(chan struct{}), r: b.r,
+	}
+	go facade.forward()
+	b.acquired <- facade
+	return facade, nil
+}
+
+type kvDiagnosticStopObserver struct {
+	jetstream.KeyLister
+	r     *kvDiagnosticReporter
+	mu    sync.Mutex
+	calls int
+}
+
+func (o *kvDiagnosticStopObserver) Stop() error {
+	o.mu.Lock()
+	o.calls++
+	o.mu.Unlock()
+	o.r.emit("stop_enter", "delegating to native KeyLister.Stop")
+	err := o.KeyLister.Stop()
+	o.r.emit("stop_exit", fmt.Sprintf("error=%v", err))
+	return err
+}
+
+func (o *kvDiagnosticStopObserver) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.calls
+}
+
+type kvDiagnosticFacade struct {
+	observer    *kvDiagnosticStopObserver
+	output      chan string
+	release     chan struct{}
+	abort       chan struct{}
+	nativeFirst chan struct{}
+	first       chan struct{}
+	second      chan struct{}
+	forwardDone chan struct{}
+	r           *kvDiagnosticReporter
+	mu          sync.Mutex
+	calls       int
+	releaseOnce sync.Once
+	abortOnce   sync.Once
+}
+
+func (f *kvDiagnosticFacade) forward() {
+	defer close(f.forwardDone)
+	defer close(f.output)
+	var key string
+	var ok bool
+	select {
+	case key, ok = <-f.observer.Keys():
+	case <-f.release:
+		return
+	case <-f.abort:
+		return
+	}
+	if !ok {
+		f.r.emit("native_keys_closed_before_first", "")
+		return
+	}
+	close(f.nativeFirst)
+	select {
+	case f.output <- key:
+	case <-f.release:
+		return
+	case <-f.abort:
+		return
+	}
+	close(f.first)
+	select {
+	case <-f.release:
+	case <-f.abort:
+		return
+	}
+	for {
+		select {
+		case _, ok := <-f.observer.Keys():
+			if !ok {
+				f.r.emit("native_keys_closed", "after release and drain")
+				return
+			}
+		case <-f.abort:
+			f.r.emit("native_keys_drain_aborted", "terminal allowance reserved for owner join")
+			return
+		}
+	}
+}
+
+func (f *kvDiagnosticFacade) Keys() <-chan string {
+	f.mu.Lock()
+	f.calls++
+	if f.calls == 2 {
+		close(f.second)
+	}
+	f.mu.Unlock()
+	return f.output
+}
+
+func (f *kvDiagnosticFacade) Stop() error {
+	f.r.emit("facade_stop_enter", "")
+	err := f.observer.Stop()
+	f.r.emit("facade_stop_exit", fmt.Sprintf("error=%v", err))
+	return err
+}
+
+func (f *kvDiagnosticFacade) releaseNative() { f.releaseOnce.Do(func() { close(f.release) }) }
+func (f *kvDiagnosticFacade) abortForward()  { f.abortOnce.Do(func() { close(f.abort) }) }
+
+type kvDiagnosticListResult struct {
+	keys []string
+	err  error
+}
+
+// The child owns both test goroutines and its connection from this point on.
+// A single terminal context serves Close and both joins on every return path.
+type kvDiagnosticCaseOwner struct {
+	r              *kvDiagnosticReporter
+	client         *Client
+	conn           *nats.Conn
+	caseStart      time.Time
+	cancelList     context.CancelFunc
+	acquired       <-chan *kvDiagnosticFacade
+	listDone       <-chan kvDiagnosticListResult
+	facade         *kvDiagnosticFacade
+	injected       bool
+	listJoined     bool
+	forwardJoined  bool
+	closed         bool
+	finished       bool
+	terminalCtx    context.Context
+	terminalCancel context.CancelFunc
+}
+
+func (o *kvDiagnosticCaseOwner) terminal() context.Context {
+	if o.terminalCtx != nil {
+		return o.terminalCtx
+	}
+	deadline := time.Now().Add(kvDiagnosticExitBudget)
+	if total := o.caseStart.Add(kvDiagnosticWorkBudget + kvDiagnosticExitBudget); total.Before(deadline) {
+		deadline = total
+	}
+	o.terminalCtx, o.terminalCancel = context.WithDeadline(context.Background(), deadline)
+	return o.terminalCtx
+}
+
+func (o *kvDiagnosticCaseOwner) adoptReady() {
+	if o.facade == nil && o.injected {
+		select {
+		case o.facade = <-o.acquired:
+			o.facade.releaseNative()
+		default:
+		}
+	}
+}
+
+func (o *kvDiagnosticCaseOwner) closeWhileHeld() error {
+	ctx := o.terminal()
+	r := o.r
+	closed := o.conn.StatusChanged(nats.CLOSED)
+	draining := o.conn.StatusChanged(nats.DRAINING_SUBS)
+	defer o.conn.RemoveStatusListener(closed)
+	defer o.conn.RemoveStatusListener(draining)
+	r.emit("close_enter", fmt.Sprintf("status=%s", o.conn.Status()))
+	err := o.client.Close(ctx)
+	o.closed = true
+	r.emit("close_exit", fmt.Sprintf("error=%v status=%s draining_seen=%t closed_seen=%t",
+		err, o.conn.Status(), len(draining) > 0, len(closed) > 0))
+	return err
+}
+
+func (o *kvDiagnosticCaseOwner) finish() error {
+	if o.finished {
+		return nil
+	}
+	o.finished = true
+	o.cancelList()
+	ctx := o.terminal()
+	defer o.terminalCancel()
+	o.adoptReady()
+	if o.facade != nil {
+		o.facade.releaseNative()
+	}
+	terminalDeadline, _ := o.terminalCtx.Deadline()
+	grace := time.Until(terminalDeadline) - time.Second
+	if grace < 0 {
+		grace = 0
+	}
+	graceTimer := time.NewTimer(grace)
+	defer graceTimer.Stop()
+	graceC := graceTimer.C
+	graceExpired := false
+	for !o.listJoined || (o.facade != nil && !o.forwardJoined) {
+		var acquired <-chan *kvDiagnosticFacade
+		var forwardDone <-chan struct{}
+		if o.facade == nil && o.injected {
+			acquired = o.acquired
+		}
+		if o.facade != nil && !o.forwardJoined {
+			forwardDone = o.facade.forwardDone
+		}
+		select {
+		case o.facade = <-acquired:
+			o.facade.releaseNative()
+			if graceExpired {
+				o.facade.abortForward()
+			}
+		case result := <-o.listDone:
+			o.listJoined = true
+			o.listDone = nil
+			o.r.emit("framework_cleanup_join", fmt.Sprintf("keys=%d error=%v", len(result.keys), result.err))
+			o.adoptReady()
+		case <-forwardDone:
+			o.forwardJoined = true
+			o.r.emit("facade_join", "test facade forwarding goroutine joined")
+		case <-graceC:
+			graceC = nil
+			graceExpired = true
+			if o.facade != nil {
+				o.facade.abortForward()
+			}
+		case <-ctx.Done():
+			if o.facade != nil {
+				o.facade.abortForward()
+			}
+			o.conn.Close()
+			o.r.emit("ownership_unresolved", fmt.Sprintf("list_joined=%t facade_joined=%t terminal=%v; child process containment",
+				o.listJoined, o.forwardJoined, ctx.Err()))
+			return fmt.Errorf("terminal join exceeded shared allowance: %w", ctx.Err())
+		}
+	}
+	if !o.closed {
+		if err := ctx.Err(); err != nil {
+			o.conn.Close()
+			return fmt.Errorf("terminal close skipped after allowance: %w", err)
+		}
+		o.r.emit("cleanup_close_enter", "after cancel/release/join")
+		err := o.client.Close(ctx)
+		o.closed = true
+		o.r.emit("cleanup_close_exit", fmt.Sprintf("error=%v", err))
+		return err
+	}
+	return nil
+}
+
+var kvDiagnosticGoroutineHeader = regexp.MustCompile(`^goroutine ([0-9]+) \[`)
+
+func kvDiagnosticStacks() (map[string]string, bool) {
+	buf := make([]byte, 2<<20)
+	n := runtime.Stack(buf, true)
+	if n == len(buf) {
+		return nil, false
+	}
+	blocks := strings.Split(string(buf[:n]), "\n\n")
+	result := make(map[string]string)
+	for _, block := range blocks {
+		lines := strings.SplitN(block, "\n", 2)
+		if len(lines) == 0 {
+			continue
+		}
+		match := kvDiagnosticGoroutineHeader.FindStringSubmatch(lines[0])
+		if len(match) == 2 {
+			result[match[1]] = block
+		}
+	}
+	return result, true
+}
+
+func kvDiagnosticWitnessContextLive(workCtx, frameworkCtx context.Context) error {
+	if err := workCtx.Err(); err != nil {
+		return fmt.Errorf("GATE_NOT_REACHED: work context ended before witness: %w", err)
+	}
+	if frameworkCtx == nil {
+		return errors.New("GATE_NOT_REACHED: framework listing context was not captured")
+	}
+	deadline, ok := frameworkCtx.Deadline()
+	if !ok {
+		return errors.New("GATE_NOT_REACHED: framework five-second deadline absent")
+	}
+	remaining := time.Until(deadline)
+	if err := frameworkCtx.Err(); err != nil || remaining <= 0 || remaining > DefaultKVOptions().Timeout {
+		return fmt.Errorf("GATE_NOT_REACHED: framework five-second context not live: remaining=%s error=%v",
+			remaining, err)
+	}
+	return nil
+}
+
+func kvDiagnosticBlockedWitness(workCtx, frameworkCtx context.Context) (string, string, string, string, error) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	var last string
+	for {
+		if err := kvDiagnosticWitnessContextLive(workCtx, frameworkCtx); err != nil {
+			return "", "", "", "", fmt.Errorf("%w; last=%s", err, last)
+		}
+		stacks, complete := kvDiagnosticStacks()
+		if !complete {
+			return "", "", "", "", errors.New("GATE_NOT_REACHED: full goroutine snapshot exceeded 2 MiB")
+		}
+		forwardID, watcherID := "", ""
+		for id, stack := range stacks {
+			if strings.Contains(stack, "[chan send]") &&
+				strings.Contains(stack, "jetstream.(*kvs).ListKeysFiltered.func1") &&
+				strings.Contains(stack, "jetstream/kv.go:1451") {
+				forwardID = id
+			}
+			if strings.Contains(stack, "[chan send]") &&
+				strings.Contains(stack, "jetstream.(*kvs).WatchFiltered.func1") &&
+				strings.Contains(stack, "jetstream/kv.go:1290") {
+				watcherID = id
+			}
+		}
+		last = fmt.Sprintf("snapshot_goroutines=%d forward_id=%s watcher_id=%s", len(stacks), forwardID, watcherID)
+		if forwardID != "" && watcherID != "" && forwardID != watcherID {
+			if err := kvDiagnosticWitnessContextLive(workCtx, frameworkCtx); err != nil {
+				return "", "", "", "", fmt.Errorf("%w; last=%s", err, last)
+			}
+			return forwardID, watcherID, stacks[forwardID], stacks[watcherID], nil
+		}
+		select {
+		case <-workCtx.Done():
+			return "", "", "", "", fmt.Errorf("GATE_NOT_REACHED: native blocked-stage witness: %w; last=%s", workCtx.Err(), last)
+		case <-frameworkCtx.Done():
+			return "", "", "", "", fmt.Errorf("GATE_NOT_REACHED: framework context ended before witness: %w; last=%s", frameworkCtx.Err(), last)
+		case <-ticker.C:
+		}
+	}
+}
+
+func runKVFilterDiagnosticCase(t *testing.T, r *kvDiagnosticReporter, url string) (retErr error) {
+	t.Helper()
+	workCtx, workCancel := context.WithTimeout(t.Context(), kvDiagnosticWorkBudget)
+	defer workCancel()
+	client, err := NewClient(url, WithMaxReconnects(0), WithHealthInterval(0))
+	if err != nil {
+		return fmt.Errorf("new child client: %w", err)
+	}
+	if err := client.Connect(workCtx); err != nil {
+		return fmt.Errorf("connect child client: %w", err)
+	}
+	conn := client.GetConnection()
+	var owner *kvDiagnosticCaseOwner
+	defer func() {
+		if owner == nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), kvDiagnosticExitBudget)
+			retErr = errors.Join(retErr, client.Close(closeCtx))
+			closeCancel()
+		} else if !owner.closed && !conn.IsClosed() {
+			conn.Close() // Last process-local fallback after an unresolved owner.
+		}
+	}()
+	bucket, err := client.GetKeyValueBucket(workCtx, kvDiagnosticBucket)
+	if err != nil {
+		return fmt.Errorf("get child bucket: %w", err)
+	}
+	injected := r.name != "control"
+	decorator := &kvDiagnosticBucketDecorator{
+		KeyValue: bucket, r: r, injected: injected, acquired: make(chan *kvDiagnosticFacade, 1),
+	}
+	store := client.NewKVStore(decorator)
+	listCtx, cancelList := context.WithCancel(workCtx)
+	listDone := make(chan kvDiagnosticListResult, 1)
+	go func() {
+		keys, err := store.KeysByFilter(listCtx, kvDiagnosticFilter)
+		listDone <- kvDiagnosticListResult{keys: keys, err: err}
+	}()
+	owner = &kvDiagnosticCaseOwner{
+		r: r, client: client, conn: conn, caseStart: r.start, cancelList: cancelList,
+		acquired: decorator.acquired, listDone: listDone, injected: injected,
+	}
+	defer func() { retErr = errors.Join(retErr, owner.finish()) }()
+	var facade *kvDiagnosticFacade
+	forwardID, watcherID := "", ""
+	if injected {
+		select {
+		case facade = <-decorator.acquired:
+			owner.facade = facade
+		case result := <-listDone:
+			owner.listJoined = true
+			owner.listDone = nil
+			return fmt.Errorf("GATE_NOT_REACHED: listing returned before acquisition: %v", result.err)
+		case <-workCtx.Done():
+			return fmt.Errorf("GATE_NOT_REACHED: acquisition: %w", workCtx.Err())
+		}
+		select {
+		case <-facade.first:
+		case <-workCtx.Done():
+			return fmt.Errorf("GATE_NOT_REACHED: first native key: %w", workCtx.Err())
+		}
+		select {
+		case <-facade.second:
+			r.emit("first_collected", "second Keys invocation witnessed")
+		case <-workCtx.Done():
+			return fmt.Errorf("GATE_NOT_REACHED: first key collection: %w", workCtx.Err())
+		}
+		var forwardStack, watcherStack string
+		forwardID, watcherID, forwardStack, watcherStack, err = kvDiagnosticBlockedWitness(workCtx, decorator.frameworkCtx)
+		if err != nil {
+			return err
+		}
+		r.emit("native_blocked", fmt.Sprintf("forward_id=%s watcher_id=%s\nFORWARD_STACK:\n%s\nWATCHER_STACK:\n%s",
+			forwardID, watcherID, forwardStack, watcherStack))
+		if r.name == "cancel" {
+			cancelList()
+			r.emit("cancel", "after both native blocked-stage witnesses")
+		}
+	}
+	var result kvDiagnosticListResult
+	select {
+	case result = <-listDone:
+		owner.listJoined = true
+		owner.listDone = nil
+		r.emit("framework_return", fmt.Sprintf("keys=%d nil=%t error=%v", len(result.keys), result.keys == nil, result.err))
+	case <-workCtx.Done():
+		return fmt.Errorf("framework return missed %s work bound: %w", kvDiagnosticWorkBudget, workCtx.Err())
+	}
+	if decorator.observer == nil || decorator.observer.count() != 1 {
+		return fmt.Errorf("delegated Stop invocation count=%d want=1", diagnosticStopCount(decorator.observer))
+	}
+	if !injected {
+		if result.err != nil {
+			return fmt.Errorf("control listing error: %w", result.err)
+		}
+		want := make([]string, kvDiagnosticCount)
+		for i := range want {
+			want[i] = fmt.Sprintf("diag.%04d", i)
+		}
+		slices.Sort(want)
+		slices.Sort(result.keys)
+		if !slices.Equal(result.keys, want) {
+			return fmt.Errorf("control exact set mismatch: count=%d want=%d", len(result.keys), len(want))
+		}
+		r.emit("control_exact_set", fmt.Sprintf("matched all %d seeded keys", len(want)))
+	} else {
+		want := context.Canceled
+		if r.name == "deadline" {
+			want = context.DeadlineExceeded
+		}
+		if !errors.Is(result.err, want) || result.keys != nil {
+			return fmt.Errorf("invalid failed snapshot: keys=%d nil=%t error=%v want=%v", len(result.keys), result.keys == nil, result.err, want)
+		}
+	}
+	closeErr := owner.closeWhileHeld()
+	if err := owner.finish(); err != nil {
+		return err
+	}
+	if closeErr != nil {
+		r.emit("close_observation", closeErr.Error())
+	}
+	if !injected && closeErr != nil {
+		return fmt.Errorf("control Client.Close: %w", closeErr)
+	}
+	if injected {
+		stacks, complete := kvDiagnosticStacks()
+		if !complete {
+			return errors.New("post-release full goroutine snapshot exceeded 2 MiB")
+		}
+		_, forwardPresent := stacks[forwardID]
+		_, watcherPresent := stacks[watcherID]
+		r.emit("native_after_release", fmt.Sprintf("forward_id=%s present=%t watcher_id=%s present=%t",
+			forwardID, forwardPresent, watcherID, watcherPresent))
+	}
+	r.emit("done", "case completed; native callback state reported separately")
+	return nil
+}
+
+func diagnosticStopCount(observer *kvDiagnosticStopObserver) int {
+	if observer == nil {
+		return 0
+	}
+	return observer.count()
+}
+
+func TestKVFilterDiagnosticEarlyFinalizer(t *testing.T) {
+	for _, phase := range []string{"native_receive", "output_send"} {
+		t.Run(phase, func(t *testing.T) {
+			r := &kvDiagnosticReporter{start: time.Now(), name: phase}
+			keys := make(chan string, 1)
+			if phase == "output_send" {
+				keys <- "diag.0000"
+			}
+			facade := &kvDiagnosticFacade{
+				observer: &kvDiagnosticStopObserver{KeyLister: &testKeyLister{keys: keys}, r: r},
+				output:   make(chan string), release: make(chan struct{}), abort: make(chan struct{}),
+				nativeFirst: make(chan struct{}), first: make(chan struct{}), second: make(chan struct{}),
+				forwardDone: make(chan struct{}), r: r,
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			listDone := make(chan kvDiagnosticListResult, 1)
+			listDone <- kvDiagnosticListResult{err: context.Canceled}
+			owner := &kvDiagnosticCaseOwner{
+				r: r, caseStart: time.Now(), cancelList: cancel, listDone: listDone,
+				facade: facade, injected: true, closed: true,
+			}
+			defer func() {
+				if err := owner.finish(); err != nil {
+					t.Errorf("finalize early-exit fixture: %v", err)
+				}
+			}()
+			go facade.forward()
+			if phase == "output_send" {
+				select {
+				case <-facade.nativeFirst:
+				case <-time.After(time.Second):
+					t.Fatal("native first key was not read")
+				}
+			}
+			finishStarted := time.Now()
+			if err := owner.finish(); err != nil {
+				t.Fatalf("early finalizer: %v", err)
+			}
+			if elapsed := time.Since(finishStarted); elapsed > 2*time.Second {
+				t.Fatalf("early finalizer waited for abort reserve despite release: %s", elapsed)
+			}
+			if !owner.listJoined || !owner.forwardJoined {
+				t.Fatalf("test-owned joins missing: list=%t forward=%t", owner.listJoined, owner.forwardJoined)
+			}
+			if ctx.Err() != context.Canceled {
+				t.Fatalf("listing context not canceled: %v", ctx.Err())
+			}
+		})
+	}
+}
+
+func TestKVFilterDiagnosticKillJoinBound(t *testing.T) {
+	waitDone := make(chan error)
+	kills := 0
+	start := time.Now()
+	killErr, waitErr, joined := kvDiagnosticTerminate(func() error {
+		kills++
+		return nil
+	}, waitDone, 5*time.Millisecond)
+	if killErr != nil || waitErr != nil || joined || kills != 1 || time.Since(start) > time.Second {
+		t.Fatalf("post-kill unresolved result: kill=%v wait=%v joined=%t calls=%d elapsed=%s",
+			killErr, waitErr, joined, kills, time.Since(start))
+	}
+}
+
+func TestKVFilterDiagnosticExpiredGate(t *testing.T) {
+	frameworkCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, _, _, _, err := kvDiagnosticBlockedWitness(t.Context(), frameworkCtx)
+	if err == nil || !strings.Contains(err.Error(), "GATE_NOT_REACHED") {
+		t.Fatalf("expired framework context classified as blocked witness: %v", err)
+	}
+}

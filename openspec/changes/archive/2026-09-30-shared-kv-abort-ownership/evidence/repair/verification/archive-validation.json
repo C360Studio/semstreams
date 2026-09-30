@@ -1,0 +1,6 @@
+{
+  "command": "openspec validate --all --strict",
+  "exit_status": 0,
+  "duration_seconds": 0.237,
+  "log_sha256": "398d0d1f111b789622fd72e69e41812662c0b91c431bfb69016507753562ba5b"
+}

@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,6 +118,7 @@ type ownerLoadFixture struct {
 	name          string
 	bucket        string
 	store         *natsclient.KVStore
+	observer      *ownerLoadObserver
 	ownerFilter   string
 	forwardFilter string
 	wantForward   int
@@ -150,7 +150,7 @@ func TestIntegration_OwnerFilterLoadHarness(t *testing.T) {
 		natsclient.WithNATSVersion(ownerLoadNATSServer),
 		natsclient.WithTestTimeout(15*time.Second),
 	)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
 	defer cancel()
 	js, err := testClient.Client.JetStream()
 	require.NoError(t, err)
@@ -168,9 +168,11 @@ func TestIntegration_OwnerFilterLoadHarness(t *testing.T) {
 	assertOwnerLoadRestartHandles(t, ctx, js, testClient.Client, fixtures)
 
 	for _, workers := range profile.workerShapes {
-		t.Run(fmt.Sprintf("workers-%d", workers), func(t *testing.T) {
+		if !t.Run(fmt.Sprintf("workers-%d", workers), func(t *testing.T) {
 			runOwnerLoadWorkerShape(t, ctx, testClient, fixtures, profile, workers)
-		})
+		}) {
+			break
+		}
 	}
 }
 
@@ -189,11 +191,19 @@ func createAndSeedOwnerLoadBuckets(
 	)
 	bucketNames := []string{predicateBucket, nameBucket, incomingBucket}
 	stores := make(map[string]*natsclient.KVStore, len(bucketNames))
+	var predicateObserver *ownerLoadObserver
+	if profile.name == "ci" {
+		predicateObserver = newOwnerLoadObserver()
+	}
 	streams := make(map[string]jetstream.Stream, len(bucketNames))
 	for _, bucketName := range bucketNames {
 		raw, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: bucketName, Storage: jetstream.FileStorage})
 		require.NoError(t, err)
-		stores[bucketName] = nc.NewKVStore(raw)
+		if bucketName == predicateBucket && predicateObserver != nil {
+			stores[bucketName] = nc.NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: predicateObserver})
+		} else {
+			stores[bucketName] = nc.NewKVStore(raw)
+		}
 		stream, err := js.Stream(ctx, "KV_"+bucketName)
 		require.NoError(t, err)
 		streams[bucketName] = stream
@@ -203,7 +213,7 @@ func createAndSeedOwnerLoadBuckets(
 	target := "acme.ops.load.graph.target.hub"
 	name := "Owner Hotspot"
 	fixtures := []ownerLoadFixture{
-		{name: "predicate", bucket: predicateBucket, store: stores[predicateBucket],
+		{name: "predicate", bucket: predicateBucket, store: stores[predicateBucket], observer: predicateObserver,
 			ownerFilter: predicateIndexEntityFilter(owner), forwardFilter: predicateIndexForwardFilter(ownerLoadPredicate),
 			wantForward: profile.entities, stream: streams[predicateBucket]},
 		{name: "name", bucket: nameBucket, store: stores[nameBucket],
@@ -215,9 +225,10 @@ func createAndSeedOwnerLoadBuckets(
 	}
 
 	type seedRow struct {
-		store *natsclient.KVStore
-		key   string
-		value []byte
+		store  *natsclient.KVStore
+		bucket string
+		key    string
+		value  []byte
 	}
 	rows := make([]seedRow, 0, 2*profile.entities+profile.nameContext+profile.spread)
 	nameValue, err := json.Marshal(nameCompositeValue{Name: name, Priority: 0})
@@ -225,12 +236,12 @@ func createAndSeedOwnerLoadBuckets(
 	for i := 0; i < profile.entities; i++ {
 		entityID := ownerLoadEntityID(i)
 		rows = append(rows,
-			seedRow{stores[predicateBucket], predicateIndexKey(ownerLoadPredicate, entityID), predicateIndexMarker},
-			seedRow{stores[incomingBucket], incomingIndexKey(target, entityID, "robotics.assigned.hub"), incomingIndexMarker},
+			seedRow{stores[predicateBucket], predicateBucket, predicateIndexKey(ownerLoadPredicate, entityID), predicateIndexMarker},
+			seedRow{stores[incomingBucket], incomingBucket, incomingIndexKey(target, entityID, "robotics.assigned.hub"), incomingIndexMarker},
 		)
 		if i < profile.nameContext {
 			rows = append(rows,
-				seedRow{stores[nameBucket], nameCompositeKey(nameIndexKey(name), entityID, "core.identity.name"), nameValue})
+				seedRow{stores[nameBucket], nameBucket, nameCompositeKey(nameIndexKey(name), entityID, "core.identity.name"), nameValue})
 		}
 	}
 	spreadValues := [...]string{
@@ -242,7 +253,7 @@ func createAndSeedOwnerLoadBuckets(
 	}
 	require.LessOrEqual(t, profile.spread, len(spreadValues))
 	for i, spreadValue := range spreadValues[:profile.spread] {
-		rows = append(rows, seedRow{stores[predicateBucket],
+		rows = append(rows, seedRow{stores[predicateBucket], predicateBucket,
 			predicateIndexKey(spreadValue, ownerLoadEntityID(i)), predicateIndexMarker})
 	}
 	for _, row := range rows {
@@ -256,29 +267,14 @@ func createAndSeedOwnerLoadBuckets(
 	}
 
 	seedStart := time.Now()
-	jobs := make(chan seedRow, 256)
-	errs := make(chan error, 32)
-	var wg sync.WaitGroup
-	for range 32 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for row := range jobs {
-				if _, putErr := row.store.Put(ctx, row.key, row.value); putErr != nil {
-					errs <- putErr
-				}
-			}
-		}()
-	}
-	for _, row := range rows {
-		jobs <- row
-	}
-	close(jobs)
-	wg.Wait()
-	close(errs)
-	for seedErr := range errs {
-		require.NoError(t, seedErr)
-	}
+	seedErr := ownerLoadSeed(ctx, rows, 32, 256, ownerLoadTerminalBudget,
+		func(runCtx context.Context, row seedRow) error {
+			_, putErr := row.store.Put(runCtx, row.key, row.value)
+			return putErr
+		},
+		func(row seedRow) (string, string, string, string) { return row.bucket, row.bucket, "", row.key },
+		func(fault ownerLoadFault) { logOwnerLoadFault(t, fault) })
+	require.NoError(t, seedErr)
 	elapsed := time.Since(seedStart)
 	t.Logf("phase=seed rows=%d elapsed=%s throughput=%.1f_rows_per_second",
 		len(rows), elapsed, float64(len(rows))/elapsed.Seconds())
@@ -299,37 +295,15 @@ func runOwnerLoadWorkerShape(
 	baselines := ownerLoadConsumerCounts(t, ctx, fixtures)
 
 	for _, fixture := range fixtures {
-		measureOwnerLoadFilter(t, ctx, fixture.store, fixture.name+"-owner", fixture.ownerFilter,
-			profile, 1)
+		measureOwnerLoadFilter(t, ctx, fixture.store, fixture.bucket, fixture.name+"-owner", fixture.ownerFilter,
+			profile, 1, ownerLoadMeasurementObserver(profile, fixture, false))
 		if fixture.forwardFilter != "" {
-			measureOwnerLoadFilter(t, ctx, fixture.store, fixture.name+"-forward", fixture.forwardFilter,
-				profile, fixture.wantForward)
+			measureOwnerLoadFilter(t, ctx, fixture.store, fixture.bucket, fixture.name+"-forward", fixture.forwardFilter,
+				profile, fixture.wantForward, ownerLoadMeasurementObserver(profile, fixture, true))
 		}
 	}
 
-	type listJob struct {
-		fixture ownerLoadFixture
-		serial  int
-	}
-	type listResult struct {
-		label    string
-		serial   int
-		duration time.Duration
-		count    int
-		err      error
-	}
 	resultCount := profile.repetitions * len(fixtures)
-	results := make(chan listResult, resultCount)
-	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
-	dispatcher := newKeyedDispatcher(workers, 1000,
-		func(job listJob) string { return fmt.Sprintf("%s-%d", job.fixture.name, job.serial) },
-		func(runCtx context.Context, job listJob) {
-			started := time.Now()
-			keys, err := job.fixture.store.KeysByFilter(runCtx, job.fixture.ownerFilter)
-			results <- listResult{label: job.fixture.name, serial: job.serial,
-				duration: time.Since(started), count: len(keys), err: err}
-		})
-	dispatcher.Start(dispatchCtx)
 
 	consumerHighWater := make(map[string]*atomic.Int64, len(fixtures))
 	var aggregateConsumerHighWater atomic.Int64
@@ -341,102 +315,61 @@ func runOwnerLoadWorkerShape(
 		aggregateConsumerBaseline += count
 	}
 	aggregateConsumerHighWater.Store(aggregateConsumerBaseline)
-	sampleCtx, stopSampling := context.WithCancel(ctx)
-	samplerErrs := make(chan error, 1)
-	var samplerWG sync.WaitGroup
-	samplerWG.Add(1)
-	go func() {
-		defer samplerWG.Done()
-		for sampleCtx.Err() == nil {
+	outcome, phaseErr := ownerLoadConcurrent(ctx, ownerLoadConcurrentOptions{
+		Fixtures: len(fixtures), Repetitions: profile.repetitions, Workers: workers,
+		ChurnPerWriter: profile.churnPerWriter, QueueSize: 1000, TerminalBudget: ownerLoadTerminalBudget,
+		List: func(runCtx context.Context, job ownerLoadJob) ownerLoadListing {
+			fixture := fixtures[job.Fixture]
+			started := time.Now()
+			keys, err := fixture.store.KeysByFilter(runCtx, fixture.ownerFilter)
+			return ownerLoadListing{Count: len(keys), Duration: time.Since(started), Err: err, Published: true}
+		},
+		Key: func(job ownerLoadJob) string { return fmt.Sprintf("%s-%d", fixtures[job.Fixture].name, job.Serial) },
+		Sample: func(sampleCtx context.Context) (ownerLoadJob, error) {
 			var aggregate int64
-			for _, fixture := range fixtures {
+			for fixtureIndex, fixture := range fixtures {
+				started := time.Now()
 				info, infoErr := fixture.stream.Info(sampleCtx)
 				if infoErr != nil {
-					if sampleCtx.Err() == nil {
-						samplerErrs <- fmt.Errorf("sample %s consumers: %w", fixture.name, infoErr)
-					}
-					return
+					return ownerLoadJob{Fixture: fixtureIndex}, fmt.Errorf("sample %s consumers after %s: %w",
+						fixture.name, time.Since(started), infoErr)
 				}
 				count := int64(info.State.Consumers)
 				aggregate += count
 				storeOwnerLoadHighWater(consumerHighWater[fixture.name], count)
 			}
 			storeOwnerLoadHighWater(&aggregateConsumerHighWater, aggregate)
-			runtime.Gosched()
-		}
-	}()
-
-	churnErrs := make(chan error, workers)
-	var churnWG sync.WaitGroup
-	for writer := 0; writer < workers; writer++ {
-		churnWG.Add(1)
-		go func(writer int) {
-			defer churnWG.Done()
+			return ownerLoadJob{Fixture: -1}, nil
+		},
+		Churn: func(runCtx context.Context, writer, iteration int) error {
 			fixture := fixtures[writer%len(fixtures)]
-			for iteration := 0; iteration < profile.churnPerWriter; iteration++ {
-				key, value := ownerLoadChurnRow(fixture.name, writer, iteration, profile)
-				var mutationErr error
-				if iteration%2 == 0 {
-					mutationErr = fixture.store.Delete(ctx, key)
-				} else {
-					_, mutationErr = fixture.store.Put(ctx, key, value)
+			key, value := ownerLoadChurnRow(fixture.name, writer, iteration, profile)
+			if iteration%2 == 0 {
+				if err := fixture.store.Delete(runCtx, key); err != nil {
+					return fmt.Errorf("%s writer %d iteration %d: %w", fixture.name, writer, iteration, err)
 				}
-				if mutationErr != nil {
-					churnErrs <- fmt.Errorf("%s writer %d iteration %d: %w",
-						fixture.name, writer, iteration, mutationErr)
-					return
+			} else {
+				if _, err := fixture.store.Put(runCtx, key, value); err != nil {
+					return fmt.Errorf("%s writer %d iteration %d: %w", fixture.name, writer, iteration, err)
 				}
 			}
-		}(writer)
-	}
-
-	queueHighWater := 0
-	catchUpStarted := time.Now()
-	for repetition := 0; repetition < profile.repetitions; repetition++ {
-		for _, fixture := range fixtures {
-			require.NoError(t, dispatcher.Submit(ctx, listJob{fixture: fixture, serial: repetition}))
-			queueHighWater = max(queueHighWater, ownerLoadQueueDepth(dispatcher))
-		}
-	}
-	// Results arrive in COMPLETION order; the recorded distribution has to be in SUBMISSION order, so
-	// a reader can separate one inflated repetition from two adjacent ones (#1284). Each
-	// (fixture, serial) pair is submitted exactly once and exactly resultCount results are consumed,
-	// so a duplicate result necessarily leaves a zero slot that the check below rejects (a LOST result does not reach here at all — the drain blocks until the go test timeout, which fails closed with a worse diagnostic) —
-	// a zero-duration sample would otherwise enter the distribution as the fastest observation.
+			return nil
+		},
+		Describe: func(job ownerLoadJob) (string, string, string) {
+			if job.Fixture < 0 || job.Fixture >= len(fixtures) {
+				return "aggregate", "", ""
+			}
+			fixture := fixtures[job.Fixture]
+			return fixture.name, fixture.bucket, fixture.ownerFilter
+		},
+		Report: func(fault ownerLoadFault) { logOwnerLoadFault(t, fault) },
+	})
+	require.NoError(t, phaseErr)
 	durations := make(map[string][]time.Duration, len(fixtures))
-	for _, fixture := range fixtures {
-		durations[fixture.name] = make([]time.Duration, profile.repetitions)
+	for i, fixture := range fixtures {
+		durations[fixture.name] = outcome.Durations[i]
 	}
-	for range resultCount {
-		result := <-results
-		require.NoError(t, result.err, result.label)
-		require.Equal(t, 1, result.count, result.label)
-		durations[result.label][result.serial] = result.duration
-		queueHighWater = max(queueHighWater, ownerLoadQueueDepth(dispatcher))
-	}
-	for label, samples := range durations {
-		for repetition, sample := range samples {
-			require.NotZero(t, sample, "%s repetition %d was never recorded", label, repetition)
-		}
-	}
-	catchUp := time.Since(catchUpStarted)
-	churnWG.Wait()
-	close(churnErrs)
-	for churnErr := range churnErrs {
-		require.NoError(t, churnErr)
-	}
-	stopSampling()
-	samplerWG.Wait()
-	close(samplerErrs)
-	for samplerErr := range samplerErrs {
-		require.NoError(t, samplerErr)
-	}
-	cancelDispatch()
-	select {
-	case <-dispatcher.done:
-	case <-time.After(time.Second):
-		t.Fatal("owner-filter dispatcher did not join after parent cancellation")
-	}
+	queueHighWater, catchUp := outcome.QueueHighWater, outcome.CatchUp
 
 	for label, samples := range durations {
 		assertOwnerLoadLatency(t, label, samples, profile)
@@ -447,10 +380,22 @@ func runOwnerLoadWorkerShape(
 
 	for _, fixture := range fixtures {
 		fixture := fixture
-		require.Eventually(t, func() bool {
-			info, infoErr := fixture.stream.Info(ctx)
-			return infoErr == nil && info.State.Consumers == baselines[fixture.name]
-		}, 5*time.Second, 20*time.Millisecond, "%s temporary consumers did not return to baseline", fixture.name)
+		var lastInfoElapsed time.Duration
+		_, _, _, convergenceErr := ownerLoadConverge(ctx, 5*time.Second, 20*time.Millisecond,
+			baselines[fixture.name], func(pollCtx context.Context) (int, error) {
+				started := time.Now()
+				info, infoErr := fixture.stream.Info(pollCtx)
+				lastInfoElapsed = time.Since(started)
+				if infoErr != nil {
+					return 0, infoErr
+				}
+				return info.State.Consumers, nil
+			}, func(pollCtx context.Context, attempts, lastCount int, lastErr, failure error) {
+				logOwnerLoadFault(t, ownerLoadFaultAt(pollCtx, "consumer-convergence", fixture.name,
+					fixture.bucket, "", fmt.Sprintf("attempts=%d last_count=%d last_error=%v", attempts, lastCount, lastErr),
+					lastInfoElapsed, failure))
+			})
+		require.NoError(t, convergenceErr, "%s temporary consumers did not return to baseline", fixture.name)
 	}
 	afterConsumers := ownerLoadConsumerCounts(t, ctx, fixtures)
 	require.Equal(t, baselines, afterConsumers, "temporary consumers must return to every per-store baseline")
@@ -480,8 +425,19 @@ func runOwnerLoadWorkerShape(
 		if fixture.forwardFilter == "" {
 			continue
 		}
+		started := time.Now()
 		keys, err := fixture.store.KeysByFilter(ctx, fixture.forwardFilter)
+		elapsed := time.Since(started)
+		if err != nil {
+			logOwnerLoadFault(t, ownerLoadFaultAt(ctx, "final-convergence", fixture.name,
+				fixture.bucket, fixture.forwardFilter, "forward", elapsed, err))
+		}
 		require.NoError(t, err)
+		if len(keys) != fixture.wantForward {
+			logOwnerLoadFault(t, ownerLoadFaultAt(ctx, "final-convergence", fixture.name,
+				fixture.bucket, fixture.forwardFilter, "forward", elapsed,
+				fmt.Errorf("count=%d want=%d", len(keys), fixture.wantForward)))
+		}
 		require.Len(t, keys, fixture.wantForward, "%s did not converge", fixture.name)
 	}
 
@@ -512,24 +468,61 @@ func TestStoreOwnerLoadHighWater(t *testing.T) {
 	require.Equal(t, int64(5), counter.Load())
 }
 
+// Only the default CI predicate-forward loop arms the persistent observer.
+func ownerLoadMeasurementObserver(profile ownerLoadProfile, fixture ownerLoadFixture, forward bool) *ownerLoadObserver {
+	if profile.name == "ci" && fixture.name == "predicate" && forward {
+		return fixture.observer
+	}
+	return nil
+}
+
 func measureOwnerLoadFilter(
 	t *testing.T,
 	ctx context.Context,
 	store *natsclient.KVStore,
-	label, filter string,
+	bucket, label, filter string,
 	profile ownerLoadProfile,
 	want int,
+	observer *ownerLoadObserver,
 ) {
 	t.Helper()
 	durations := make([]time.Duration, 0, profile.repetitions)
-	for repetition := 0; repetition < profile.repetitions; repetition++ {
-		started := time.Now()
-		keys, err := store.KeysByFilter(ctx, filter)
-		duration := time.Since(started)
-		require.NoError(t, err, label)
-		require.Len(t, keys, want, label)
-		durations = append(durations, duration)
-	}
+	ownerLoadObservationScope(observer, func(records []ownerLoadAttempt, integrity error) {
+		for _, rec := range records {
+			t.Logf("phase=predicate-forward-observation fixture=%s bucket=%s filter=%s %s", label, bucket, filter,
+				formatOwnerLoadAttempt(rec))
+		}
+		if integrity != nil {
+			t.Errorf("phase=predicate-forward-observation integrity: %v", integrity)
+		}
+	}, func() {
+		for repetition := 0; repetition < profile.repetitions; repetition++ {
+			started := time.Now()
+			observationErr := ownerLoadAttemptScope(ctx, observer, repetition, filter, started,
+				func(err error) {
+					t.Errorf("phase=predicate-forward-observation repetition=%d cleanup=%v", repetition, err)
+				},
+				func() {
+					keys, err := store.KeysByFilter(ctx, filter)
+					duration := time.Since(started) // Before diagnostic joining, formatting, or output.
+					if observer != nil {
+						observer.operationReturned(time.Now(), keys, err)
+					}
+					if err != nil || len(keys) != want {
+						failure := err
+						if failure == nil {
+							failure = fmt.Errorf("count=%d want=%d", len(keys), want)
+						}
+						logOwnerLoadFault(t, ownerLoadFaultAt(ctx, "measured-list", label, bucket, filter,
+							fmt.Sprintf("repetition=%d", repetition), duration, failure))
+					}
+					require.NoError(t, err, label)
+					require.Len(t, keys, want, label)
+					durations = append(durations, duration)
+				})
+			require.NoError(t, observationErr, "diagnostic ownership before next admission")
+		}
+	})
 	assertOwnerLoadLatency(t, label, durations, profile)
 }
 
@@ -594,19 +587,24 @@ func ownerLoadConsumerCounts(t *testing.T, ctx context.Context, fixtures []owner
 	t.Helper()
 	counts := make(map[string]int, len(fixtures))
 	for _, fixture := range fixtures {
+		started := time.Now()
 		info, err := fixture.stream.Info(ctx)
+		if err != nil {
+			logOwnerLoadFault(t, ownerLoadFaultAt(ctx, "consumer-baseline", fixture.name, fixture.bucket,
+				"", "Info", time.Since(started), err))
+		}
 		require.NoError(t, err)
 		counts[fixture.name] = info.State.Consumers
 	}
 	return counts
 }
 
-func ownerLoadQueueDepth[T any](dispatcher *keyedDispatcher[T]) int {
-	depth := 0
-	for _, lane := range dispatcher.lanes {
-		depth += len(lane)
-	}
-	return depth
+func logOwnerLoadFault(t *testing.T, fault ownerLoadFault) {
+	t.Helper()
+	t.Logf("phase=%s fixture=%s bucket=%s filter=%s operation=%s elapsed=%s caller_deadline=%s caller_cause=%v framework_kv_default=%s error=%v\n%s",
+		fault.Phase, fault.Fixture, fault.Bucket, fault.Filter, fault.Operation, fault.Elapsed,
+		fault.CallerDeadline.Format(time.RFC3339Nano), fault.CallerCause,
+		natsclient.DefaultKVOptions().Timeout, fault.Err, fault.Stacks)
 }
 
 func ownerLoadChurnIndex(writer, iteration int, profile ownerLoadProfile) int {
@@ -788,4 +786,35 @@ func assertOwnerLoadServerBounds(
 
 func ownerLoadEntityID(index int) string {
 	return fmt.Sprintf("acme.ops.load.graph.entity.%06d", index)
+}
+
+func TestOwnerLoadObserverExactActivation(t *testing.T) {
+	observer := newOwnerLoadObserver()
+	ci := ownerLoadCIProfile()
+	fixture := ownerLoadFixture{name: "predicate", observer: observer}
+	require.Same(t, observer, ownerLoadMeasurementObserver(ci, fixture, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, fixture, false))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, ownerLoadFixture{name: "name", observer: observer}, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, ownerLoadFixture{name: "incoming", observer: observer}, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ownerLoadFullProfile(), fixture, true))
+	raw := &ownerLoadFakeBucket{makeWatcher: func() jetstream.KeyWatcher { return &ownerLoadFakeWatcher{updates: ownerLoadClosedUpdates("diag.one")} }}
+	store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
+	measureOwnerLoadFilter(t, t.Context(), store, "PREDICATE", "predicate-forward", "diag.>", ci, 1, ownerLoadMeasurementObserver(ci, fixture, true))
+	records, integrity := observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 5)
+	require.Equal(t, 5, raw.calls)
+	for i, rec := range records {
+		require.Equal(t, i, rec.repetition)
+		require.Equal(t, "returned", rec.phase())
+		require.True(t, rec.callbackJoined)
+	}
+	// An ordinary unarmed call still delegates and cannot create a sixth record.
+	keys, err := store.KeysByFilter(t.Context(), "diag.>")
+	require.NoError(t, err)
+	require.Equal(t, []string{"diag.one"}, keys)
+	records, integrity = observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 5)
+	require.Equal(t, 6, raw.calls)
 }

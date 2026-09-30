@@ -1,0 +1,16 @@
+{
+  "command": [
+    "openspec",
+    "archive",
+    "rule-test-cleanup",
+    "--skip-specs",
+    "--yes"
+  ],
+  "cwd": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams",
+  "pid": 4475,
+  "started_epoch": 1790709810.900516,
+  "state": "completed",
+  "log": "/private/tmp/gh1428-archive.log",
+  "exit_code": 0,
+  "elapsed_seconds": 0.522
+}

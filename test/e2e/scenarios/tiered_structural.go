@@ -241,54 +241,6 @@ func (s *TieredScenario) validateTierMustNotRun(
 	return nil
 }
 
-// executeValidateRuleTransitions validates reactive workflow rule firings and actions (structural tier)
-func (s *TieredScenario) executeValidateRuleTransitions(ctx context.Context, result *Result) error {
-	// Get reactive workflow metrics using MetricsClient
-	ruleMetrics, err := s.metrics.ExtractRuleMetrics(ctx)
-	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to extract rule metrics: %v", err))
-		return nil
-	}
-
-	firings := int(ruleMetrics.Firings)
-	actionsDispatched := int(ruleMetrics.ActionsDispatched)
-	evaluations := int(ruleMetrics.Evaluations)
-
-	result.Metrics["rule_firings"] = firings
-	result.Metrics["actions_dispatched"] = actionsDispatched
-	result.Metrics["rule_evaluations"] = evaluations
-
-	// Validate minimum rule activity
-	violations := []string{}
-	if firings < s.config.MinRuleFirings {
-		violations = append(violations,
-			fmt.Sprintf("Rule firings: %d < %d (expected)", firings, s.config.MinRuleFirings))
-	}
-	if actionsDispatched < s.config.MinActionsDispatched {
-		violations = append(violations,
-			fmt.Sprintf("Actions dispatched: %d < %d (expected)", actionsDispatched, s.config.MinActionsDispatched))
-	}
-
-	result.Details["rule_transitions_validation"] = map[string]any{
-		"rule_firings":       firings,
-		"actions_dispatched": actionsDispatched,
-		"evaluations":        evaluations,
-		"min_firings":        s.config.MinRuleFirings,
-		"min_actions":        s.config.MinActionsDispatched,
-		"violations":         violations,
-		"validation_passed":  len(violations) == 0,
-		"reactive_behavior":  firings > 0 || actionsDispatched > 0,
-		"message":            fmt.Sprintf("Reactive workflow: %d firings, %d actions dispatched, %d evaluations", firings, actionsDispatched, evaluations),
-	}
-
-	if len(violations) > 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Reactive workflow validation issues: %v", violations))
-	}
-
-	return nil
-}
-
 // executeValidateEntityTriples validates that sensor entities have the expected triples
 // This helps diagnose rule trigger issues by showing exactly what triples are in ENTITY_STATES
 func (s *TieredScenario) executeValidateEntityTriples(ctx context.Context, result *Result) error {
@@ -1126,10 +1078,11 @@ func (s *TieredScenario) executeTestSpatialQuery(ctx context.Context, result *Re
 		"message":        fmt.Sprintf("Spatial query returned %d entities within bounding box", entityCount),
 	}
 
-	// Note: We don't require a minimum count since spatial indexing depends on
-	// the processor creating geo.location.* triples. If count is 0, it's a warning.
+	// The bounding box encloses the SF test sensors, so an empty answer is the
+	// outcome this stage exists to detect (#1426). A transport failure already
+	// returned above with its own wrapped error.
 	if entityCount == 0 {
-		result.Warnings = append(result.Warnings, "Spatial query returned 0 entities - check if geo triples are being indexed")
+		return fmt.Errorf("spatial query returned 0 entities - check if geo triples are being indexed")
 	}
 
 	return nil
@@ -1234,10 +1187,11 @@ func (s *TieredScenario) executeTestTemporalQuery(ctx context.Context, result *R
 		"message":           fmt.Sprintf("Temporal query returned %d entities within time range", entityCount),
 	}
 
-	// Note: We don't require a minimum count since temporal indexing depends on
-	// entity UpdatedAt timestamps. If count is 0, it's a warning.
+	// The window brackets this run's ingest, so an empty answer is the outcome
+	// this stage exists to detect (#1426). A transport failure already returned
+	// above with its own wrapped error.
 	if entityCount == 0 {
-		result.Warnings = append(result.Warnings, "Temporal query returned 0 entities - check if temporal index is being populated")
+		return fmt.Errorf("temporal query returned 0 entities - check if temporal index is being populated")
 	}
 
 	return nil
@@ -1493,10 +1447,11 @@ func (s *TieredScenario) executeTestZoneRelationships(ctx context.Context, resul
 		"message":             fmt.Sprintf("Zone %s has %d incoming relationships", zoneEntityID, relationshipCount),
 	}
 
-	// Note: We don't require a minimum count since this depends on the zone existing
-	// and sensors being in that zone. If count is 0, it's a warning.
+	// The IoT processor mints this zone from the fixture's sensors, so zero
+	// incoming relationships is the outcome this stage exists to detect (#1426).
+	// A transport failure already returned above with its own wrapped error.
 	if relationshipCount == 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Zone %s has 0 incoming relationships - check if zone triples are being indexed", zoneEntityID))
+		return fmt.Errorf("zone %s has 0 incoming relationships - check if zone triples are being indexed", zoneEntityID)
 	}
 
 	return nil
@@ -1750,16 +1705,21 @@ func (s *TieredScenario) sendNLQuery(ctx context.Context, query string) (*global
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
 	nlQuery := map[string]any{
-		"query": `query($query: String!, $maxCommunities: Int) {
-			globalSearch(query: $query, maxCommunities: $maxCommunities) {
+		"query": `query($query: String!, $maxCommunities: Int, $includeSummaries: Boolean) {
+			globalSearch(query: $query, maxCommunities: $maxCommunities, includeSummaries: $includeSummaries) {
 				entities { id type }
 				communitySummaries { communityId summary relevance }
 				count
 			}
 		}`,
+		// includeSummaries:false: the NL stages assert on entities only, so the
+		// probe never pays for community enrichment and answer synthesis it does
+		// not read (#1426; under a model synthesizer that cost exceeded the 10 s
+		// client deadline on every probe).
 		"variables": map[string]any{
-			"query":          query,
-			"maxCommunities": 10,
+			"query":            query,
+			"maxCommunities":   10,
+			"includeSummaries": false,
 		},
 	}
 
@@ -1837,6 +1797,7 @@ func (s *TieredScenario) executeTestNLPathIntent(ctx context.Context, result *Re
 
 	allResults := make([]map[string]any, 0, len(testCases))
 	passedCount := 0
+	firstFailure := ""
 
 	for _, tc := range testCases {
 		resp, latency, err := s.sendNLQuery(ctx, tc.query)
@@ -1852,6 +1813,9 @@ func (s *TieredScenario) executeTestNLPathIntent(ctx context.Context, result *Re
 		if err != nil {
 			testResult["success"] = false
 			testResult["error"] = err.Error()
+			if firstFailure == "" {
+				firstFailure = fmt.Sprintf("%s: %v", tc.name, err)
+			}
 			allResults = append(allResults, testResult)
 			continue
 		}
@@ -1875,6 +1839,9 @@ func (s *TieredScenario) executeTestNLPathIntent(ctx context.Context, result *Re
 			testResult["message"] = fmt.Sprintf("NL path intent query returned %d entities", entityCount)
 		} else if tc.expectResults && entityCount == 0 {
 			testResult["message"] = "Expected results but got none - path routing may not be working"
+			if firstFailure == "" {
+				firstFailure = fmt.Sprintf("%s: returned 0 entities", tc.name)
+			}
 		}
 
 		allResults = append(allResults, testResult)
@@ -1890,10 +1857,13 @@ func (s *TieredScenario) executeTestNLPathIntent(ctx context.Context, result *Re
 		"message":      fmt.Sprintf("NL path intent: %d/%d tests passed", passedCount, len(testCases)),
 	}
 
-	// Warn if no tests passed, but don't fail - this allows gradual rollout
+	// No probe returning entities is the outcome this stage exists to detect
+	// (#1426). firstFailure carries a probe's transport error verbatim (a client
+	// deadline reads "Client.Timeout exceeded") or "returned 0 entities", so the
+	// two never share a message.
 	if passedCount == 0 {
-		result.Warnings = append(result.Warnings,
-			"NL path intent tests returned no results - classifier routing may need attention")
+		return fmt.Errorf("NL path intent: 0/%d probes returned entities; first failure: %s",
+			len(testCases), firstFailure)
 	}
 
 	return nil
@@ -1926,6 +1896,7 @@ func (s *TieredScenario) executeTestNLTemporalIntent(ctx context.Context, result
 
 	allResults := make([]map[string]any, 0, len(testCases))
 	passedCount := 0
+	firstFailure := ""
 
 	for _, tc := range testCases {
 		resp, latency, err := s.sendNLQuery(ctx, tc.query)
@@ -1941,6 +1912,9 @@ func (s *TieredScenario) executeTestNLTemporalIntent(ctx context.Context, result
 		if err != nil {
 			testResult["success"] = false
 			testResult["error"] = err.Error()
+			if firstFailure == "" {
+				firstFailure = fmt.Sprintf("%s: %v", tc.name, err)
+			}
 			allResults = append(allResults, testResult)
 			continue
 		}
@@ -1968,6 +1942,9 @@ func (s *TieredScenario) executeTestNLTemporalIntent(ctx context.Context, result
 			testResult["message"] = fmt.Sprintf("NL temporal query returned %d entities", entityCount)
 		} else if tc.expectResults && entityCount == 0 {
 			testResult["message"] = "Expected results but got none - temporal filtering may be too restrictive"
+			if firstFailure == "" {
+				firstFailure = fmt.Sprintf("%s: returned 0 entities", tc.name)
+			}
 		}
 
 		allResults = append(allResults, testResult)
@@ -1983,10 +1960,11 @@ func (s *TieredScenario) executeTestNLTemporalIntent(ctx context.Context, result
 		"message":      fmt.Sprintf("NL temporal intent: %d/%d tests passed", passedCount, len(testCases)),
 	}
 
-	// Warn if no tests passed
+	// No probe returning entities is the outcome this stage exists to detect
+	// (#1426); firstFailure keeps a deadline distinct from an empty answer.
 	if passedCount == 0 {
-		result.Warnings = append(result.Warnings,
-			"NL temporal intent tests returned no results - temporal filtering may need attention")
+		return fmt.Errorf("NL temporal intent: 0/%d probes returned entities; first failure: %s",
+			len(testCases), firstFailure)
 	}
 
 	return nil
@@ -2000,7 +1978,7 @@ type predicateListResponse struct {
 		Predicates struct {
 			Predicates []struct {
 				Predicate   string `json:"predicate"`
-				EntityCount int    `json:"entityCount"`
+				EntityCount int    `json:"entity_count"`
 			} `json:"predicates"`
 			Total int `json:"total"`
 		} `json:"predicates"`
@@ -2015,8 +1993,8 @@ type predicateStatsResponse struct {
 	Data struct {
 		PredicateStats struct {
 			Predicate      string   `json:"predicate"`
-			EntityCount    int      `json:"entityCount"`
-			SampleEntities []string `json:"sampleEntities"`
+			EntityCount    int      `json:"entity_count"`
+			SampleEntities []string `json:"sample_entities"`
 		} `json:"predicateStats"`
 	} `json:"data"`
 	Errors []struct {
@@ -2110,9 +2088,10 @@ func (s *TieredScenario) executeTestPredicateList(ctx context.Context, result *R
 		"message":         fmt.Sprintf("Found %d predicates in graph", predicateCount),
 	}
 
+	// An empty listing over an ingested graph is the outcome this stage exists
+	// to detect (#1426); a transport failure already returned above.
 	if predicateCount == 0 {
-		result.Warnings = append(result.Warnings,
-			"No predicates found - graph may be empty or PREDICATE_INDEX not populated")
+		return fmt.Errorf("no predicates found - graph may be empty or PREDICATE_INDEX not populated")
 	}
 
 	return nil
@@ -2137,16 +2116,17 @@ func (s *TieredScenario) executeTestPredicateStats(ctx context.Context, result *
 
 	listResp, err := http.DefaultClient.Do(listReq)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to list predicates: %v", err))
-		return nil
+		return fmt.Errorf("predicate list request failed: %w", err)
 	}
 	defer listResp.Body.Close()
 
 	listBody, _ := io.ReadAll(listResp.Body)
 	var predicatesResp predicateListResponse
-	if err := json.Unmarshal(listBody, &predicatesResp); err != nil || len(predicatesResp.Data.Predicates.Predicates) == 0 {
-		result.Warnings = append(result.Warnings, "No predicates available for stats test")
-		return nil
+	if err := json.Unmarshal(listBody, &predicatesResp); err != nil {
+		return fmt.Errorf("failed to parse predicate list response: %w", err)
+	}
+	if len(predicatesResp.Data.Predicates.Predicates) == 0 {
+		return fmt.Errorf("no predicates available for stats test")
 	}
 
 	// Pick the first predicate
@@ -2213,6 +2193,13 @@ func (s *TieredScenario) executeTestPredicateStats(ctx context.Context, result *
 		"latency_ms":      latency.Milliseconds(),
 		"success":         entityCount > 0,
 		"message":         fmt.Sprintf("Predicate '%s' has %d entities", targetPredicate, entityCount),
+	}
+
+	// The list emits a predicate only when at least one membership key parsed,
+	// and stats reads the same keys, so a listed predicate has at least one
+	// entity; zero is the outcome this stage exists to detect (#1426).
+	if entityCount == 0 {
+		return fmt.Errorf("predicateStats(%q) reported 0 entities for a listed predicate", targetPredicate)
 	}
 
 	return nil

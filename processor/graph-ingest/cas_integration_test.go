@@ -20,7 +20,8 @@ import (
 // TestIntegration_ConcurrentCanonicalAppend verifies the canonical append lane
 // preserves every distinct tuple under real JetStream CAS contention.
 func TestIntegration_ConcurrentCanonicalAppend(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 	streams := []natsclient.TestStreamConfig{{Name: "ENTITY", Subjects: []string{"entity.>"}}}
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
 	configJSON, err := json.Marshal(DefaultConfig())
@@ -28,9 +29,10 @@ func TestIntegration_ConcurrentCanonicalAppend(t *testing.T) {
 	created, err := CreateGraphIngest(configJSON, testDependencies(t, testClient.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := created.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	require.NoError(t, c.Initialize())
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 
 	const entityID = "c360.test.cas.concurrent.drone.001"
 	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{ID: entityID, MessageType: testEntityType(), Version: 1, UpdatedAt: time.Now()}))

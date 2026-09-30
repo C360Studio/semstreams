@@ -141,7 +141,7 @@ func applyDeepResearchPreset(server *mock.OpenAIServer) {
 // applyCRUDToolsPreset scripts the crud-tools scenario's agent loop.
 // The user prompt asks the agent to author a rule; the mock returns a
 // create_rule tool call with a realistic payload. The scenario then
-// verifies the rule lands in the semstreams_config KV bucket.
+// verifies the rule lands in the configuration bucket (semstreams_config_<org>_<stem>).
 //
 // Only one tool call is scripted: the agent's single Create action.
 // After it completes, the mock returns completion text (via the

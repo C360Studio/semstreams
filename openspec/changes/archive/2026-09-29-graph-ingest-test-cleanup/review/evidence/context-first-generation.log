@@ -1,0 +1,4 @@
+=== RUN   TestGH1423ContextFirstFinishDependency
+--- PASS: TestGH1423ContextFirstFinishDependency (0.00s)
+PASS
+ok  	github.com/c360studio/semstreams/test/testinfra	0.290s

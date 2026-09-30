@@ -3,8 +3,10 @@
 package graphingest
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
@@ -23,7 +25,10 @@ import (
 // worth pinning — the entity list is UNCHANGED for a fully-hydrated batch, so a
 // consumer that only reads `entities` is not broken by the addition.
 func TestIntegration_BatchQuery_ReportsMissingIDs(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	present := "c360.test.batchmissing.system.drone.001"
 	alsoPresent := "c360.test.batchmissing.system.drone.002"
@@ -112,7 +117,10 @@ func TestIntegration_BatchQuery_ReportsMissingIDs(t *testing.T) {
 // it not-found would assert something unobserved, which is the exact move this change
 // exists to stop.
 func TestIntegration_BatchQuery_EmptyIDIsAccountedFor(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	present := "c360.test.batchempty.system.drone.001"
 	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{

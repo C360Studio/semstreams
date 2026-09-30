@@ -195,6 +195,8 @@ remote inspection may retain useful observations while lacking application prove
 Release candidate selection and tag authorization still belong to
 [release-candidate-proof](../../openspec/specs/release-candidate-proof/spec.md).
 
+A probe that hits its client deadline fails with the transport error verbatim; an empty result fails with the stage's own sentence; the two never share a message.
+
 ## Test Selection Guide
 
 ### During Development

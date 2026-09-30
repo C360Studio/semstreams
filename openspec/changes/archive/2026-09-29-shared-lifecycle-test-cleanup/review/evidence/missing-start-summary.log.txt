@@ -1,0 +1,2 @@
+MUTANT KILLED: omitted accepted Start; named missing-phase diagnostic after worker join
+RESTORED RACE PASS checksum=ada3dca9c2e4f15771661178c682d3db

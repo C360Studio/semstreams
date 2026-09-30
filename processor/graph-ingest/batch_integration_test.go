@@ -20,9 +20,8 @@ import (
 // JetStream test cluster and returns it ready for use. Mirrors the
 // CAS-integration-test setup so behavioural drift between the two paths
 // is easy to spot at review time.
-func startBatchTestComponent(t *testing.T) (context.Context, *Component) {
+func startBatchTestComponent(ctx context.Context, t *testing.T) (*Component, *graphIngestTestOwner) {
 	t.Helper()
-	ctx := context.Background()
 
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
@@ -40,14 +39,14 @@ func startBatchTestComponent(t *testing.T) (context.Context, *Component) {
 	require.NoError(t, err)
 
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.provisionalFinish(ctx, t)
 	require.NoError(t, c.Initialize())
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() {
-		_ = c.Stop(context.Background())
-	})
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 
 	time.Sleep(100 * time.Millisecond)
-	return ctx, c
+	owner.transfer()
+	return c, owner
 }
 
 func appendThroughCanonicalHandler(t *testing.T, ctx context.Context, c *Component, triples []message.Triple) graph.AppendTriplesResponse {
@@ -66,7 +65,10 @@ func appendThroughCanonicalHandler(t *testing.T, ctx context.Context, c *Compone
 // commit in a single CAS round-trip. Failure shows up as multiple
 // version increments (one per triple) instead of one.
 func TestIntegration_AddTriples_SingleSubjectIsOneCAS(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.batch.single.loop.001"
 	now := time.Now()
@@ -110,7 +112,10 @@ func TestIntegration_AddTriples_SingleSubjectIsOneCAS(t *testing.T) {
 // batches issue one CAS per entity, not one per triple. Two entities × N
 // triples each → 2 CAS round-trips (1 create + 1 batch add per entity).
 func TestIntegration_AddTriples_MultiSubjectGroupsByEntity(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const idA = "c360.test.batch.multi.loop.a01"
 	const idB = "c360.test.batch.multi.loop.b02"
@@ -164,7 +169,10 @@ func TestIntegration_AddTriples_MultiSubjectGroupsByEntity(t *testing.T) {
 // malformed triple fails the entire batch before any CAS — partial
 // validation would be surprising.
 func TestIntegration_AddTriples_ValidationRejectsWholeBatch(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.batch.invalid.loop.001"
 	now := time.Now()
@@ -190,7 +198,10 @@ func TestIntegration_AddTriples_ValidationRejectsWholeBatch(t *testing.T) {
 // Validates the wire-format envelope, success/failure flag, and
 // FailedSubjects population.
 func TestIntegration_HandleTripleAddBatch_RoundTrip(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.batch.handler.loop.001"
 	now := time.Now()
@@ -220,7 +231,10 @@ func TestIntegration_HandleTripleAddBatch_RoundTrip(t *testing.T) {
 // lane's first-input ordering. Ordering is useful for stable reads but is not a
 // record-correlation mechanism; compound records must carry explicit identity.
 func TestIntegration_AddTriples_PreservesInputOrderWithinSubject(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.batch.order.loop.001"
 	now := time.Now()
@@ -274,7 +288,10 @@ func TestIntegration_AddTriples_PreservesInputOrderWithinSubject(t *testing.T) {
 // malformed-envelope behaviour: handler returns Success=false with a
 // descriptive error, rather than crashing or silently dropping.
 func TestIntegration_HandleTripleAddBatch_InvalidJSON(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	respBytes, err := c.handleCanonicalAppend(ctx, []byte("not json"))
 	// ADR-060: a malformed envelope is a typed invalid_request reject (no body).
@@ -289,7 +306,10 @@ func TestIntegration_HandleTripleAddBatch_InvalidJSON(t *testing.T) {
 // ErrorCodeEntityNotFound. The entity bucket must remain empty (no
 // auto-vivification).
 func TestIntegration_HandleTripleAdd_AbsentEntityRejects(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const subject = "c360.test.absent.single.entity.001"
 	req := graph.AppendTriplesRequest{
@@ -321,7 +341,10 @@ func TestIntegration_HandleTripleAdd_AbsentEntityRejects(t *testing.T) {
 // ErrorCodeEntityNotFound, FailedSubjects names the subject, WrittenCount is 0,
 // and the entity bucket remains empty.
 func TestIntegration_HandleTripleAddBatch_AbsentEntityRejects(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const subject = "c360.test.absent.batch.entity.001"
 	req := graph.AppendTriplesRequest{

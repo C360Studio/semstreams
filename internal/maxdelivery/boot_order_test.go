@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -88,12 +89,31 @@ func TestBinaryBootOrder(t *testing.T) {
 		"service.WireGraphRuntime",
 		"persona.LoadFromDirectory",
 		"executors.RegisterBuiltins",
-		"buildRuleManager",
 		"graphresearch.RegisterTool",
 	} {
 		require.NoError(t, requireIdentArgument(productionRun, call, 0, productionBootCtx), call)
 	}
 	require.NoError(t, requireIdentArgument(productionRun, "runUntilShutdown", 0, productionRuntimeCtx))
+	// #1188: the one rule manager registers its `rules` key family with the
+	// config manager it is started beside, and runs as the "rule-config"
+	// service, registered after configureAndCreateServices has registered the
+	// component manager and before runUntilShutdown calls manager.StartAll.
+	// service.Manager starts in registration order and stops in exact reverse
+	// order, so that position alone starts it after the rule processors and
+	// stops it before them (docket 6 Q11). Removing any link here must fail.
+	ruleManager, err := assignedCallResult(productionRun, "rulepkg.NewConfigManager", 0)
+	require.NoError(t, err)
+	requireCallOrder(t, productionCalls, "rulepkg.NewConfigManager", "bootstrapobservability.StartValidatedConfigManager")
+	require.NoError(t, requireMethodCallArgument(productionRun, "config.WithKeyFamily", 0, ruleManager, "KeyFamily"))
+	productionRuntime, err := assignedCallResult(productionRun, "setupRegistriesAndManager", 1)
+	require.NoError(t, err)
+	requireCallOrder(t, productionCalls,
+		"configureAndCreateServices", "service.ConfigureRulePackMutations", "registerRuleConfigService", "runUntilShutdown")
+	require.NoError(t, requireIdentArgument(productionRun, "configureAndCreateServices", 1, productionRuntime))
+	require.NoError(t, requireIdentArgument(productionRun, "registerRuleConfigService", 0, productionRuntime))
+	require.NoError(t, requireIdentArgument(productionRun, "registerRuleConfigService", 1, ruleManager))
+	require.NoError(t, requireIdentArgument(productionRun, "runUntilShutdown", 2, productionRuntime))
+	requireRuleConfigRegistration(t, filepath.Join("..", "boot", "rule_config_service.go"))
 	require.NoError(t, requireMethodCallArgument(productionRun, "runUntilShutdown", 1, productionBootCtx, "Done"))
 	require.NoError(t, requireSelectorArgument(productionRun,
 		"bootstrapobservability.NewForwardingHandler", 0, productionEffective, "Services"))
@@ -332,7 +352,21 @@ func requireMethodCallArgument(
 }
 
 func compositeFieldIdentifier(fn *ast.FuncDecl, typeName, field string) (string, error) {
-	var result string
+	value, err := compositeFieldValue(fn, typeName, field)
+	if err != nil {
+		return "", err
+	}
+	assigned, ok := value.(*ast.Ident)
+	if !ok {
+		return "", fmt.Errorf("%s.%s is not assigned an identifier", typeName, field)
+	}
+	return assigned.Name, nil
+}
+
+// compositeFieldValue returns the expression a keyed field of the first
+// typeName composite literal in fn is assigned.
+func compositeFieldValue(fn *ast.FuncDecl, typeName, field string) (ast.Expr, error) {
+	var result ast.Expr
 	ast.Inspect(fn.Body, func(node ast.Node) bool {
 		literal, ok := node.(*ast.CompositeLit)
 		if !ok {
@@ -347,17 +381,15 @@ func compositeFieldIdentifier(fn *ast.FuncDecl, typeName, field string) (string,
 			if !pairOK {
 				continue
 			}
-			key, keyOK := pair.Key.(*ast.Ident)
-			assigned, assignedOK := pair.Value.(*ast.Ident)
-			if keyOK && assignedOK && key.Name == field {
-				result = assigned.Name
+			if key, keyOK := pair.Key.(*ast.Ident); keyOK && key.Name == field {
+				result = pair.Value
 				return false
 			}
 		}
 		return true
 	})
-	if result == "" {
-		return "", fmt.Errorf("%s.%s is not assigned an identifier", typeName, field)
+	if result == nil {
+		return nil, fmt.Errorf("%s.%s is not assigned", typeName, field)
 	}
 	return result, nil
 }
@@ -581,4 +613,39 @@ func requireCallOrder(t *testing.T, calls []string, ordered ...string) {
 		require.NotEqualf(t, -1, found, "call %s absent or out of order in %v", want, calls)
 		position = found
 	}
+}
+
+// requireRuleConfigRegistration pins registerRuleConfigService: it registers
+// the "rule-config" service on the manager it is given, bound to the rule
+// processors that same manager's component manager built. A nil or
+// hand-built target list silently stops hot reload and file-rule seeding in
+// both binaries.
+func requireRuleConfigRegistration(t *testing.T, path string) {
+	t.Helper()
+	register := functionDecl(t, path, "registerRuleConfigService")
+	manager, err := parameterName(register, 0)
+	require.NoError(t, err)
+	rules, err := parameterName(register, 1)
+	require.NoError(t, err)
+	var targets string
+	ast.Inspect(register.Body, func(node ast.Node) bool {
+		assignment, ok := node.(*ast.AssignStmt)
+		if !ok || len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 {
+			return true
+		}
+		if types.ExprString(assignment.Rhs[0]) != "service.ComponentsImplementing[rulepkg.HotReloadTarget]("+manager+")" {
+			return true
+		}
+		if ident, ok := assignment.Lhs[0].(*ast.Ident); ok {
+			targets = ident.Name
+		}
+		return false
+	})
+	require.NotEmpty(t, targets, "registerRuleConfigService must bind the component manager's rule processors")
+	calls := callsInFunction(register)
+	requireCallOrder(t, calls, "manager.GetService", "manager.RegisterInstance")
+	require.NoError(t, requireIdentArgument(register, manager+".RegisterInstance", 0, "ruleConfigServiceName"))
+	service, err := callArgument(register, manager+".RegisterInstance", 1)
+	require.NoError(t, err)
+	require.Equal(t, "newRuleConfigService("+rules+", "+targets+", logger)", types.ExprString(service))
 }

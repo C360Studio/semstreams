@@ -4,6 +4,7 @@ tasks:
   default:
     desc: Run Go linters (vet, fmt, revive, substrate-flake-guards, NATS SDK pins)
     cmds:
+      - task: cleanup-roots
       - go vet ./...
       - go fmt ./...
       # revive: invoked via `go tool` so the pinned version in go.mod
@@ -75,3 +76,8 @@ tasks:
     cmds:
       - echo "pinned tool versions (from go.mod 'tool' directive):"
       - go tool revive --version
+
+  cleanup-roots:
+    desc: Refuse new or stale lifecycle cleanup debt before full verification
+    cmds:
+      - scripts/check-cleanup-roots.sh

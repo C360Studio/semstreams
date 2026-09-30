@@ -1,0 +1,6 @@
+2026/09/29 10:21:46 INFO component stopped gracefully component=graph-ingest
+--- FAIL: TestGraphIngestTestOwnerControlledStopPreservesAuthority (0.00s)
+    test_owner_test.go:41: controlled Stop: accepted Start authority ended before Stop
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/graph-ingest	0.349s
+FAIL

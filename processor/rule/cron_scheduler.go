@@ -12,8 +12,8 @@
 //  2. Processor.run launches the scheduler with Start(ctx); robfig spawns
 //     its own internal goroutine that walks the schedule and dispatches
 //     each fire callback on its own goroutine.
-//  3. Processor.run defers Stop on shutdown, draining in-flight fires up
-//     to the shutdown grace period.
+//  3. Processor.cleanup calls Stop(ctx) at its step 2, joining in-flight
+//     fires under the Stop context.
 //  4. Hot reload (applyRuleChanges) calls Register / Deregister under the
 //     processor's mu.Lock; robfig supports live add/remove without a
 //     scheduler restart.
@@ -33,6 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/c360studio/semstreams/pkg/errs"
 	cronlib "github.com/robfig/cron/v3"
 )
 
@@ -52,34 +53,12 @@ type CronScheduler struct {
 	lifecycleMu   sync.Mutex
 	lifecycleUsed bool
 	startDone     chan struct{}
-	stopDone      chan struct{}
+	stopping      bool
+	stopped       bool
 	cancel        context.CancelFunc
 	registerFence bool
-	dispatchMu    sync.Mutex
-	dispatchQueue []cronDispatch
-	dispatchWake  chan struct{}
-	dispatchDone  chan struct{}
-	dispatchFence bool
+	dispatch      ownerLane
 }
-
-type cronDispatch struct {
-	run    func(context.Context) error
-	result chan error
-}
-
-type cronStopContext struct{ done <-chan struct{} }
-
-func (c cronStopContext) Deadline() (time.Time, bool) { return time.Time{}, false }
-func (c cronStopContext) Done() <-chan struct{}       { return c.done }
-func (c cronStopContext) Err() error {
-	select {
-	case <-c.done:
-		return context.Canceled
-	default:
-		return nil
-	}
-}
-func (cronStopContext) Value(any) any { return nil }
 
 // cronEntry is the per-registered-rule state held by the scheduler.
 //
@@ -174,7 +153,7 @@ func (s *CronScheduler) Register(rule *CronRule) error {
 		return errors.New("cron scheduler: nil rule")
 	}
 	s.lifecycleMu.Lock()
-	if s.registerFence || s.stopDone != nil {
+	if s.registerFence {
 		s.lifecycleMu.Unlock()
 		return errors.New("cron scheduler: registration admission is closed")
 	}
@@ -260,12 +239,10 @@ func (s *CronScheduler) Start(ctx context.Context) error {
 	s.startDone = make(chan struct{})
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
-	s.dispatchWake = make(chan struct{}, 1)
-	s.dispatchDone = make(chan struct{})
-	s.dispatchFence = false
+	s.dispatch.open()
 	s.lifecycleMu.Unlock()
 
-	go s.runDispatcher(runCtx)
+	go s.dispatch.run(runCtx)
 
 	s.restoreFromTracker(ctx)
 
@@ -279,90 +256,16 @@ func (s *CronScheduler) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *CronScheduler) runDispatcher(ctx context.Context) {
-	defer close(s.dispatchDone)
-	for {
-		select {
-		case <-ctx.Done():
-			s.failDispatchQueue(ctx.Err())
-			return
-		case <-s.dispatchWake:
-			for {
-				s.dispatchMu.Lock()
-				if len(s.dispatchQueue) == 0 {
-					s.dispatchMu.Unlock()
-					break
-				}
-				dispatch := s.dispatchQueue[0]
-				s.dispatchQueue = s.dispatchQueue[1:]
-				s.dispatchMu.Unlock()
-				dispatch.result <- dispatch.run(ctx)
-				close(dispatch.result)
-			}
-		}
-	}
-}
-
-func (s *CronScheduler) failDispatchQueue(err error) {
-	s.dispatchMu.Lock()
-	queue := s.dispatchQueue
-	s.dispatchQueue = nil
-	s.dispatchMu.Unlock()
-	for _, dispatch := range queue {
-		dispatch.result <- err
-		close(dispatch.result)
-	}
-}
-
+// submitDispatch runs one admitted fire's actions on the dispatch lane.
 func (s *CronScheduler) submitDispatch(run func(context.Context) error) error {
-	dispatch := cronDispatch{run: run, result: make(chan error, 1)}
-	s.dispatchMu.Lock()
-	if s.dispatchFence || s.dispatchWake == nil {
-		s.dispatchMu.Unlock()
+	err := s.dispatch.submit(run)
+	switch {
+	case errors.Is(err, errLaneAdmissionClosed):
 		return errors.New("cron scheduler: dispatch admission is closed")
-	}
-	select {
-	case <-s.dispatchDone:
-		s.dispatchMu.Unlock()
+	case errors.Is(err, errLaneEnded):
 		return errors.New("cron scheduler: dispatcher stopped")
-	default:
 	}
-	s.dispatchQueue = append(s.dispatchQueue, dispatch)
-	wake := s.dispatchWake
-	s.dispatchMu.Unlock()
-	select {
-	case wake <- struct{}{}:
-	default:
-	}
-	return <-dispatch.result
-}
-
-func (s *CronScheduler) fenceDispatch() <-chan error {
-	barrier := cronDispatch{run: func(context.Context) error { return nil }, result: make(chan error, 1)}
-	s.dispatchMu.Lock()
-	s.dispatchFence = true
-	if s.dispatchDone == nil {
-		s.dispatchMu.Unlock()
-		barrier.result <- nil
-		close(barrier.result)
-		return barrier.result
-	}
-	select {
-	case <-s.dispatchDone:
-		s.dispatchMu.Unlock()
-		barrier.result <- nil
-		close(barrier.result)
-		return barrier.result
-	default:
-	}
-	s.dispatchQueue = append(s.dispatchQueue, barrier)
-	wake := s.dispatchWake
-	s.dispatchMu.Unlock()
-	select {
-	case wake <- struct{}{}:
-	default:
-	}
-	return barrier.result
+	return err
 }
 
 // restoreFromTracker walks the registered rules, looks up each rule's
@@ -465,52 +368,98 @@ func (s *CronScheduler) restoreFromTracker(ctx context.Context) {
 	}
 }
 
-// Stop signals the scheduler to halt. Its returned settlement context closes
-// after robfig callbacks and every admitted dispatcher action have completed.
-// Callers should select on it with their shutdown deadline. Calling Stop on a
-// never-started scheduler is safe.
-func (s *CronScheduler) Stop() context.Context {
-	var settlement <-chan struct{}
+// Stop halts the scheduler and joins its work under ctx. It fences
+// registration and dispatch admission, stops the native ticker, then waits for
+// in-flight native callbacks and every admitted dispatch before canceling and
+// joining the dispatcher. Every wait is bounded by ctx. When ctx ends while
+// Stop is still waiting for a Start in progress, Stop returns ctx's error and
+// leaves that startup unchanged. Once Stop holds terminal admission and ctx
+// ends first, it cancels the dispatch runtime and returns ctx's error without
+// a join claim, and a later Stop retries the joins. A completed Stop returns nil when
+// repeated; a Stop concurrent with one in progress returns a transient error.
+// Stop on a never-started scheduler is safe. ctx must be non-nil.
+func (s *CronScheduler) Stop(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("cron scheduler: Stop requires a non-nil context")
+	}
+	var cancel context.CancelFunc
 	for {
 		s.lifecycleMu.Lock()
 		if s.startDone != nil {
 			startDone := s.startDone
 			s.lifecycleMu.Unlock()
-			<-startDone
-			continue
+			select {
+			case <-startDone:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
-		if s.stopDone != nil {
-			stopDone := s.stopDone
+		if s.stopped {
 			s.lifecycleMu.Unlock()
-			return cronStopContext{done: stopDone}
+			return nil
+		}
+		if s.stopping {
+			s.lifecycleMu.Unlock()
+			return errs.WrapTransient(errors.New("stop already in progress"), "CronScheduler", "Stop", "concurrent Stop")
 		}
 		s.lifecycleUsed = true
-		s.stopDone = make(chan struct{})
 		s.registerFence = true
-		stopDone := s.stopDone
-		settlement = stopDone
-		cancel := s.cancel
-		dispatchDone := s.dispatchDone
+		s.stopping = true
+		cancel = s.cancel
 		s.lifecycleMu.Unlock()
-
-		barrier := s.fenceDispatch()
-		nativeStop := s.cron.Stop()
-		go func() {
-			<-nativeStop.Done()
-			<-barrier
-			if cancel != nil {
-				cancel()
-			}
-			if dispatchDone != nil {
-				<-dispatchDone
-			}
-			close(stopDone)
-		}()
 		break
 	}
+
+	barrier := s.dispatch.fence()
+	nativeStop := s.cron.Stop()
 	s.metrics.recordSchedulerRunning(false)
 	s.logger.Info("Cron scheduler stopping")
-	return cronStopContext{done: settlement}
+	err := s.awaitStop(ctx, nativeStop.Done(), barrier, cancel)
+
+	s.lifecycleMu.Lock()
+	s.stopping = false
+	s.stopped = err == nil
+	s.lifecycleMu.Unlock()
+	return err
+}
+
+// awaitStop joins native callbacks, then the dispatch barrier, then cancels
+// and joins the dispatcher, each under ctx. When ctx wins it cancels the
+// dispatch runtime so admitted actions can unwind, and returns ctx's error.
+func (s *CronScheduler) awaitStop(
+	ctx context.Context,
+	nativeDone <-chan struct{},
+	barrier <-chan error,
+	cancel context.CancelFunc,
+) error {
+	abandon := func() error {
+		if cancel != nil {
+			cancel()
+		}
+		return ctx.Err()
+	}
+	select {
+	case <-nativeDone:
+	case <-ctx.Done():
+		return abandon()
+	}
+	select {
+	case <-barrier:
+	case <-ctx.Done():
+		return abandon()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	if dispatchDone := s.dispatch.done(); dispatchDone != nil {
+		select {
+		case <-dispatchDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 // RegisteredCount returns the number of rules currently registered. Used

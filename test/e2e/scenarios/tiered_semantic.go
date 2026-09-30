@@ -190,11 +190,15 @@ func (s *TieredScenario) clusteringRunDiagnostic(ctx context.Context) string {
 // The pre-split wait polled that dead field, never observed pending→0, and always
 // burned its full ceiling before reporting enhanced=0; this one terminates as soon
 // as the summary store is caught up.
+//
+// A wait that merely runs out of time is the small model's throughput and is
+// recorded, not returned; the error is the wait's own failure (a summary-store
+// read, or the stage context ending), which fails the stage (#1426).
 func (s *TieredScenario) waitForLLMEnhancement(
 	ctx context.Context,
 	communities []*clustering.Community,
 	result *Result,
-) llmWaitResult {
+) (llmWaitResult, error) {
 	fmt.Printf("[LLM WAIT] Waiting for LLM enhancement to complete (ML variant, %d communities)...\n", len(communities))
 
 	enhanceStart := time.Now()
@@ -215,9 +219,6 @@ func (s *TieredScenario) waitForLLMEnhancement(
 	fmt.Printf("[LLM WAIT] Complete: enhanced=%d, failed=%d, pending=%d, duration=%dms\n",
 		enhanced, failed, pending, waitResult.durationMs)
 
-	if waitErr != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("LLM enhancement wait error: %v", waitErr))
-	}
 	if enhanced == 0 && failed == 0 && pending > 0 {
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("No LLM enhancements completed within 2 minute timeout (%d still pending)", pending))
@@ -227,7 +228,10 @@ func (s *TieredScenario) waitForLLMEnhancement(
 	result.Metrics["llm_failed_count"] = float64(waitResult.failedCount)
 	result.Metrics["llm_pending_count"] = float64(waitResult.pendingCount)
 
-	return waitResult
+	if waitErr != nil {
+		return waitResult, fmt.Errorf("LLM enhancement wait failed: %w", waitErr)
+	}
+	return waitResult, nil
 }
 
 // joinedSummaryRecord returns the worker-written summary record for a community,
@@ -468,9 +472,11 @@ func (s *TieredScenario) recordCommunityMetrics(stats communityStats, result *Re
 // This step waits for LLM enhancement to complete (up to 2 min), analyzes community
 // summary status, and validates that enhancement is working properly.
 func (s *TieredScenario) executeValidateLLMEnhancement(ctx context.Context, result *Result) error {
+	// RECORDER of enhancement throughput and summary quality (declared at the
+	// stage-table row): those arms warn. The transport and read arms below fail,
+	// because without communities there is nothing to record (#1426).
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping LLM enhancement validation")
-		return nil
+		return fmt.Errorf("NATS client not available for LLM enhancement validation")
 	}
 
 	fmt.Println("[LLM ENHANCEMENT] Starting LLM enhancement validation...")
@@ -478,36 +484,35 @@ func (s *TieredScenario) executeValidateLLMEnhancement(ctx context.Context, resu
 	// Wait for communities to be available
 	communities, err := s.waitForCommunities(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get communities: %v", err))
-		return nil
+		return fmt.Errorf("failed to get communities: %w", err)
 	}
 
 	if len(communities) == 0 {
-		result.Warnings = append(result.Warnings, "No communities found for LLM enhancement validation")
-		return nil
+		return fmt.Errorf("no communities found for LLM enhancement validation")
 	}
 
 	fmt.Printf("[LLM ENHANCEMENT] Found %d communities, waiting for LLM enhancement...\n", len(communities))
 
 	// Wait for LLM enhancement to complete (joins the COMMUNITY_SUMMARIES store by
 	// membership hash — the post-split source of truth for enhancement status).
-	llmWait := s.waitForLLMEnhancement(ctx, communities, result)
+	llmWait, err := s.waitForLLMEnhancement(ctx, communities, result)
+	if err != nil {
+		return err
+	}
 
 	// Re-fetch the partition after waiting (the detector may have re-run).
 	communities, err = s.natsClient.GetAllCommunities(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to re-fetch communities after LLM wait: %v", err))
-		return nil
+		return fmt.Errorf("failed to re-fetch communities after LLM wait: %w", err)
 	}
 
 	// Read the worker-owned summary store once and JOIN it to the communities: after
 	// the B3 split (ADR-087) enhancement status/text live here, not on COMMUNITY_INDEX.
 	summaries, err := s.natsClient.GetCommunitySummaries(ctx)
 	if err != nil {
-		// A summary-store read failure degrades the report to the statistical floor
-		// rather than aborting the stage — the partition itself is still valid.
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to read community summaries: %v", err))
-		summaries = map[string]*clustering.CommunitySummaryRecord{}
+		// A failed read fails the stage like the re-fetch above: falling back to an
+		// empty store would record the statistical floor as a measurement (#1426 H2).
+		return fmt.Errorf("failed to read community summaries: %w", err)
 	}
 
 	// Analyze communities for summary status (joined from the store)
@@ -719,8 +724,7 @@ func (s *TieredScenario) validateAnomalyGroundTruth(ctx context.Context, result 
 // with auto_applied status anomalies in the ANOMALY_INDEX.
 func (s *TieredScenario) executeValidateVirtualEdges(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping virtual edge validation")
-		return nil
+		return fmt.Errorf("NATS client not available for virtual edge validation")
 	}
 
 	fmt.Println("[VIRTUAL EDGES] Validating virtual edge creation from semantic gaps...")
@@ -738,9 +742,10 @@ func (s *TieredScenario) executeValidateVirtualEdges(ctx context.Context, result
 	}
 
 	// Get auto-applied anomaly count from ANOMALY_INDEX
+	// A failed read is the same class as the count failure above (#1426).
 	autoApplied, err := s.natsClient.GetAutoAppliedAnomalyCount(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get auto-applied count: %v", err))
+		return fmt.Errorf("failed to get auto-applied anomaly count: %w", err)
 	}
 
 	// Record metrics
@@ -760,18 +765,20 @@ func (s *TieredScenario) executeValidateVirtualEdges(ctx context.Context, result
 
 	// Validation: check if virtual edges were created when auto-apply is enabled
 	if edgeCounts.Total == 0 && autoApplied == 0 {
-		// This could be expected if no semantic gaps met the auto-apply threshold
+		// The configured outcome while the anomaly engine is disabled in every
+		// tier config (enable_anomaly_detection:false since #237), or when no
+		// semantic gap met the auto-apply threshold; the row comment records why.
 		fmt.Println("[VIRTUAL EDGES] No virtual edges created - this may be expected if no gaps met auto-apply threshold (similarity >= 0.85, distance >= 4)")
 	} else if edgeCounts.Total > 0 {
 		fmt.Printf("[VIRTUAL EDGES] Success: %d virtual edges created from semantic gaps\n", edgeCounts.Total)
 	}
 
-	// Warn if there's a mismatch between auto-applied anomalies and virtual edges
-	// Note: The counts may not match exactly because edges are created in PREDICATE_INDEX
-	// as a side effect of the triple being added, while auto_applied status is on anomalies
+	// Anomalies marked auto_applied with no materialized edge is the plumbing
+	// outcome this stage exists to detect (#1426). The counts need not match
+	// exactly (edges land in PREDICATE_INDEX as a side effect of the triple), but
+	// some applied anomaly with zero edges means the edge was never written.
 	if autoApplied > 0 && edgeCounts.Total == 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Anomalies marked auto_applied (%d) but no virtual edges found in PREDICATE_INDEX", autoApplied))
+		return fmt.Errorf("anomalies marked auto_applied (%d) but no virtual edges found in PREDICATE_INDEX", autoApplied)
 	}
 
 	return nil
@@ -935,8 +942,7 @@ func (s *TieredScenario) validateEmbeddingQueueHealth(ctx context.Context, resul
 // Phase 8: Uses SSE streaming to wait for container groups before counting.
 func (s *TieredScenario) validateHierarchyInference(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping hierarchy inference validation")
-		return nil
+		return fmt.Errorf("NATS client not available for hierarchy inference validation")
 	}
 
 	fmt.Println("[HIERARCHY] Validating hierarchy inference container creation...")
@@ -956,8 +962,7 @@ func (s *TieredScenario) validateHierarchyInference(ctx context.Context, result 
 	// Get all entity IDs from ENTITY_STATES bucket
 	allIDs, err := s.natsClient.GetAllEntityIDs(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get entity IDs: %v", err))
-		return nil
+		return fmt.Errorf("failed to get entity IDs: %w", err)
 	}
 
 	// Count containers and source entities (non-container entities from testdata)
@@ -996,15 +1001,6 @@ func (s *TieredScenario) validateHierarchyInference(ctx context.Context, result 
 	fmt.Printf("[HIERARCHY] Container types: group=%d, container=%d, level=%d\n",
 		containerTypes["group"], containerTypes["container"], containerTypes["level"])
 
-	// Validation: check if hierarchy inference is working
-	if containerCount < expectedMinContainers {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Hierarchy inference may not be working: only %d containers for %d source entities (expected at least %d)",
-				containerCount, sourceEntityCount, expectedMinContainers))
-	} else {
-		fmt.Printf("[HIERARCHY] Success: hierarchy inference validated (%d containers created)\n", containerCount)
-	}
-
 	result.Details["hierarchy_inference"] = map[string]any{
 		"container_count":         containerCount,
 		"source_entity_count":     sourceEntityCount,
@@ -1012,6 +1008,14 @@ func (s *TieredScenario) validateHierarchyInference(ctx context.Context, result 
 		"inference_working":       containerCount >= expectedMinContainers,
 		"container_types":         containerTypes,
 	}
+
+	// Too few containers is the outcome this stage exists to detect (#1426); an
+	// empty graph (0 < 0 is false) is caught by verify-entity-count earlier.
+	if containerCount < expectedMinContainers {
+		return fmt.Errorf("hierarchy inference not working: only %d containers for %d source entities (expected at least %d)",
+			containerCount, sourceEntityCount, expectedMinContainers)
+	}
+	fmt.Printf("[HIERARCHY] Success: hierarchy inference validated (%d containers created)\n", containerCount)
 
 	return nil
 }
@@ -1139,17 +1143,18 @@ func validateHierarchyProvenance(matches []client.AuthorityTripleMatch) (int, in
 // Phase 5: Verifies the IncomingIndex asymmetry fix is working (stores []IncomingEntry, not []string).
 func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client unavailable for incoming index validation")
-		return nil
+		return fmt.Errorf("NATS client unavailable for incoming index validation")
 	}
 
 	fmt.Println("[INCOMING INDEX] Validating incoming index predicate storage...")
 
 	// Get all entity IDs to find a container entity
 	allIDs, err := s.natsClient.GetAllEntityIDs(ctx)
-	if err != nil || len(allIDs) == 0 {
-		result.Warnings = append(result.Warnings, "No entities found for incoming index validation")
-		return nil
+	if err != nil {
+		return fmt.Errorf("failed to get entity IDs for incoming index validation: %w", err)
+	}
+	if len(allIDs) == 0 {
+		return fmt.Errorf("no entities found for incoming index validation")
 	}
 
 	// Look for a .group entity (created by hierarchy inference, has incoming edges)
@@ -1162,14 +1167,16 @@ func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, re
 	}
 
 	if containerID == "" {
-		// No container entities - may be structural tier (no hierarchy inference)
+		// Hierarchy inference runs in every tier this stage runs in and
+		// validate-hierarchy-inference asserts its containers earlier, so no
+		// container here is the stage validating nothing (#1426).
 		result.Metrics["incoming_predicate_validation"] = 0
 		result.Details["incoming_index_validation"] = map[string]any{
 			"container_found":      false,
 			"message":              "No container entities found (hierarchy inference may not have run)",
 			"predicate_validation": false,
 		}
-		return nil
+		return fmt.Errorf("no .group container entity found for incoming index validation")
 	}
 
 	// Get incoming entries for the container. A reader error is unambiguous — fail.
@@ -1225,13 +1232,6 @@ func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, re
 
 	// Validation
 	predicateValidation := predicateCount > 0
-	if len(entries) > 0 && predicateCount == 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("IncomingIndex has %d entries but none have predicates - index may use old []string format", len(entries)))
-	} else if predicateValidation {
-		fmt.Printf("[INCOMING INDEX] Success: bidirectional traversal preserves predicates (%d entries with predicates)\n", predicateCount)
-	}
-
 	result.Details["incoming_index_validation"] = map[string]any{
 		"container_id":            containerID,
 		"total_entries":           len(entries),
@@ -1241,6 +1241,14 @@ func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, re
 		"predicate_validation":    predicateValidation,
 	}
 
+	// Entries without predicates is the outcome this stage exists to detect (#1426).
+	if len(entries) > 0 && predicateCount == 0 {
+		return fmt.Errorf("IncomingIndex has %d entries for %s but none have predicates - index may use old []string format", len(entries), containerID)
+	}
+	if predicateValidation {
+		fmt.Printf("[INCOMING INDEX] Success: bidirectional traversal preserves predicates (%d entries with predicates)\n", predicateCount)
+	}
+
 	return nil
 }
 
@@ -1248,17 +1256,18 @@ func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, re
 // Phase 6: Story - "As an app developer, I can find who references a container and WHY."
 func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client unavailable for bidirectional traversal")
-		return nil
+		return fmt.Errorf("NATS client unavailable for bidirectional traversal")
 	}
 
 	fmt.Println("[BIDIRECTIONAL] Demonstrating predicate-aware reverse traversal...")
 
 	// Get all entity IDs to find a container
 	allIDs, err := s.natsClient.GetAllEntityIDs(ctx)
-	if err != nil || len(allIDs) == 0 {
-		result.Warnings = append(result.Warnings, "No entities found for bidirectional traversal")
-		return nil
+	if err != nil {
+		return fmt.Errorf("failed to get entity IDs for bidirectional traversal: %w", err)
+	}
+	if len(allIDs) == 0 {
+		return fmt.Errorf("no entities found for bidirectional traversal")
 	}
 
 	// Find a .group container entity
@@ -1276,14 +1285,13 @@ func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, res
 			"container_found": false,
 			"message":         "No container entities found (hierarchy inference may not have run)",
 		}
-		return nil
+		return fmt.Errorf("no .group container entity found for bidirectional traversal")
 	}
 
 	// Get incoming relationships WITH predicate information
 	incomingEntries, err := s.natsClient.GetIncomingEntries(ctx, containerID)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("incoming entries query failed: %v", err))
-		return nil
+		return fmt.Errorf("incoming entries query failed for %s: %w", containerID, err)
 	}
 
 	// Filter by predicate type - "Who are the MEMBERS of this container?"
@@ -1295,7 +1303,10 @@ func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, res
 	}
 
 	// Get outgoing relationships from container
-	outgoingEntries, _ := s.natsClient.GetOutgoingEntries(ctx, containerID)
+	outgoingEntries, err := s.natsClient.GetOutgoingEntries(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to get outgoing entries for %s: %w", containerID, err)
+	}
 
 	// Record metrics
 	result.Metrics["bidir_incoming_total"] = len(incomingEntries)
@@ -1324,6 +1335,12 @@ func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, res
 		"predicates_present": memberCount > 0,
 	}
 
+	// No incoming "member" edge means the reverse traversal cannot say WHY an
+	// entity points at the container: the outcome this stage exists to detect (#1426).
+	if memberCount == 0 {
+		return fmt.Errorf("container %s has %d incoming edges but none is hierarchy.type.member", containerID, len(incomingEntries))
+	}
+
 	return nil
 }
 
@@ -1331,17 +1348,18 @@ func (s *TieredScenario) validateBidirectionalTraversal(ctx context.Context, res
 // Phase 6: Story - "As a graph analyst, containers explicitly know their members via 'contains' edges."
 func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client unavailable for inverse edges validation")
-		return nil
+		return fmt.Errorf("NATS client unavailable for inverse edges validation")
 	}
 
 	fmt.Println("[INVERSE EDGES] Demonstrating materialized inverse relationships...")
 
 	// Get all entity IDs to find a container
 	allIDs, err := s.natsClient.GetAllEntityIDs(ctx)
-	if err != nil || len(allIDs) == 0 {
-		result.Warnings = append(result.Warnings, "No entities found for inverse edges validation")
-		return nil
+	if err != nil {
+		return fmt.Errorf("failed to get entity IDs for inverse edges validation: %w", err)
+	}
+	if len(allIDs) == 0 {
+		return fmt.Errorf("no entities found for inverse edges validation")
 	}
 
 	// Find a .group container entity
@@ -1359,11 +1377,14 @@ func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, r
 			"container_found": false,
 			"message":         "No container entities found (hierarchy inference may not have run)",
 		}
-		return nil
+		return fmt.Errorf("no .group container entity found for inverse edges validation")
 	}
 
 	// Get container's OUTGOING relationships (should include 'contains' edges after Phase 6 change)
-	outgoingEntries, _ := s.natsClient.GetOutgoingEntries(ctx, containerID)
+	outgoingEntries, err := s.natsClient.GetOutgoingEntries(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("outgoing entries query failed for %s: %w", containerID, err)
+	}
 
 	// Filter for 'contains' predicates
 	containsCount := 0
@@ -1376,7 +1397,10 @@ func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, r
 	}
 
 	// Cross-reference with incoming 'member' edges
-	incomingEntries, _ := s.natsClient.GetIncomingEntries(ctx, containerID)
+	incomingEntries, err := s.natsClient.GetIncomingEntries(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("incoming entries query failed for %s: %w", containerID, err)
+	}
 	memberCount := 0
 	for _, entry := range incomingEntries {
 		if entry.Predicate == "hierarchy.type.member" ||
@@ -1410,18 +1434,6 @@ func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, r
 			}
 		}
 		fmt.Println("[INVERSE EDGES] Success: Containers explicitly know their members via 'contains' edges")
-	} else if containsCount == 0 {
-		if s.config.Variant == "structural" || s.config.Variant == "statistical" {
-			// Short-running tiers may not have completed async index updates
-			// Hierarchy inference creates inverse edges but outgoing index update is async
-			fmt.Println("[INVERSE EDGES] Note: Contains edges not indexed yet (async update pending)")
-		} else {
-			result.Warnings = append(result.Warnings,
-				"No 'contains' edges found - inverse materialization may not be working")
-		}
-	} else if containsCount != memberCount {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Edge count mismatch: %d member edges vs %d contains edges", memberCount, containsCount))
 	}
 
 	result.Details["inverse_edges"] = map[string]any{
@@ -1431,6 +1443,18 @@ func (s *TieredScenario) validateInverseEdgesMaterialized(ctx context.Context, r
 		"symmetry_valid":  symmetryValid,
 		"edges_match":     containsCount == memberCount,
 		"inverse_working": containsCount > 0,
+	}
+
+	// Asymmetry is the outcome this stage exists to detect (#1426). Structural keeps
+	// its not-yet-indexed note: it runs this stage without the community wait that
+	// precedes it in statistical/semantic, is not a per-PR variant, and is unmeasured
+	// here. Statistical and semantic measured 1 member / 1 contains in every run.
+	if containsCount == 0 && s.config.Variant == "structural" {
+		fmt.Println("[INVERSE EDGES] Note: Contains edges not indexed yet (async update pending)")
+		return nil
+	}
+	if !symmetryValid {
+		return fmt.Errorf("inverse edges asymmetric for %s: %d member edges vs %d contains edges", containerID, memberCount, containsCount)
 	}
 
 	return nil

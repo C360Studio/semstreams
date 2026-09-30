@@ -3,6 +3,7 @@
 package graphingest
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -33,7 +34,10 @@ import (
 //	X-Error-Code:  invalid_request
 //	body:          {"message": "...<offending predicate>..."}
 func TestIntegration_StructuralGate_Append_WireContract(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const absentID = "c360.test.structural.wire.drone.404"
 	reqBytes, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{{
@@ -85,7 +89,10 @@ func TestIntegration_StructuralGate_Append_WireContract(t *testing.T) {
 // generic invalid_request code — still a classified invalid error naming the
 // predicate, still nothing persisted.
 func TestIntegration_StructuralGate_Create_WireContract(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const createID = "c360.test.structural.wire.drone.777"
 	now := time.Now()

@@ -1,0 +1,4 @@
+task: [inventory:verify] scripts/inventory-verify.sh openspec/changes/rule-test-cleanup/inventory.md
+changed since base (caa98f5a..HEAD):
+  (none)
+pins=93 ok=93 moved=0 ambiguous=0 drift=0 malformed=0 unparsed=0

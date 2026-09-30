@@ -1,0 +1,1608 @@
+{
+  "base": "f60d78906086f0c9090a99f24c389f32d40cc167",
+  "candidate_count": 61,
+  "frozen_packet": "/private/tmp/gh1064-stabilization-packet.json",
+  "frozen_packet_sha256": "2e448dd458d53bc1cd7979e6191ad72c8d80832f02a4da13f891eec8adaddae6",
+  "frozen_scanner_snapshots": {
+    "test/testinfra/cleanup_analyzer_test.go": "7c5c3fa093ad2b4d0f8d29962f99ca957171ab7e1fdd12c7ebebd63a3fa45291",
+    "test/testinfra/cleanup_guard_test.go": "2ccebabfe8f0b6d8143995939d30a157c66c9eb328c24db5c0ef23740c1b171e"
+  },
+  "groups": [
+    {
+      "evidence": [
+        "pkg/tlsutil/tlsutil_test.go:64 \u2014 setupTestFiles has named fourth result cleanup func().",
+        "pkg/tlsutil/tlsutil_test.go:78 \u2014 cleanup is assigned a closure that calls os.RemoveAll(tmpDir); the results return at line 82."
+      ],
+      "key": "A",
+      "limits": "No certificate generator internals are needed to prove what the returned cleanup does. No wall-clock bound is claimed for RemoveAll.",
+      "proposed_disposition": "Resolve the exact fourth returned callable and classify outside the admitted context-taking lifecycle Stop contract (non-lifecycle-stop).",
+      "required_dependencies": [
+        "Each enclosing caller declaration and its four-result binding",
+        "pkg/tlsutil/tlsutil_test.go :: setupTestFiles",
+        "Resolved standard-library os.RemoveAll symbol"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadServerTLSConfig",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadServerTLSConfig|defer|cleanup|unresolved callback|unknown|1",
+          "line": 87,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadClientTLSConfig",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadClientTLSConfig|defer|cleanup|unresolved callback|unknown|1",
+          "line": 176,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadServerTLSConfig_CertificateValidation",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadServerTLSConfig_CertificateValidation|defer|cleanup|unresolved callback|unknown|1",
+          "line": 282,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadClientTLSConfig_AdditionalCA",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadClientTLSConfig_AdditionalCA|defer|cleanup|unresolved callback|unknown|1",
+          "line": 324,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadServerTLSConfigWithMTLS_Disabled",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadServerTLSConfigWithMTLS_Disabled|defer|cleanup|unresolved callback|unknown|1",
+          "line": 389,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadServerTLSConfigWithMTLS_RequireClientCert",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadServerTLSConfigWithMTLS_RequireClientCert|defer|cleanup|unresolved callback|unknown|1",
+          "line": 412,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadServerTLSConfigWithMTLS_OptionalClientCert",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadServerTLSConfigWithMTLS_OptionalClientCert|defer|cleanup|unresolved callback|unknown|1",
+          "line": 437,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadServerTLSConfigWithMTLS_WithCNWhitelist",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadServerTLSConfigWithMTLS_WithCNWhitelist|defer|cleanup|unresolved callback|unknown|1",
+          "line": 462,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadServerTLSConfigWithMTLS_MissingClientCA",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadServerTLSConfigWithMTLS_MissingClientCA|defer|cleanup|unresolved callback|unknown|1",
+          "line": 487,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadClientTLSConfigWithMTLS_Disabled",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadClientTLSConfigWithMTLS_Disabled|defer|cleanup|unresolved callback|unknown|1",
+          "line": 561,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadClientTLSConfigWithMTLS_Enabled",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadClientTLSConfigWithMTLS_Enabled|defer|cleanup|unresolved callback|unknown|1",
+          "line": 581,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadClientTLSConfigWithMTLS_MissingCert",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadClientTLSConfigWithMTLS_MissingCert|defer|cleanup|unresolved callback|unknown|1",
+          "line": 604,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestLoadClientTLSConfigWithMTLS_MissingKey",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestLoadClientTLSConfigWithMTLS_MissingKey|defer|cleanup|unresolved callback|unknown|1",
+          "line": 622,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestBackwardCompatibility_ServerWithoutMTLS",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestBackwardCompatibility_ServerWithoutMTLS|defer|cleanup|unresolved callback|unknown|1",
+          "line": 641,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestBackwardCompatibility_ClientWithoutMTLS",
+          "identity": "pkg/tlsutil/tlsutil_test.go|TestBackwardCompatibility_ClientWithoutMTLS|defer|cleanup|unresolved callback|unknown|1",
+          "line": 664,
+          "origin": "defer",
+          "path": "pkg/tlsutil/tlsutil_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "cleanup"
+        }
+      ],
+      "title": "TLS file cleanup"
+    },
+    {
+      "evidence": [
+        "vocabulary/registry.go:656 \u2014 SnapshotRegistry copies predicateRegistry under registryMu and returns a closure restoring that map under the same mutex.",
+        "Callers use both t.Cleanup(vocabulary.SnapshotRegistry()) and a returned restore variable invoked by defer."
+      ],
+      "key": "B",
+      "limits": "Shared evidence may explain all thirteen sites, but each exact candidate still needs its own identity/freshness. No package exemption or lock completion guarantee.",
+      "proposed_disposition": "Resolve the returned callable and classify outside the admitted lifecycle Stop contract (non-lifecycle-stop).",
+      "required_dependencies": [
+        "Each enclosing caller declaration and callback binding",
+        "vocabulary/registry.go :: SnapshotRegistry",
+        "vocabulary/registry.go :: registryMu and predicateRegistry declarations and their resolved types"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "942cba67e31fb348bcce7c7d1e6abd082e5c26ed5fb0d2510996ea45320182a2",
+          "function": "TestPredicateSalience",
+          "identity": "pkg/fusion/fusionvocab/signals_test.go|TestPredicateSalience|ordinary|vocabulary.SnapshotRegistry()|unresolved callback|unknown|1",
+          "line": 37,
+          "origin": "ordinary",
+          "path": "pkg/fusion/fusionvocab/signals_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "vocabulary.SnapshotRegistry()"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "942cba67e31fb348bcce7c7d1e6abd082e5c26ed5fb0d2510996ea45320182a2",
+          "function": "TestContractValidateUsesVocabularyProfiles",
+          "identity": "pkg/projection/contract/contract_test.go|TestContractValidateUsesVocabularyProfiles|ordinary|vocabulary.SnapshotRegistry()|unresolved callback|unknown|1",
+          "line": 11,
+          "origin": "ordinary",
+          "path": "pkg/projection/contract/contract_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "vocabulary.SnapshotRegistry()"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "942cba67e31fb348bcce7c7d1e6abd082e5c26ed5fb0d2510996ea45320182a2",
+          "function": "TestValidateShapeSkipsPredicateDeclaration",
+          "identity": "pkg/projection/contract/contract_test.go|TestValidateShapeSkipsPredicateDeclaration|ordinary|vocabulary.SnapshotRegistry()|unresolved callback|unknown|1",
+          "line": 43,
+          "origin": "ordinary",
+          "path": "pkg/projection/contract/contract_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "vocabulary.SnapshotRegistry()"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "942cba67e31fb348bcce7c7d1e6abd082e5c26ed5fb0d2510996ea45320182a2",
+          "function": "TestContractUsesOnlyReconcileAndAppendIntent",
+          "identity": "pkg/projection/contract_test.go|TestContractUsesOnlyReconcileAndAppendIntent|ordinary|vocabulary.SnapshotRegistry()|unresolved callback|unknown|1",
+          "line": 12,
+          "origin": "ordinary",
+          "path": "pkg/projection/contract_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "vocabulary.SnapshotRegistry()"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "942cba67e31fb348bcce7c7d1e6abd082e5c26ed5fb0d2510996ea45320182a2",
+          "function": "TestValidateContractsRejectsDuplicateNames",
+          "identity": "pkg/projection/contract_test.go|TestValidateContractsRejectsDuplicateNames|ordinary|vocabulary.SnapshotRegistry()|unresolved callback|unknown|1",
+          "line": 32,
+          "origin": "ordinary",
+          "path": "pkg/projection/contract_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "vocabulary.SnapshotRegistry()"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "942cba67e31fb348bcce7c7d1e6abd082e5c26ed5fb0d2510996ea45320182a2",
+          "function": "TestContractLiteralCompilesAgainstAliases",
+          "identity": "pkg/projection/contract_test.go|TestContractLiteralCompilesAgainstAliases|ordinary|vocabulary.SnapshotRegistry()|unresolved callback|unknown|1",
+          "line": 48,
+          "origin": "ordinary",
+          "path": "pkg/projection/contract_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "vocabulary.SnapshotRegistry()"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "942cba67e31fb348bcce7c7d1e6abd082e5c26ed5fb0d2510996ea45320182a2",
+          "function": "TestOverlappingLocalContractsConstruct",
+          "identity": "pkg/projection/contract_test.go|TestOverlappingLocalContractsConstruct|ordinary|vocabulary.SnapshotRegistry()|unresolved callback|unknown|1",
+          "line": 70,
+          "origin": "ordinary",
+          "path": "pkg/projection/contract_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "vocabulary.SnapshotRegistry()"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "942cba67e31fb348bcce7c7d1e6abd082e5c26ed5fb0d2510996ea45320182a2",
+          "function": "projectionTestContract",
+          "identity": "pkg/projection/mutation_client_test.go|projectionTestContract|ordinary|vocabulary.SnapshotRegistry()|unresolved callback|unknown|1",
+          "line": 299,
+          "origin": "ordinary",
+          "path": "pkg/projection/mutation_client_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "vocabulary.SnapshotRegistry()"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "942cba67e31fb348bcce7c7d1e6abd082e5c26ed5fb0d2510996ea45320182a2",
+          "function": "TestCreateFillsFromRegisteredContract",
+          "identity": "pkg/projection/mutation_client_test.go|TestCreateFillsFromRegisteredContract|ordinary|vocabulary.SnapshotRegistry()|unresolved callback|unknown|1",
+          "line": 420,
+          "origin": "ordinary",
+          "path": "pkg/projection/mutation_client_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "vocabulary.SnapshotRegistry()"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "9431856cf7e8f4fd5be8828792b5c6a6659a5b2d166fbd208fad7475f2745a29",
+          "function": "TestEveryCanonicalDataTypeHasExactlyOneExportRendering",
+          "identity": "test/contract/predicate_datatype_contract_test.go|TestEveryCanonicalDataTypeHasExactlyOneExportRendering|defer|restore|unresolved callback|unknown|1",
+          "line": 95,
+          "origin": "defer",
+          "path": "test/contract/predicate_datatype_contract_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "restore"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "9431856cf7e8f4fd5be8828792b5c6a6659a5b2d166fbd208fad7475f2745a29",
+          "function": "TestFrameworkPredicateDataTypesAreCanonicalAndRatcheted",
+          "identity": "test/contract/predicate_datatype_contract_test.go|TestFrameworkPredicateDataTypesAreCanonicalAndRatcheted|defer|restore|unresolved callback|unknown|1",
+          "line": 280,
+          "origin": "defer",
+          "path": "test/contract/predicate_datatype_contract_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "restore"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "9431856cf7e8f4fd5be8828792b5c6a6659a5b2d166fbd208fad7475f2745a29",
+          "function": "TestComposeScenarioClientsRegistersBuiltinsBeforeContractValidation",
+          "identity": "test/e2e/scenarios/lessons/scenario_test.go|TestComposeScenarioClientsRegistersBuiltinsBeforeContractValidation|defer|restore|unresolved callback|unknown|1",
+          "line": 313,
+          "origin": "defer",
+          "path": "test/e2e/scenarios/lessons/scenario_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "restore"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "9431856cf7e8f4fd5be8828792b5c6a6659a5b2d166fbd208fad7475f2745a29",
+          "function": "TestRegisterProvidesBootVocabularyWithoutIncidentalInitialization",
+          "identity": "vocabulary/builtins/register_test.go|TestRegisterProvidesBootVocabularyWithoutIncidentalInitialization|defer|restore|unresolved callback|unknown|1",
+          "line": 13,
+          "origin": "defer",
+          "path": "vocabulary/builtins/register_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "restore"
+        }
+      ],
+      "title": "Vocabulary registry restoration"
+    },
+    {
+      "evidence": [
+        "processor/graph-index/query_integration_test.go:29 \u2014 setupIntegrationTest creates graphIndexComp and returns cleanup as its third result.",
+        "processor/graph-index/query_integration_test.go:65 \u2014 the returned closure calls graphIndexComp.Stop(context.Background()); results return at line 70."
+      ],
+      "key": "C",
+      "limits": "These nine frozen unresolved callback records are not nine automatically approved debt entries. The next census must preserve physical-site/ownership-variant identity semantics and show the real resulting debt. Do not infer all no-argument callbacks are non-lifecycle.",
+      "proposed_disposition": "Resolve the exact third returned callable. Expose its Background-fed Stop as unbounded-terminal-cleanup; newly exposed debt requires independent exact source review.",
+      "required_dependencies": [
+        "Each enclosing caller declaration and third-result binding",
+        "processor/graph-index/query_integration_test.go :: setupIntegrationTest",
+        "CreateGraphIndex result and *Component type assertion/binding",
+        "processor/graph-index :: (*Component).Stop and receiver declaration"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestQueryOutgoing_Integration",
+          "identity": "processor/graph-index/query_integration_test.go|TestQueryOutgoing_Integration|defer|cleanup|unresolved callback|unknown|1",
+          "line": 76,
+          "origin": "defer",
+          "path": "processor/graph-index/query_integration_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestQueryIncoming_Integration",
+          "identity": "processor/graph-index/query_integration_test.go|TestQueryIncoming_Integration|defer|cleanup|unresolved callback|unknown|1",
+          "line": 163,
+          "origin": "defer",
+          "path": "processor/graph-index/query_integration_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestQueryAlias_Integration",
+          "identity": "processor/graph-index/query_integration_test.go|TestQueryAlias_Integration|defer|cleanup|unresolved callback|unknown|1",
+          "line": 225,
+          "origin": "defer",
+          "path": "processor/graph-index/query_integration_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestQueryPredicate_Integration",
+          "identity": "processor/graph-index/query_integration_test.go|TestQueryPredicate_Integration|defer|cleanup|unresolved callback|unknown|1",
+          "line": 283,
+          "origin": "defer",
+          "path": "processor/graph-index/query_integration_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestContextTimeout_Integration",
+          "identity": "processor/graph-index/query_integration_test.go|TestContextTimeout_Integration|defer|cleanup|unresolved callback|unknown|1",
+          "line": 354,
+          "origin": "defer",
+          "path": "processor/graph-index/query_integration_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestConcurrentQueries_Integration",
+          "identity": "processor/graph-index/query_integration_test.go|TestConcurrentQueries_Integration|defer|cleanup|unresolved callback|unknown|1",
+          "line": 382,
+          "origin": "defer",
+          "path": "processor/graph-index/query_integration_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestQueryNotFound_Integration",
+          "identity": "processor/graph-index/query_integration_test.go|TestQueryNotFound_Integration|defer|cleanup|unresolved callback|unknown|1",
+          "line": 431,
+          "origin": "defer",
+          "path": "processor/graph-index/query_integration_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestQueryInvalidRequest_Integration",
+          "identity": "processor/graph-index/query_integration_test.go|TestQueryInvalidRequest_Integration|defer|cleanup|unresolved callback|unknown|1",
+          "line": 502,
+          "origin": "defer",
+          "path": "processor/graph-index/query_integration_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "cleanup"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "83ae3df80537f96c24ecf05b5e9eb8356f11da2eddf3fe57dbc22b733c8e168e",
+          "function": "TestQueryStatus_RevisionLag_Integration",
+          "identity": "processor/graph-index/query_integration_test.go|TestQueryStatus_RevisionLag_Integration|defer|cleanup|unresolved callback|unknown|1",
+          "line": 724,
+          "origin": "defer",
+          "path": "processor/graph-index/query_integration_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "cleanup"
+        }
+      ],
+      "title": "Graph-index returned cleanup hides lifecycle debt"
+    },
+    {
+      "evidence": [
+        "input/http/http_lifecycle_test.go:29 \u2014 newLifecycleHTTPInput creates an httptest server.",
+        "input/http/http_lifecycle_test.go:40 \u2014 the helper returns the input and server.Close."
+      ],
+      "key": "D",
+      "limits": "Foreign contextless Close is outside this guard, not proved bounded.",
+      "proposed_disposition": "Resolve the returned method value to (*httptest.Server).Close and classify outside the admitted context-taking lifecycle Stop contract.",
+      "required_dependencies": [
+        "Each enclosing caller declaration and second-result binding",
+        "input/http/http_lifecycle_test.go :: newLifecycleHTTPInput",
+        "Resolved net/http/httptest.(*Server).Close and *Server receiver type"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "831878d6040c8f6c9b4ee064efd1ad9acf7499c6bd47ac09aaf2ff989be5b2c4",
+          "function": "TestInputStartStopAndCompletedRepeat",
+          "identity": "input/http/http_lifecycle_test.go|TestInputStartStopAndCompletedRepeat|defer|closeServer|unresolved callback|unknown|1",
+          "line": 61,
+          "origin": "defer",
+          "path": "input/http/http_lifecycle_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "closeServer"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "831878d6040c8f6c9b4ee064efd1ad9acf7499c6bd47ac09aaf2ff989be5b2c4",
+          "function": "TestInputParentCancellationStopsOwnedLoop",
+          "identity": "input/http/http_lifecycle_test.go|TestInputParentCancellationStopsOwnedLoop|defer|closeServer|unresolved callback|unknown|1",
+          "line": 88,
+          "origin": "defer",
+          "path": "input/http/http_lifecycle_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "closeServer"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "831878d6040c8f6c9b4ee064efd1ad9acf7499c6bd47ac09aaf2ff989be5b2c4",
+          "function": "TestInputStopDeadlineDoesNotPromiseRejoin",
+          "identity": "input/http/http_lifecycle_test.go|TestInputStopDeadlineDoesNotPromiseRejoin|defer|closeServer|unresolved callback|unknown|1",
+          "line": 110,
+          "origin": "defer",
+          "path": "input/http/http_lifecycle_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "closeServer"
+        }
+      ],
+      "title": "HTTP test server close callbacks"
+    },
+    {
+      "evidence": [
+        "internal/boot/root_resources_test.go:27 \u2014 inProcessClient registers connection.Close after nats.Connect.",
+        "natsclient/client_connect_test.go:118 \u2014 newConnectCandidate registers candidate.Close after nats.Connect.",
+        "go.mod:12 \u2014 github.com/nats-io/nats.go v1.52.0.",
+        "Local gopls definition resolved (*nats.Conn).Close to /Users/coby/go/pkg/mod/github.com/nats-io/nats.go@v1.52.0/nats.go:6042."
+      ],
+      "key": "E",
+      "limits": "A local cache path is supporting evidence, not a portable baseline key. Preserve selected module/symbol binding. No foreign Close completion claim.",
+      "proposed_disposition": "Resolve each callback method value to github.com/nats-io/nats.go.(*Conn).Close and classify outside the admitted context-taking lifecycle Stop contract.",
+      "required_dependencies": [
+        "internal/boot/root_resources_test.go :: inProcessClient",
+        "natsclient/client_connect_test.go :: newConnectCandidate",
+        "Selected github.com/nats-io/nats.go module/version",
+        "Resolved nats.Connect return type and (*Conn).Close symbol"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "d5c1434c6a1ba129affe95c93ae71d36838dacbfad0d613946eafdac402a5df2",
+          "function": "inProcessClient",
+          "identity": "internal/boot/root_resources_test.go|inProcessClient|ordinary|connection.Close|unresolved callback|unknown|1",
+          "line": 27,
+          "origin": "ordinary",
+          "path": "internal/boot/root_resources_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "connection.Close"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "2bf445e936640905a6b7f461246cf37194761d18fa44940a14f1218914e3bd8c",
+          "function": "newConnectCandidate",
+          "identity": "natsclient/client_connect_test.go|newConnectCandidate|ordinary|candidate.Close|unresolved callback|unknown|1",
+          "line": 118,
+          "origin": "ordinary",
+          "path": "natsclient/client_connect_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "candidate.Close"
+        }
+      ],
+      "title": "Native NATS connection close callbacks"
+    },
+    {
+      "evidence": [
+        "pkg/fusion/fusionnats/client_test.go:172 \u2014 newStatusClient registers c.Close.",
+        "pkg/fusion/fusionnats/client.go:64 \u2014 Client.statusWatch is *readiness.Watcher.",
+        "pkg/fusion/fusionnats/client.go:89 \u2014 (*Client).Close detaches the watcher, then invokes watch.Stop at line 104.",
+        "graph/readiness/watcher.go:276 \u2014 (*Watcher).Stop cancels and waits on w.done without a supplied context."
+      ],
+      "key": "F",
+      "limits": "This is not proof of boundedness or leak freedom. Expanding this issue into generic contextless Close/cancel/join contracts would change scope.",
+      "proposed_disposition": "Known contextless owner chain outside the admitted context-taking lifecycle Stop contract; proposed non-lifecycle-stop classification means policy exclusion only.",
+      "required_dependencies": [
+        "pkg/fusion/fusionnats/client_test.go :: newStatusClient",
+        "pkg/fusion/fusionnats/client.go :: Client type and (*Client).Close",
+        "graph/readiness/watcher.go :: Watcher type and (*Watcher).Stop"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "4111353567f6523b745d0071854bdedf0161e953e9eb3770db594cbe4e9a2056",
+          "function": "newStatusClient",
+          "identity": "pkg/fusion/fusionnats/client_test.go|newStatusClient|ordinary|c.Close|unresolved callback|unknown|1",
+          "line": 172,
+          "origin": "ordinary",
+          "path": "pkg/fusion/fusionnats/client_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "c.Close"
+        }
+      ],
+      "title": "Fusion readiness watcher close"
+    },
+    {
+      "evidence": [
+        "processor/agentic-dispatch/http_activity.go:251 \u2014 stopActivityView reads activityCancel and activityDone, cancels, waits on done, then clears fields.",
+        "All four registrations bind a typed *Component method value."
+      ],
+      "key": "G",
+      "limits": "Record the unbounded channel receive as an adjacent remediation gap, without claiming an observed hang. Do not label the helper bounded or broaden this guard into all joins.",
+      "proposed_disposition": "Resolve (*Component).stopActivityView; known contextless helper outside the admitted context-taking lifecycle Stop contract.",
+      "required_dependencies": [
+        "Every enclosing caller declaration listed below",
+        "processor/agentic-dispatch :: Component type, activityCancel and activityDone fields",
+        "processor/agentic-dispatch/http_activity.go :: (*Component).stopActivityView"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "34a3448b877b71fbd186d9faf250f12e5094fae395a6e770bf8c9112d59ba621",
+          "function": "seedCurrentLoops",
+          "identity": "processor/agentic-dispatch/delivery_owner_test.go|seedCurrentLoops|ordinary|c.stopActivityView|unresolved callback|unknown|1",
+          "line": 514,
+          "origin": "ordinary",
+          "path": "processor/agentic-dispatch/delivery_owner_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "c.stopActivityView"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "c3df7f5ab9239700d44a9b1a39edea134b0f995a8f58af4617076755edfd1b1b",
+          "function": "newActivityTestComponent",
+          "identity": "processor/agentic-dispatch/http_activity_test.go|newActivityTestComponent|ordinary|comp.stopActivityView|unresolved callback|unknown|1",
+          "line": 379,
+          "origin": "ordinary",
+          "path": "processor/agentic-dispatch/http_activity_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "comp.stopActivityView"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "c3df7f5ab9239700d44a9b1a39edea134b0f995a8f58af4617076755edfd1b1b",
+          "function": "TestActivityStream_NilNATSClientDegradesPerRequest",
+          "identity": "processor/agentic-dispatch/http_activity_test.go|TestActivityStream_NilNATSClientDegradesPerRequest|ordinary|comp.stopActivityView|unresolved callback|unknown|1",
+          "line": 705,
+          "origin": "ordinary",
+          "path": "processor/agentic-dispatch/http_activity_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "comp.stopActivityView"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "c3df7f5ab9239700d44a9b1a39edea134b0f995a8f58af4617076755edfd1b1b",
+          "function": "TestActivityStreamCoalescesToViewRate",
+          "identity": "processor/agentic-dispatch/http_activity_test.go|TestActivityStreamCoalescesToViewRate|ordinary|comp.stopActivityView|unresolved callback|unknown|1",
+          "line": 898,
+          "origin": "ordinary",
+          "path": "processor/agentic-dispatch/http_activity_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "comp.stopActivityView"
+        }
+      ],
+      "title": "Activity view stop callbacks"
+    },
+    {
+      "evidence": [
+        "processor/graph-index/lifecycle_order_test.go:230 \u2014 newBlockedStopOwner registers watcher.release.",
+        "processor/graph-index/lifecycle_order_test.go:252 \u2014 blockingStopWatcher declaration.",
+        "processor/graph-index/lifecycle_order_test.go:275 \u2014 release calls releaseOnce.Do with a closure closing stopRelease."
+      ],
+      "key": "H",
+      "limits": "Resolve the method body and receiver; do not use its name as an exemption.",
+      "proposed_disposition": "Resolve (*blockingStopWatcher).release; non-lifecycle-stop gate release.",
+      "required_dependencies": [
+        "processor/graph-index/lifecycle_order_test.go :: newBlockedStopOwner",
+        "processor/graph-index/lifecycle_order_test.go :: blockingStopWatcher type and (*blockingStopWatcher).release",
+        "releaseOnce and stopRelease field bindings"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "6f98230c2406af79539281311a3dc3371125a87ac97c2e937c41242d0943dd32",
+          "function": "newBlockedStopOwner",
+          "identity": "processor/graph-index/lifecycle_order_test.go|newBlockedStopOwner|ordinary|watcher.release|unresolved callback|unknown|1",
+          "line": 230,
+          "origin": "ordinary",
+          "path": "processor/graph-index/lifecycle_order_test.go",
+          "reason": "Cleanup callback expression unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "watcher.release"
+        }
+      ],
+      "title": "Explicit release of the blocked-stop test gate"
+    },
+    {
+      "evidence": [
+        "service/startup_observability_test.go:62 \u2014 beginObservedManagerStart registers a cleanup closure; line 67 calls non-nil release.",
+        "The cleanup subsequently waits for start completion using a five-second select and calls manager.StopAll with a newly bounded context. Those operations are separate from the release candidate.",
+        "gopls found four caller sites: service/startup_observability_test.go:584 and :699; service/startup_observability_amendment_test.go:348 and :389.",
+        "Those arguments are closures using sync.Once.Do to close a channel, including local alias composition."
+      ],
+      "key": "I",
+      "limits": "The four argument/caller declarations form part of the finite evidence set; an added unresolved or cleanup-bearing caller must not inherit a name-based approval.",
+      "proposed_disposition": "Substitute the four source-resolved release arguments. Each releases an explicit test gate; proposed non-lifecycle-stop for this callback invocation.",
+      "required_dependencies": [
+        "service/startup_observability_test.go :: beginObservedManagerStart",
+        "Full enclosing caller declarations at service/startup_observability_test.go:584 and :699",
+        "Full enclosing caller declarations at service/startup_observability_amendment_test.go:348 and :389",
+        "Their local release closures, sync.Once bindings, and closed-channel bindings"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "21d4dc64a20205a1e6fc9d54668952c28ac36ad859359bd0884c35b11f375023",
+          "function": "beginObservedManagerStart",
+          "identity": "service/startup_observability_test.go|beginObservedManagerStart|cleanup|release|unresolved callback|unknown|1",
+          "line": 67,
+          "origin": "cleanup",
+          "path": "service/startup_observability_test.go",
+          "reason": "deferred or cleanup callback variable target unresolved",
+          "receiver": "unresolved callback",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "release"
+        }
+      ],
+      "title": "Observed manager start release parameter"
+    },
+    {
+      "evidence": [
+        "agentic/agentrun/agentrun.go:938 \u2014 (*MilestoneSubscriber).Start has named stop func(context.Context) error result.",
+        "agentic/agentrun/agentrun.go:963 \u2014 an owner is created; line 964 assigns stop = owner.stop.",
+        "agentic/agentrun/agentrun.go:845 \u2014 (*milestoneConsumerOwner).stop accepts the supplied context and coordinates consumer/callback shutdown.",
+        "agentic/agentrun/agentrun_integration_test.go:218 \u2014 TestIntegration_MilestoneSubscriberBindsAStreamThatAppearsDuringStart derives its 60-second context, used by deferred stop at :257."
+      ],
+      "key": "J",
+      "limits": "Do not infer callback behavior from the result name. A finite supplied context is not a guarantee that stop returns on time. Newly exposed unbounded variants need exact independent source review.",
+      "proposed_disposition": "Resolve Start return binding to (*milestoneConsumerOwner).stop. The :257 supplied context is finite; refusal :74 is Background-fed; :339, :480, and milestone policy :51 use deadline-free testing.T.Context. The last four are proposed unbounded-terminal-cleanup.",
+      "required_dependencies": [
+        "Each enclosing caller declaration and Start result/context bindings",
+        "agentic/agentrun/agentrun.go :: MilestoneSubscriber type and (*MilestoneSubscriber).Start",
+        "agentic/agentrun/agentrun.go :: milestoneConsumerOwner type and (*milestoneConsumerOwner).stop",
+        "Typed context constructors, and testing.T.Context semantic evidence for the three T.Context calls"
+      ],
+      "sites": [
+        {
+          "applicability": "cleanup-owned",
+          "classification": "uncertain-owner-provenance",
+          "context": "finite",
+          "fingerprint": "d41ba2e9dd90f4389e047f7aae6e20c5016502e3104be7f92bb7a0df3c42eed0",
+          "function": "TestIntegration_MilestoneSubscriberBindsAStreamThatAppearsDuringStart",
+          "identity": "agentic/agentrun/agentrun_integration_test.go|TestIntegration_MilestoneSubscriberBindsAStreamThatAppearsDuringStart|defer|stop|callback|finite|1",
+          "line": 257,
+          "origin": "defer",
+          "path": "agentic/agentrun/agentrun_integration_test.go",
+          "reason": "context-taking cleanup callback target unresolved",
+          "receiver": "callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "stop"
+        },
+        {
+          "applicability": "cleanup-owned",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "7bfae5a91ab7264c004123481d29abc1cbf32a0cbbabcfaa7565605dadb252a1",
+          "function": "TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent",
+          "identity": "agentic/agentrun/agentrun_integration_test.go|TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent|defer|stop|callback|unknown|1",
+          "line": 339,
+          "origin": "defer",
+          "path": "agentic/agentrun/agentrun_integration_test.go",
+          "reason": "context-taking cleanup callback target unresolved",
+          "receiver": "callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "stop"
+        },
+        {
+          "applicability": "cleanup-owned",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "7bfae5a91ab7264c004123481d29abc1cbf32a0cbbabcfaa7565605dadb252a1",
+          "function": "TestIntegration_MilestoneSubscriberProductionEnvelopeCallbacks",
+          "identity": "agentic/agentrun/agentrun_integration_test.go|TestIntegration_MilestoneSubscriberProductionEnvelopeCallbacks|defer|stop|callback|unknown|1",
+          "line": 480,
+          "origin": "defer",
+          "path": "agentic/agentrun/agentrun_integration_test.go",
+          "reason": "context-taking cleanup callback target unresolved",
+          "receiver": "callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "stop"
+        },
+        {
+          "applicability": "cleanup-owned",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "7bfae5a91ab7264c004123481d29abc1cbf32a0cbbabcfaa7565605dadb252a1",
+          "function": "TestIntegration_MilestoneLanesDeclareFiniteMaxDeliver",
+          "identity": "agentic/agentrun/milestone_policy_integration_test.go|TestIntegration_MilestoneLanesDeclareFiniteMaxDeliver|defer|stop|callback|unknown|1",
+          "line": 51,
+          "origin": "defer",
+          "path": "agentic/agentrun/milestone_policy_integration_test.go",
+          "reason": "context-taking cleanup callback target unresolved",
+          "receiver": "callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "stop"
+        },
+        {
+          "applicability": "cleanup-owned",
+          "classification": "uncertain-owner-provenance",
+          "context": "unbounded",
+          "fingerprint": "fdfb32b16454033ac63c45fa32c3e564dbf9d863cccd63fc0c28dd9dc257a81a",
+          "function": "TestIntegration_MilestoneLanesDeclareBufferedRefusal",
+          "identity": "agentic/agentrun/refusal_wiring_integration_test.go|TestIntegration_MilestoneLanesDeclareBufferedRefusal|defer|stop|callback|unbounded|1",
+          "line": 74,
+          "origin": "defer",
+          "path": "agentic/agentrun/refusal_wiring_integration_test.go",
+          "reason": "context-taking cleanup callback target unresolved",
+          "receiver": "callback",
+          "selections": [
+            "integration"
+          ],
+          "target": "stop"
+        }
+      ],
+      "title": "MilestoneSubscriber returned context-taking stop"
+    },
+    {
+      "evidence": [
+        "component/lifecycle_test_suite.go:185 and :233 \u2014 Stop arguments come from immediately preceding five-second context.WithTimeout calls at :184 and :232.",
+        "component/lifecycle_test_suite.go:114 \u2014 testNilStopContext explicitly asserts an error for Stop(nil) at :115.",
+        "component/lifecycle_test_suite.go:36 \u2014 testPortableLifecycleFloor selects named cases including nil Stop at :46; :54 invokes tt.test within t.Run; StandardLifecycleTests is at :20.",
+        "component/lifecycle_test_suite.go:384 \u2014 (*ErrorInjectingComponent).Stop forwards its supplied context at :388 when injectStopError is false.",
+        "component/lifecycle_test_suite.go:392 \u2014 TestErrorInjection constructs wrapper at :427, invokes ordinary operation Stop at :445 and final cleanup at :455."
+      ],
+      "key": "K",
+      "limits": "Do not conflate the deliberate nil contract with wrapper forwarding or label all finalization as deliberate contract. A new cleanup or unresolved caller must remain a separate blocking variant despite any ordinary-only resolution.",
+      "proposed_disposition": "Resolve :185 and :233 as bounded local contexts. Review :115 as an exact deliberate nil-context contract case. For :388 retain uncertain classification unless argument/ownership propagation resolves it; an exact unresolved\u2192ordinary-only disposition is possible only on finite complete caller/branch evidence.",
+      "required_dependencies": [
+        "component/lifecycle_test_suite.go :: testParallelFreshInstances and testNoResourceLeaks, including local context constructors",
+        "For :115: testNilStopContext, testPortableLifecycleFloor table and t.Run dispatch, StandardLifecycleTests",
+        "For :388: ErrorInjectingComponent type, NewErrorInjectingComponent, (*ErrorInjectingComponent).Stop, TestErrorInjection complete table/branch/operation/cleanup path",
+        "component :: LifecycleComponent interface"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "f097d914839f2e69a0b8031eb5fea90d9d52b2d025b0c7b9306279b102383063",
+          "function": "testNilStopContext",
+          "identity": "component/lifecycle_test_suite.go|testNilStopContext|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
+          "line": 115,
+          "origin": "ordinary",
+          "path": "component/lifecycle_test_suite.go",
+          "reason": "context provenance unresolved",
+          "receiver": "github.com/c360studio/semstreams/component.LifecycleComponent",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "github.com/c360studio/semstreams/component.Stop"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "0744290e233da31c1400bfae211f5fa1bd44ad4e73c093e33a26847be1c0e2c0",
+          "function": "testParallelFreshInstances",
+          "identity": "component/lifecycle_test_suite.go|testParallelFreshInstances|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
+          "line": 185,
+          "origin": "ordinary",
+          "path": "component/lifecycle_test_suite.go",
+          "reason": "context provenance unresolved",
+          "receiver": "github.com/c360studio/semstreams/component.LifecycleComponent",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "github.com/c360studio/semstreams/component.Stop"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "0744290e233da31c1400bfae211f5fa1bd44ad4e73c093e33a26847be1c0e2c0",
+          "function": "testNoResourceLeaks",
+          "identity": "component/lifecycle_test_suite.go|testNoResourceLeaks|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
+          "line": 233,
+          "origin": "ordinary",
+          "path": "component/lifecycle_test_suite.go",
+          "reason": "context provenance unresolved",
+          "receiver": "github.com/c360studio/semstreams/component.LifecycleComponent",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "github.com/c360studio/semstreams/component.Stop"
+        },
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "7741631856b0a54e39240b0ce5cd88c36e2cdf61f337e671c4811a46119ebf26",
+          "function": "Stop",
+          "identity": "component/lifecycle_test_suite.go|Stop|ordinary|github.com/c360studio/semstreams/component.Stop|github.com/c360studio/semstreams/component.LifecycleComponent|unknown|1",
+          "line": 388,
+          "origin": "ordinary",
+          "path": "component/lifecycle_test_suite.go",
+          "reason": "context provenance unresolved",
+          "receiver": "github.com/c360studio/semstreams/component.LifecycleComponent",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "github.com/c360studio/semstreams/component.Stop"
+        }
+      ],
+      "title": "Reusable component lifecycle suite"
+    },
+    {
+      "evidence": [
+        "processor/agentic-dispatch/lifecycle_causal_test.go:212 \u2014 cleanup registration includes the stop-not-started fallback c.Stop(t.Context()) at :219."
+      ],
+      "key": "L",
+      "limits": "A context already canceled by testing cleanup order does not establish a finite deadline. The surrounding causal lifecycle test does not make this fallback a deliberate nil/unbounded contract assertion.",
+      "proposed_disposition": "Typed testing.T.Context has no finite deadline; proposed unbounded-terminal-cleanup for this fallback in t.Cleanup.",
+      "required_dependencies": [
+        "processor/agentic-dispatch/lifecycle_causal_test.go :: TestComponentStopCancelsAndJoinsBlockedActivityAcquisition",
+        "Typed *Component.Stop and testing.T.Context bindings",
+        "Testing context semantic evidence below"
+      ],
+      "sites": [
+        {
+          "applicability": "cleanup-owned",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "5b50447bcf73210388eb502687c689f6ca510c775de04d191132e4e5677de697",
+          "function": "TestComponentStopCancelsAndJoinsBlockedActivityAcquisition",
+          "identity": "processor/agentic-dispatch/lifecycle_causal_test.go|TestComponentStopCancelsAndJoinsBlockedActivityAcquisition|cleanup|github.com/c360studio/semstreams/processor/agentic-dispatch.Stop|*github.com/c360studio/semstreams/processor/agentic-dispatch.Component|unknown|1",
+          "line": 219,
+          "origin": "cleanup",
+          "path": "processor/agentic-dispatch/lifecycle_causal_test.go",
+          "reason": "context provenance unresolved",
+          "receiver": "*github.com/c360studio/semstreams/processor/agentic-dispatch.Component",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "github.com/c360studio/semstreams/processor/agentic-dispatch.Stop"
+        }
+      ],
+      "title": "Dispatch fallback using testing context"
+    },
+    {
+      "evidence": [
+        "service/registry_race_test.go:113 \u2014 shutdownTrackingService embeds mockService.",
+        "service/registry_race_test.go:118 \u2014 (*shutdownTrackingService).Stop invokes its callback then forwards ctx to mockService.Stop at :120.",
+        "gopls found its concrete creation at service/registry_race_test.go:261 in TestServiceManager_ReverseOrderShutdown (:247).",
+        "That test registers the wrapped factory, creates/starts services, then calls manager.StopAll(context.Background()) at :280 to assert reverse shutdown order.",
+        "service/service_manager.go:886 \u2014 service.Stop(ctx) is the production dispatch boundary reached from StopAll."
+      ],
+      "key": "M",
+      "limits": "The two Stop declarations require receiver qualification. No blanket mock-service exemption. A new cleanup/unresolved caller must not be masked by this exact ordinary-only record.",
+      "proposed_disposition": "Proposed exact ordinary-only ownership disposition with uncertain context classification retained, if independent review confirms the finite registration/dispatch/caller evidence. Otherwise remain blocking.",
+      "required_dependencies": [
+        "service/registry_race_test.go :: shutdownTrackingService type and (*shutdownTrackingService).Stop",
+        "service/registry_race_test.go :: mockService type and (*mockService).Stop",
+        "service/registry_race_test.go :: TestServiceManager_ReverseOrderShutdown including factory registration, CreateService, Start, StopAll, assertions",
+        "service/service_manager.go :: enclosing StopAll/stop-all dispatch declarations and service interface binding"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unknown",
+          "fingerprint": "cff4448ce6c68e89b1b039d58d4326c75cc3ad06ab5b93a76ffdc6630860c8a7",
+          "function": "Stop",
+          "identity": "service/registry_race_test.go|Stop|ordinary|github.com/c360studio/semstreams/service.Stop|*github.com/c360studio/semstreams/service.mockService|unknown|1",
+          "line": 120,
+          "origin": "ordinary",
+          "path": "service/registry_race_test.go",
+          "reason": "context provenance unresolved",
+          "receiver": "*github.com/c360studio/semstreams/service.mockService",
+          "selections": [
+            "default",
+            "integration",
+            "live_llm"
+          ],
+          "target": "github.com/c360studio/semstreams/service.Stop"
+        }
+      ],
+      "title": "Service shutdown tracking forwarding method"
+    },
+    {
+      "evidence": [
+        "service/suite_integration_test.go:54 \u2014 TestServiceSuite calls suite.Run(t, new(ServiceSuite)) at :56.",
+        "service/suite_integration_test.go:125 \u2014 (*ServiceSuite).TestService_LifecycleSuite stops its BaseService between running/stopped lifecycle assertions.",
+        "The selected github.com/stretchr/testify v1.11.1 suite.Run implementation begins at local suite/suite.go:126, enumerates Test-prefixed methods around :154, creates a test invocation around :164 and invokes method.Func.Call at :196."
+      ],
+      "key": "N",
+      "limits": "Exact reflection-backed evidence is finite here. Unknown dispatch without defensible finite dependencies stays blocking. This is not permission to mark every Test-prefixed method ordinary.",
+      "proposed_disposition": "Proposed exact ordinary-only ownership disposition with current uncertain classification retained; an exact deliberate contract classification is optional only if its intent is independently established. Do not add generic reflection analysis.",
+      "required_dependencies": [
+        "service/suite_integration_test.go :: ServiceSuite type, TestServiceSuite, (*ServiceSuite).TestService_LifecycleSuite",
+        "Typed BaseService and Stop binding",
+        "Selected github.com/stretchr/testify module/version and suite.Run symbol/dispatch evidence"
+      ],
+      "sites": [
+        {
+          "applicability": "unresolved",
+          "classification": "uncertain-owner-provenance",
+          "context": "unbounded",
+          "fingerprint": "6f32e799e3e28cf177f592d044f129babfc5f8b7df801784e674ae07c67823e6",
+          "function": "TestService_LifecycleSuite",
+          "identity": "service/suite_integration_test.go|TestService_LifecycleSuite|ordinary|github.com/c360studio/semstreams/service.Stop|*github.com/c360studio/semstreams/service.BaseService|unbounded|1",
+          "line": 125,
+          "origin": "ordinary",
+          "path": "service/suite_integration_test.go",
+          "reason": "ordinary unbounded lifecycle call requires exact intent review",
+          "receiver": "*github.com/c360studio/semstreams/service.BaseService",
+          "selections": [
+            "integration"
+          ],
+          "target": "github.com/c360studio/semstreams/service.Stop"
+        }
+      ],
+      "title": "Testify suite lifecycle assertion"
+    }
+  ],
+  "repository": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams",
+  "source_snapshots": [
+    {
+      "head_sha256": "032f153c3909a1aadbd086debff5752ba8323223751220a2a036f75268843352",
+      "matches_head": true,
+      "path": "agentic/agentrun/agentrun.go",
+      "worktree_sha256": "032f153c3909a1aadbd086debff5752ba8323223751220a2a036f75268843352"
+    },
+    {
+      "head_sha256": "4ca6a48b18fbf0f041c8df0a133bc4939446e94276caf2caea88f363ce31e33e",
+      "matches_head": true,
+      "path": "agentic/agentrun/agentrun_integration_test.go",
+      "worktree_sha256": "4ca6a48b18fbf0f041c8df0a133bc4939446e94276caf2caea88f363ce31e33e"
+    },
+    {
+      "head_sha256": "b51f597918545a8ac82662e264efb3caeecdadd3fdfa405b3f148621c5124449",
+      "matches_head": true,
+      "path": "agentic/agentrun/milestone_policy_integration_test.go",
+      "worktree_sha256": "b51f597918545a8ac82662e264efb3caeecdadd3fdfa405b3f148621c5124449"
+    },
+    {
+      "head_sha256": "3ec2432addf1c8351ee932e40951685b3c1c8587f0bbacac884d625643ba2276",
+      "matches_head": true,
+      "path": "agentic/agentrun/refusal_wiring_integration_test.go",
+      "worktree_sha256": "3ec2432addf1c8351ee932e40951685b3c1c8587f0bbacac884d625643ba2276"
+    },
+    {
+      "head_sha256": "42bba6807fd871ea5a964a5de405bd66ded52a02078d49ee148a297178935f5f",
+      "matches_head": true,
+      "path": "component/lifecycle.go",
+      "worktree_sha256": "42bba6807fd871ea5a964a5de405bd66ded52a02078d49ee148a297178935f5f"
+    },
+    {
+      "head_sha256": "da21a4b65040b55a206c5289d986ed612c9cda1d6ec3d0e56079388691547d89",
+      "matches_head": true,
+      "path": "component/lifecycle_test_suite.go",
+      "worktree_sha256": "da21a4b65040b55a206c5289d986ed612c9cda1d6ec3d0e56079388691547d89"
+    },
+    {
+      "head_sha256": "5c5604facfe641eed2f0b47c78839dfce1721a769b8227c3792600a68a823062",
+      "matches_head": true,
+      "path": "go.mod",
+      "worktree_sha256": "5c5604facfe641eed2f0b47c78839dfce1721a769b8227c3792600a68a823062"
+    },
+    {
+      "head_sha256": "985abddcf6c6d380b46c2927eaf6ab14d5d0c0b0eb7f0fb56ed9c301cef62209",
+      "matches_head": true,
+      "path": "graph/readiness/watcher.go",
+      "worktree_sha256": "985abddcf6c6d380b46c2927eaf6ab14d5d0c0b0eb7f0fb56ed9c301cef62209"
+    },
+    {
+      "head_sha256": "67c78b1e2970272880efd126bd25389c34d1f02b550dcbf8125bfce005db78ed",
+      "matches_head": true,
+      "path": "input/http/http_lifecycle_test.go",
+      "worktree_sha256": "67c78b1e2970272880efd126bd25389c34d1f02b550dcbf8125bfce005db78ed"
+    },
+    {
+      "head_sha256": "1e26c56f91aac2c54264944f6975e62960adf886099a8577233b1670ec088774",
+      "matches_head": true,
+      "path": "internal/boot/root_resources_test.go",
+      "worktree_sha256": "1e26c56f91aac2c54264944f6975e62960adf886099a8577233b1670ec088774"
+    },
+    {
+      "head_sha256": "2b5beb9b2b6115dde43fc6dffba46217db1a833cc5d8c396fc6abaaa2bf63db6",
+      "matches_head": true,
+      "path": "natsclient/client_connect_test.go",
+      "worktree_sha256": "2b5beb9b2b6115dde43fc6dffba46217db1a833cc5d8c396fc6abaaa2bf63db6"
+    },
+    {
+      "head_sha256": "c592e6ea135f7cd49c7d4a3b3b5da33c666f1c1430f0f7c58c3252168f2a371f",
+      "matches_head": true,
+      "path": "pkg/fusion/fusionnats/client.go",
+      "worktree_sha256": "c592e6ea135f7cd49c7d4a3b3b5da33c666f1c1430f0f7c58c3252168f2a371f"
+    },
+    {
+      "head_sha256": "c3a340d9dcac0d4b934ab9b92f3e208356775c0e87b51021ae5092079c97595d",
+      "matches_head": true,
+      "path": "pkg/fusion/fusionnats/client_test.go",
+      "worktree_sha256": "c3a340d9dcac0d4b934ab9b92f3e208356775c0e87b51021ae5092079c97595d"
+    },
+    {
+      "head_sha256": "e124af6836e3ffbe0b0d6fc365ce8789f127b7628b8bb38e042749d8c9eb69b0",
+      "matches_head": true,
+      "path": "pkg/fusion/fusionvocab/signals_test.go",
+      "worktree_sha256": "e124af6836e3ffbe0b0d6fc365ce8789f127b7628b8bb38e042749d8c9eb69b0"
+    },
+    {
+      "head_sha256": "fdc42980591a3b564edab7811d4d37510049c793be4fc91f987580377e5a97bc",
+      "matches_head": true,
+      "path": "pkg/projection/contract/contract_test.go",
+      "worktree_sha256": "fdc42980591a3b564edab7811d4d37510049c793be4fc91f987580377e5a97bc"
+    },
+    {
+      "head_sha256": "18b470b4d7836320cbedab37965e6fe00c7808c60168040d76d5b831120b8ced",
+      "matches_head": true,
+      "path": "pkg/projection/contract_test.go",
+      "worktree_sha256": "18b470b4d7836320cbedab37965e6fe00c7808c60168040d76d5b831120b8ced"
+    },
+    {
+      "head_sha256": "0b442a7e96b0beefee5dcf94739a03cf3a0a38654c1c9c0ad515bdab873c8698",
+      "matches_head": true,
+      "path": "pkg/projection/mutation_client_test.go",
+      "worktree_sha256": "0b442a7e96b0beefee5dcf94739a03cf3a0a38654c1c9c0ad515bdab873c8698"
+    },
+    {
+      "head_sha256": "3f0b20ecc6f14677bc76d467984653c6feaefa4f302af193edca68cc393b242b",
+      "matches_head": true,
+      "path": "pkg/tlsutil/tlsutil_test.go",
+      "worktree_sha256": "3f0b20ecc6f14677bc76d467984653c6feaefa4f302af193edca68cc393b242b"
+    },
+    {
+      "head_sha256": "761801ab27799a56604467587bb3bd83c0f8055effa9692dd85615cb655e298f",
+      "matches_head": true,
+      "path": "processor/agentic-dispatch/delivery_owner_test.go",
+      "worktree_sha256": "761801ab27799a56604467587bb3bd83c0f8055effa9692dd85615cb655e298f"
+    },
+    {
+      "head_sha256": "24943fc44c7e38c9c3074274f77d5cb864fc3a38f6927a08749a66aecf3b2afe",
+      "matches_head": true,
+      "path": "processor/agentic-dispatch/http_activity.go",
+      "worktree_sha256": "24943fc44c7e38c9c3074274f77d5cb864fc3a38f6927a08749a66aecf3b2afe"
+    },
+    {
+      "head_sha256": "571271659d6b88b871ae2f675ee55a56924ed4457948a09c3b2f1ebf6ef14d23",
+      "matches_head": true,
+      "path": "processor/agentic-dispatch/http_activity_test.go",
+      "worktree_sha256": "571271659d6b88b871ae2f675ee55a56924ed4457948a09c3b2f1ebf6ef14d23"
+    },
+    {
+      "head_sha256": "33602268a886996a9052b153f1c89c6b71ce50077d6344e954346c15bb0165db",
+      "matches_head": true,
+      "path": "processor/agentic-dispatch/lifecycle_causal_test.go",
+      "worktree_sha256": "33602268a886996a9052b153f1c89c6b71ce50077d6344e954346c15bb0165db"
+    },
+    {
+      "head_sha256": "21bbb25cf02d1bdc3c30b5bae966c99a8ba0abfd14e3d7840dd4f9b6970036cf",
+      "matches_head": true,
+      "path": "processor/graph-index/component.go",
+      "worktree_sha256": "21bbb25cf02d1bdc3c30b5bae966c99a8ba0abfd14e3d7840dd4f9b6970036cf"
+    },
+    {
+      "head_sha256": "07a0610e3d60832cd9da159f34bf58edd12497e1c18acae9d12afe585416741c",
+      "matches_head": true,
+      "path": "processor/graph-index/lifecycle_order_test.go",
+      "worktree_sha256": "07a0610e3d60832cd9da159f34bf58edd12497e1c18acae9d12afe585416741c"
+    },
+    {
+      "head_sha256": "cdc1f5b95d66c19a25c83cd6423eeab9dc2c09588050c6dc37a452e31eace9b8",
+      "matches_head": true,
+      "path": "processor/graph-index/query_integration_test.go",
+      "worktree_sha256": "cdc1f5b95d66c19a25c83cd6423eeab9dc2c09588050c6dc37a452e31eace9b8"
+    },
+    {
+      "head_sha256": "8c103c0a44d657991fe0fb1ac3a703f093505ae7558496a865b7c71e2030ddfd",
+      "matches_head": true,
+      "path": "service/registry_race_test.go",
+      "worktree_sha256": "8c103c0a44d657991fe0fb1ac3a703f093505ae7558496a865b7c71e2030ddfd"
+    },
+    {
+      "head_sha256": "61f263462084783d1dd8baac87f99bb5254444a729849424ef5a35d25e26805d",
+      "matches_head": true,
+      "path": "service/service_manager.go",
+      "worktree_sha256": "61f263462084783d1dd8baac87f99bb5254444a729849424ef5a35d25e26805d"
+    },
+    {
+      "head_sha256": "4a06fa7252bf86153ae869cdd5f81e4132e2c6ea360096248a5bd95c1dd2a207",
+      "matches_head": true,
+      "path": "service/startup_observability_amendment_test.go",
+      "worktree_sha256": "4a06fa7252bf86153ae869cdd5f81e4132e2c6ea360096248a5bd95c1dd2a207"
+    },
+    {
+      "head_sha256": "3666efe40ac5eb156acdfaf2472b087ca77042b030bcf7f272fe2be5ce383294",
+      "matches_head": true,
+      "path": "service/startup_observability_test.go",
+      "worktree_sha256": "3666efe40ac5eb156acdfaf2472b087ca77042b030bcf7f272fe2be5ce383294"
+    },
+    {
+      "head_sha256": "afa58429632a2ed7486a0c8ae3757828d62f8c7ca2d115bd88dcfa817f13a71f",
+      "matches_head": true,
+      "path": "service/suite_integration_test.go",
+      "worktree_sha256": "afa58429632a2ed7486a0c8ae3757828d62f8c7ca2d115bd88dcfa817f13a71f"
+    },
+    {
+      "head_sha256": "54c0ba20c7603f18756a21679417759198208598370e0713c56a19b939f0eb62",
+      "matches_head": true,
+      "path": "test/contract/predicate_datatype_contract_test.go",
+      "worktree_sha256": "54c0ba20c7603f18756a21679417759198208598370e0713c56a19b939f0eb62"
+    },
+    {
+      "head_sha256": "105c913758d51341e74f6f6a014ca779c815b26868cc222530063c41b15fbf23",
+      "matches_head": true,
+      "path": "test/e2e/scenarios/lessons/scenario_test.go",
+      "worktree_sha256": "105c913758d51341e74f6f6a014ca779c815b26868cc222530063c41b15fbf23"
+    },
+    {
+      "head_sha256": "33d310267693dc0c31cd6811766fa834c098d9d3516a3044ee0efc1b9a6ea606",
+      "matches_head": true,
+      "path": "vocabulary/builtins/register_test.go",
+      "worktree_sha256": "33d310267693dc0c31cd6811766fa834c098d9d3516a3044ee0efc1b9a6ea606"
+    },
+    {
+      "head_sha256": "0490a805ddfb415ac8280079edd5bdc7349031cae8331ee88fa9da325ac3187f",
+      "matches_head": true,
+      "path": "vocabulary/registry.go",
+      "worktree_sha256": "0490a805ddfb415ac8280079edd5bdc7349031cae8331ee88fa9da325ac3187f"
+    }
+  ],
+  "status": "PROPOSED TRIAGE ONLY \u2014 NO BASELINE ENTRY APPROVAL"
+}

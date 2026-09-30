@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	semconfig "github.com/c360studio/semstreams/config"
 )
 
 // Tier variant names as the scenarios and the compose profiles spell them.
@@ -39,6 +41,12 @@ var tierAuthorityStem = map[string]string{
 // stack actually starts, and a STEM rather than the effective pair.
 const CoreAuthorityStem = "c360.streamkit-pure"
 
+// CrudToolsAuthorityStem is the authority configs/flows/crud-tools-test.json
+// DECLARES — the config docker/compose/crud-tools.yml boots. The crud-tools
+// scenario derives its rules bucket from it (#1188), and
+// TestCrudToolsAuthorityMatchesShippedConfig keeps it equal to that config.
+const CrudToolsAuthorityStem = "c360.crud-tools"
+
 // TierAuthorityStem returns the authority prefix (org.platform) a tier variant's
 // configuration declares, before the ADR-104 suffix is minted onto it. An
 // unknown variant panics rather than returning a plausible default: an entity ID
@@ -61,10 +69,21 @@ func TierStemEntityID(variant, suffix string) string {
 	return TierAuthorityStem(variant) + "." + suffix
 }
 
+// PlatformIdentityBucket returns the configuration bucket of the deployment
+// whose configuration DECLARES the given org.platform. Since #1188 each
+// declared pair names its own bucket, "semstreams_config_<org>_<stem>"; the
+// name comes from the framework's one derivation, config.BucketName, never
+// from a second spelling here. The declared pair is what a scenario already
+// holds (CoreAuthorityStem, TierAuthorityStem), so no knob is needed.
+func PlatformIdentityBucket(declared string) (string, error) {
+	org, stem, ok := strings.Cut(declared, ".")
+	if !ok || org == "" || stem == "" {
+		return "", fmt.Errorf("e2e config: declared authority %q is not org.platform", declared)
+	}
+	return semconfig.BucketName(org, stem)
+}
+
 const (
-	// PlatformIdentityBucket is the shared configuration bucket every sem* app
-	// on one NATS server uses.
-	PlatformIdentityBucket = "semstreams_config"
 	// PlatformIdentityKey holds the deployment's durable platform identity.
 	// Reading it is the ADR-104 cross-repo contract: an adopter observes the
 	// pair a deployment mints under instead of predicting it from a config file.
@@ -106,22 +125,26 @@ func EffectiveAuthority(ctx context.Context, reader AuthorityReader, declaredSte
 	if !ok || org == "" || stem == "" {
 		return "", fmt.Errorf("e2e config: declared authority %q is not org.platform", declaredStem)
 	}
+	bucket, err := PlatformIdentityBucket(declaredStem)
+	if err != nil {
+		return "", err
+	}
 
-	raw, err := reader.GetKV(ctx, PlatformIdentityBucket, PlatformIdentityKey)
+	raw, err := reader.GetKV(ctx, bucket, PlatformIdentityKey)
 	if err != nil {
 		return "", fmt.Errorf(
 			"e2e config: read %s/%s, where the deployment records the authority it mints under (ADR-104): %w",
-			PlatformIdentityBucket, PlatformIdentityKey, err,
+			bucket, PlatformIdentityKey, err,
 		)
 	}
 	var record platformIdentityRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return "", fmt.Errorf("e2e config: parse %s/%s: %w", PlatformIdentityBucket, PlatformIdentityKey, err)
+		return "", fmt.Errorf("e2e config: parse %s/%s: %w", bucket, PlatformIdentityKey, err)
 	}
 	if record.Org == "" || record.ID == "" {
 		return "", fmt.Errorf(
 			"e2e config: %s/%s is incomplete (org=%q stem=%q id=%q)",
-			PlatformIdentityBucket, PlatformIdentityKey, record.Org, record.Stem, record.ID,
+			bucket, PlatformIdentityKey, record.Org, record.Stem, record.ID,
 		)
 	}
 	if record.Org != org || record.Stem != stem {

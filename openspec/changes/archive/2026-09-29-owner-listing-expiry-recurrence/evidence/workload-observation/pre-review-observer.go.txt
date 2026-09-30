@@ -1,0 +1,618 @@
+//go:build integration
+
+package graphindex
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go/jetstream"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const ownerLoadObservationCapacity = 5
+const ownerLoadStackLimit = 64 << 10
+
+type ownerLoadAttempt struct {
+	repetition                                                                                    int
+	filter                                                                                        string
+	operationEntry, constructionEntry, constructionReturn, stopEntry, stopReturn, operationReturn time.Time
+	childDeadline                                                                                 time.Time
+	constructionErr, stopErr, operationErr                                                        error
+	keyCount                                                                                      int
+	nilKeys, deadlineErr, canceledErr                                                             bool
+	callbackStart, snapshotStart, snapshotEnd                                                     time.Time
+	childErr, childCause                                                                          error
+	phaseBefore, phaseAfter                                                                       string
+	returnBefore, returnAfter                                                                     bool
+	stack                                                                                         string
+	stackTruncated                                                                                bool
+	callbackJoined                                                                                bool
+}
+
+func (a ownerLoadAttempt) phase() string {
+	switch {
+	case !a.operationReturn.IsZero():
+		return "returned"
+	case !a.stopEntry.IsZero() && a.stopReturn.IsZero():
+		return "stopping"
+	case !a.constructionReturn.IsZero() && a.constructionErr == nil:
+		return "collecting"
+	case !a.constructionEntry.IsZero() && a.constructionReturn.IsZero():
+		return "constructing"
+	case !a.operationEntry.IsZero():
+		return "entered_without_observed_return"
+	default:
+		return "not_entered"
+	}
+}
+
+func (a ownerLoadAttempt) snapshotOrder() string {
+	if a.snapshotStart.IsZero() || a.snapshotEnd.IsZero() {
+		return "unknown/incomplete"
+	}
+	switch {
+	case a.returnBefore && a.returnAfter:
+		return "after_return_marker"
+	case !a.returnBefore && a.returnAfter:
+		return "straddling_return_marker"
+	case !a.returnBefore && !a.returnAfter:
+		return "before_return_marker"
+	default:
+		return "unknown/incomplete"
+	}
+}
+
+func (a ownerLoadAttempt) constructionState() string {
+	if a.constructionEntry.IsZero() {
+		return "not_entered"
+	}
+	if a.constructionReturn.IsZero() {
+		return "entered_without_observed_return"
+	}
+	return "returned"
+}
+func (a ownerLoadAttempt) stopState() string {
+	if a.constructionReturn.IsZero() || a.constructionErr != nil {
+		return "not_applicable"
+	}
+	if a.stopEntry.IsZero() {
+		return "not_entered"
+	}
+	if a.stopReturn.IsZero() {
+		return "entered_without_observed_return"
+	}
+	return "returned"
+}
+
+type ownerLoadObserver struct {
+	mu             sync.Mutex
+	records        [ownerLoadObservationCapacity]ownerLoadAttempt
+	next, active   int
+	issues         []error
+	callbackStop   func() bool
+	callbackDone   chan struct{}
+	capture        func([]byte) int // tests may hold this boundary with channels; production uses runtime.Stack.
+	beforeSnapshot func()           // test-only ordering hook; nil in the harness.
+}
+
+func newOwnerLoadObserver() *ownerLoadObserver { return &ownerLoadObserver{active: -1} }
+
+func (o *ownerLoadObserver) begin(repetition int, filter string, at time.Time) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.active >= 0 || repetition != o.next || repetition >= len(o.records) {
+		err := fmt.Errorf("owner-load observer admission: active=%d repetition=%d next=%d", o.active, repetition, o.next)
+		o.issues = append(o.issues, err)
+		return err
+	}
+	o.records[repetition] = ownerLoadAttempt{repetition: repetition, filter: filter, operationEntry: at}
+	o.active = repetition
+	o.next++
+	o.callbackStop, o.callbackDone = nil, nil
+	return nil
+}
+
+func (o *ownerLoadObserver) operationReturned(at time.Time, keys []string, err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.active < 0 {
+		o.issues = append(o.issues, errors.New("operation return without active observation"))
+		return
+	}
+	rec := &o.records[o.active]
+	rec.operationReturn, rec.keyCount, rec.nilKeys, rec.operationErr = at, len(keys), keys == nil, err
+	rec.deadlineErr, rec.canceledErr = errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled)
+}
+
+func (o *ownerLoadObserver) finish(parent context.Context) error {
+	terminal, cancel := context.WithTimeout(context.WithoutCancel(parent), ownerLoadTerminalBudget)
+	defer cancel()
+	return o.finishWithTerminal(terminal)
+}
+
+func (o *ownerLoadObserver) finishWithTerminal(terminal context.Context) error {
+	o.mu.Lock()
+	idx, stop, done := o.active, o.callbackStop, o.callbackDone
+	o.mu.Unlock()
+	if idx < 0 {
+		return errors.New("observer finish without active attempt")
+	}
+	if stop != nil && !stop() {
+		var err error
+		select {
+		case <-done:
+		case <-terminal.Done():
+			err = fmt.Errorf("terminal join deadline: unresolved owner-load deadline callback: %w", terminal.Err())
+		}
+		if err != nil {
+			o.mu.Lock()
+			o.issues = append(o.issues, err)
+			o.mu.Unlock()
+			return err // No next admission while callback ownership is unresolved.
+		}
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	rec := &o.records[idx]
+	rec.callbackJoined = true
+	if rec.constructionEntry.IsZero() {
+		o.issues = append(o.issues, fmt.Errorf("attempt %d missed native construction", idx))
+	}
+	if rec.operationReturn.IsZero() {
+		o.issues = append(o.issues, fmt.Errorf("attempt %d missed operation return", idx))
+	}
+	if !rec.constructionReturn.IsZero() && rec.constructionErr == nil && rec.stopReturn.IsZero() {
+		o.issues = append(o.issues, fmt.Errorf("attempt %d constructed lister without delegated Stop return", idx))
+	}
+	o.active = -1
+	return errors.Join(o.issues...)
+}
+
+func (o *ownerLoadObserver) snapshot() ([]ownerLoadAttempt, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	records := make([]ownerLoadAttempt, o.next)
+	copy(records, o.records[:o.next])
+	return records, errors.Join(o.issues...)
+}
+
+func ownerLoadObservationScope(o *ownerLoadObserver, publish func([]ownerLoadAttempt, error), body func()) {
+	if o == nil {
+		body()
+		return
+	}
+	defer func() { records, err := o.snapshot(); publish(records, err) }()
+	body()
+}
+
+type ownerLoadObservedBucket struct {
+	jetstream.KeyValue
+	observer *ownerLoadObserver
+}
+
+func (b *ownerLoadObservedBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+	o := b.observer
+	o.mu.Lock()
+	idx := o.active
+	if idx >= 0 {
+		rec := &o.records[idx]
+		if len(filters) != 1 || filters[0] != rec.filter || !rec.constructionEntry.IsZero() {
+			o.issues = append(o.issues, fmt.Errorf("attempt %d construction association mismatch: filters=%q", idx, filters))
+			idx = -1
+		} else {
+			rec.constructionEntry = time.Now()
+			rec.childDeadline, _ = ctx.Deadline()
+		}
+	}
+	o.mu.Unlock()
+	if idx < 0 {
+		return b.KeyValue.ListKeysFiltered(ctx, filters...)
+	}
+
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { o.captureDeadline(ctx, idx, done) })
+	o.mu.Lock()
+	o.callbackStop, o.callbackDone = stop, done
+	o.mu.Unlock()
+
+	native, err := b.KeyValue.ListKeysFiltered(ctx, filters...)
+	o.mu.Lock()
+	rec := &o.records[idx]
+	rec.constructionReturn, rec.constructionErr = time.Now(), err
+	o.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &ownerLoadObservedLister{KeyLister: native, observer: o, idx: idx}, nil
+}
+
+func (o *ownerLoadObserver) captureDeadline(ctx context.Context, idx int, done chan struct{}) {
+	defer close(done)
+	start := time.Now()
+	childErr := ctx.Err()
+	if !errors.Is(childErr, context.DeadlineExceeded) {
+		return
+	}
+	o.mu.Lock()
+	rec := &o.records[idx]
+	rec.callbackStart, rec.childErr, rec.childCause = start, childErr, context.Cause(ctx)
+	o.mu.Unlock()
+	if o.beforeSnapshot != nil {
+		o.beforeSnapshot()
+	}
+	o.mu.Lock()
+	rec.snapshotStart = time.Now()
+	rec.phaseBefore, rec.returnBefore = rec.phase(), !rec.operationReturn.IsZero()
+	o.mu.Unlock()
+	buf := make([]byte, ownerLoadStackLimit)
+	capture := o.capture
+	if capture == nil {
+		capture = func(dst []byte) int { return runtime.Stack(dst, true) }
+	}
+	n := capture(buf) // No recorder lock, I/O, testing call, or listing wait during capture.
+	if n > len(buf) {
+		n = len(buf)
+	}
+	end := time.Now()
+	o.mu.Lock()
+	rec.snapshotEnd, rec.phaseAfter, rec.returnAfter = end, rec.phase(), !rec.operationReturn.IsZero()
+	rec.stack, rec.stackTruncated = string(buf[:n]), n == len(buf)
+	o.mu.Unlock()
+}
+
+type ownerLoadObservedLister struct {
+	jetstream.KeyLister // Embedded Keys returns the identical native channel.
+	observer            *ownerLoadObserver
+	idx                 int
+}
+
+func (l *ownerLoadObservedLister) Stop() error {
+	l.observer.mu.Lock()
+	l.observer.records[l.idx].stopEntry = time.Now()
+	l.observer.mu.Unlock()
+	err := l.KeyLister.Stop() // Production alone invokes this synchronously; preserve its error.
+	l.observer.mu.Lock()
+	rec := &l.observer.records[l.idx]
+	rec.stopReturn, rec.stopErr = time.Now(), err
+	l.observer.mu.Unlock()
+	return err
+}
+
+func ownerLoadObservationOffset(start, end time.Time, absent string) string {
+	if start.IsZero() || end.IsZero() {
+		return absent
+	}
+	return end.Sub(start).String()
+}
+
+func ownerLoadObservationTimestamp(at time.Time, absent string) string {
+	if at.IsZero() {
+		return absent
+	}
+	return at.Format(time.RFC3339Nano)
+}
+
+func formatOwnerLoadAttempt(a ownerLoadAttempt) string {
+	return fmt.Sprintf("repetition=%d operation=%s construction=%s construction_from_entry=%s construction_duration=%s child_deadline=%s construction_error=%v collection_to_stop=%s stop=%s stop_duration=%s stop_error=%v return_from_entry=%s keys=%d nil_keys=%t operation_error=%v deadline_error=%t canceled_error=%t callback_joined=%t snapshot_order=%s callback_start=%s snapshot_start=%s snapshot_end=%s child_error=%v child_cause=%v phase_before=%s phase_after=%s return_before=%t return_after=%t stack_truncated=%t\n%s",
+		a.repetition, a.phase(), a.constructionState(),
+		ownerLoadObservationOffset(a.operationEntry, a.constructionEntry, "not_entered"),
+		ownerLoadObservationOffset(a.constructionEntry, a.constructionReturn, "not_entered"),
+		ownerLoadObservationTimestamp(a.childDeadline, "not_entered"), a.constructionErr,
+		ownerLoadObservationOffset(a.constructionReturn, a.stopEntry, "not_applicable"),
+		a.stopState(), ownerLoadObservationOffset(a.stopEntry, a.stopReturn, "not_entered"), a.stopErr,
+		ownerLoadObservationOffset(a.operationEntry, a.operationReturn, "entered_without_observed_return"),
+		a.keyCount, a.nilKeys, a.operationErr, a.deadlineErr, a.canceledErr, a.callbackJoined,
+		a.snapshotOrder(), ownerLoadObservationTimestamp(a.callbackStart, "not_applicable"),
+		ownerLoadObservationTimestamp(a.snapshotStart, "not_applicable"), ownerLoadObservationTimestamp(a.snapshotEnd, "not_applicable"),
+		a.childErr, a.childCause, a.phaseBefore, a.phaseAfter, a.returnBefore, a.returnAfter,
+		a.stackTruncated, a.stack)
+}
+
+type ownerLoadFakeLister struct {
+	keys    <-chan string
+	stopErr error
+	stops   int
+}
+
+func (l *ownerLoadFakeLister) Keys() <-chan string { return l.keys }
+func (l *ownerLoadFakeLister) Stop() error         { l.stops++; return l.stopErr }
+
+type ownerLoadFakeBucket struct {
+	jetstream.KeyValue
+	gotCtx     context.Context
+	gotFilters []string
+	calls      int
+	lister     jetstream.KeyLister
+	err        error
+	makeLister func() jetstream.KeyLister
+}
+
+func (b *ownerLoadFakeBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+	b.gotCtx, b.gotFilters = ctx, append([]string(nil), filters...)
+	b.calls++
+	if b.err != nil {
+		return nil, b.err
+	}
+	if b.makeLister != nil {
+		return b.makeLister(), nil
+	}
+	return b.lister, nil
+}
+func ownerLoadClosedKeys(keys ...string) <-chan string {
+	ch := make(chan string, len(keys))
+	for _, key := range keys {
+		ch <- key
+	}
+	close(ch)
+	return ch
+}
+
+func TestOwnerLoadObserverTransparentSuccess(t *testing.T) {
+	stopErr := errors.New("native Stop result")
+	native := &ownerLoadFakeLister{keys: ownerLoadClosedKeys("diag.one"), stopErr: stopErr}
+	raw := &ownerLoadFakeBucket{lister: native}
+	observer := newOwnerLoadObserver()
+	decorator := &ownerLoadObservedBucket{KeyValue: raw, observer: observer}
+	caller := t.Context()
+	require.NoError(t, observer.begin(0, "diag.>", time.Now()))
+	store := (&natsclient.Client{}).NewKVStore(decorator)
+	keys, err := store.KeysByFilter(caller, "diag.>")
+	observer.operationReturned(time.Now(), keys, err)
+	require.NoError(t, observer.finish(caller))
+	require.NoError(t, err)
+	require.Equal(t, []string{"diag.one"}, keys)
+	require.Equal(t, 1, raw.calls)
+	require.Equal(t, []string{"diag.>"}, raw.gotFilters)
+	require.NotSame(t, caller, raw.gotCtx)
+	deadline, ok := raw.gotCtx.Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now().Add(natsclient.DefaultKVOptions().Timeout), deadline, time.Second)
+	require.Equal(t, 1, native.stops)
+	records, integrity := observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 1)
+	require.ErrorIs(t, records[0].stopErr, stopErr)
+	require.Equal(t, "returned", records[0].constructionState())
+	require.Equal(t, "returned", records[0].stopState())
+	require.True(t, records[0].callbackJoined)
+
+	// Embedding must expose the exact native channel; this separate direct call
+	// checks identity without replacing the production collector's ownership.
+	second := newOwnerLoadObserver()
+	require.NoError(t, second.begin(0, "diag.>", time.Now()))
+	secondDecorator := &ownerLoadObservedBucket{KeyValue: raw, observer: second}
+	lister, err := secondDecorator.ListKeysFiltered(caller, "diag.>")
+	require.NoError(t, err)
+	require.Equal(t, native.keys, lister.Keys())
+	require.ErrorIs(t, lister.Stop(), stopErr)
+	second.operationReturned(time.Now(), nil, nil)
+	require.NoError(t, second.finish(caller))
+}
+
+func TestOwnerLoadObserverConstructorFailureAndExpiry(t *testing.T) {
+	t.Run("constructor_error", func(t *testing.T) {
+		cause := errors.New("native constructor refused")
+		raw := &ownerLoadFakeBucket{err: cause}
+		observer := newOwnerLoadObserver()
+		require.NoError(t, observer.begin(0, "diag.>", time.Now()))
+		store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
+		keys, err := store.KeysByFilter(t.Context(), "diag.>")
+		observer.operationReturned(time.Now(), keys, err)
+		require.NoError(t, observer.finish(t.Context()))
+		require.Nil(t, keys)
+		require.ErrorIs(t, err, cause)
+		records, integrity := observer.snapshot()
+		require.NoError(t, integrity)
+		require.Len(t, records, 1)
+		require.Equal(t, "returned", records[0].constructionState())
+		require.Equal(t, "not_applicable", records[0].stopState())
+		require.ErrorIs(t, records[0].constructionErr, cause)
+	})
+	t.Run("expired_partial_input", func(t *testing.T) {
+		native := &ownerLoadFakeLister{keys: ownerLoadClosedKeys("diag.partial")}
+		raw := &ownerLoadFakeBucket{lister: native}
+		observer := newOwnerLoadObserver()
+		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Nanosecond))
+		defer cancel()
+		require.NoError(t, observer.begin(0, "diag.>", time.Now()))
+		store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
+		keys, err := store.KeysByFilter(ctx, "diag.>")
+		observer.operationReturned(time.Now(), keys, err)
+		require.NoError(t, observer.finish(ctx))
+		require.Nil(t, keys)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, 1, native.stops)
+		records, integrity := observer.snapshot()
+		require.NoError(t, integrity)
+		require.True(t, records[0].deadlineErr)
+		require.True(t, records[0].nilKeys)
+	})
+}
+
+func TestOwnerLoadObserverExactActivation(t *testing.T) {
+	observer := newOwnerLoadObserver()
+	ci := ownerLoadCIProfile()
+	fixture := ownerLoadFixture{name: "predicate", observer: observer}
+	require.Same(t, observer, ownerLoadMeasurementObserver(ci, fixture, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, fixture, false))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, ownerLoadFixture{name: "name", observer: observer}, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ci, ownerLoadFixture{name: "incoming", observer: observer}, true))
+	require.Nil(t, ownerLoadMeasurementObserver(ownerLoadFullProfile(), fixture, true))
+	raw := &ownerLoadFakeBucket{makeLister: func() jetstream.KeyLister { return &ownerLoadFakeLister{keys: ownerLoadClosedKeys("diag.one")} }}
+	store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
+	measureOwnerLoadFilter(t, t.Context(), store, "PREDICATE", "predicate-forward", "diag.>", ci, 1, ownerLoadMeasurementObserver(ci, fixture, true))
+	records, integrity := observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 5)
+	require.Equal(t, 5, raw.calls)
+	for i, rec := range records {
+		require.Equal(t, i, rec.repetition)
+		require.Equal(t, "returned", rec.phase())
+		require.True(t, rec.callbackJoined)
+	}
+	// An ordinary unarmed call still delegates and cannot create a sixth record.
+	keys, err := store.KeysByFilter(t.Context(), "diag.>")
+	require.NoError(t, err)
+	require.Equal(t, []string{"diag.one"}, keys)
+	records, integrity = observer.snapshot()
+	require.NoError(t, integrity)
+	require.Len(t, records, 5)
+	require.Equal(t, 6, raw.calls)
+}
+
+func TestOwnerLoadObserverFailNowRetainsPriorAndFailed(t *testing.T) {
+	cause := errors.New("second native construction failed")
+	raw := &ownerLoadFakeBucket{makeLister: func() jetstream.KeyLister { return &ownerLoadFakeLister{keys: ownerLoadClosedKeys("diag.one")} }}
+	observer := newOwnerLoadObserver()
+	store := (&natsclient.Client{}).NewKVStore(&ownerLoadObservedBucket{KeyValue: raw, observer: observer})
+	collector := new(assert.CollectT)
+	published := make(chan []ownerLoadAttempt, 1)
+	continued := make(chan struct{})
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		ownerLoadObservationScope(observer, func(records []ownerLoadAttempt, integrity error) {
+			if integrity != nil {
+				collector.Errorf("integrity: %v", integrity)
+			}
+			published <- records
+		}, func() {
+			for repetition := 0; repetition < 2; repetition++ {
+				require.NoError(collector, observer.begin(repetition, "diag.>", time.Now()))
+				if repetition == 1 {
+					raw.err = cause
+				}
+				keys, err := store.KeysByFilter(t.Context(), "diag.>")
+				observer.operationReturned(time.Now(), keys, err)
+				require.NoError(collector, observer.finish(t.Context()))
+				require.NoError(collector, err) // second call executes FailNow -> runtime.Goexit.
+			}
+			close(continued)
+		})
+	}()
+	select {
+	case <-joined:
+	case <-time.After(2 * time.Second):
+		t.Fatal("FailNow proof goroutine did not join")
+	}
+	select {
+	case records := <-published:
+		require.Len(t, records, 2)
+		require.Equal(t, "returned", records[0].phase())
+		require.ErrorIs(t, records[1].constructionErr, cause)
+		require.True(t, records[0].callbackJoined)
+		require.True(t, records[1].callbackJoined)
+	default:
+		t.Fatal("lexical report absent after FailNow")
+	}
+	select {
+	case <-continued:
+		t.Fatal("execution continued after testify CollectT FailNow")
+	default:
+	}
+}
+
+func TestOwnerLoadObserverSnapshotOrdering(t *testing.T) {
+	for _, name := range []string{"before", "after", "straddling"} {
+		t.Run(name, func(t *testing.T) {
+			observer := newOwnerLoadObserver()
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			// Every early failure releases and joins the deliberately held callback.
+			defer func() {
+				releaseOnce.Do(func() { close(release) })
+				observer.mu.Lock()
+				done := observer.callbackDone
+				observer.mu.Unlock()
+				if done != nil {
+					select {
+					case <-done:
+					case <-time.After(2 * time.Second):
+						t.Errorf("held callback did not join")
+					}
+				}
+			}()
+			if name == "after" {
+				observer.beforeSnapshot = func() { close(entered); <-release }
+			} else {
+				observer.capture = func(dst []byte) int { close(entered); <-release; return copy(dst, "synthetic stack") }
+			}
+			native := &ownerLoadFakeLister{keys: ownerLoadClosedKeys()}
+			raw := &ownerLoadFakeBucket{lister: native}
+			ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Nanosecond))
+			defer cancel()
+			require.NoError(t, observer.begin(0, "diag.>", time.Now()))
+			lister, err := (&ownerLoadObservedBucket{KeyValue: raw, observer: observer}).ListKeysFiltered(ctx, "diag.>")
+			require.NoError(t, err)
+			require.NoError(t, lister.Stop())
+			select {
+			case <-entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("deadline callback did not enter capture gate")
+			}
+			if name == "after" || name == "straddling" {
+				observer.operationReturned(time.Now(), nil, context.DeadlineExceeded)
+			}
+			releaseOnce.Do(func() { close(release) })
+			observer.mu.Lock()
+			done := observer.callbackDone
+			observer.mu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("deadline callback did not finish")
+			}
+			if name == "before" {
+				observer.operationReturned(time.Now(), nil, context.DeadlineExceeded)
+			}
+			require.NoError(t, observer.finish(ctx))
+			records, integrity := observer.snapshot()
+			require.NoError(t, integrity)
+			require.Len(t, records, 1)
+			want := map[string]string{"before": "before_return_marker", "after": "after_return_marker", "straddling": "straddling_return_marker"}[name]
+			require.Equal(t, want, records[0].snapshotOrder())
+			require.ErrorIs(t, records[0].childErr, context.DeadlineExceeded)
+		})
+	}
+}
+
+func TestOwnerLoadObserverUnresolvedJoinAndIntegrity(t *testing.T) {
+	observer := newOwnerLoadObserver()
+	require.NoError(t, observer.begin(0, "diag.>", time.Now()))
+	observer.operationReturned(time.Now(), nil, context.DeadlineExceeded)
+	observer.mu.Lock()
+	observer.callbackStop = func() bool { return false }
+	observer.callbackDone = make(chan struct{})
+	observer.mu.Unlock()
+	terminal, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := observer.finishWithTerminal(terminal)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorContains(t, observer.begin(1, "diag.>", time.Now()), "admission")
+	observer.mu.Lock()
+	close(observer.callbackDone)
+	observer.mu.Unlock()
+	records, integrity := observer.snapshot()
+	require.Error(t, integrity)
+	require.Len(t, records, 1)
+	require.False(t, records[0].callbackJoined)
+	empty := ownerLoadAttempt{}
+	require.Equal(t, "not_entered", empty.phase())
+	require.Equal(t, "not_applicable", empty.stopState())
+	require.Equal(t, "unknown/incomplete", empty.snapshotOrder())
+	for i := 0; i < ownerLoadObservationCapacity-1; i++ {
+		observer.active = -1
+		observer.next = i + 1
+		require.NoError(t, observer.begin(i+1, "diag.>", time.Now()))
+	}
+	require.Error(t, observer.begin(ownerLoadObservationCapacity, "diag.>", time.Now()))
+}

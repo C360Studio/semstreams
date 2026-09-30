@@ -108,7 +108,30 @@ func (m *mockKVBucket) WatchAll(ctx context.Context, opts ...jetstream.WatchOpt)
 }
 
 func (m *mockKVBucket) WatchFiltered(ctx context.Context, keys []string, opts ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
-	return nil, errors.New("not implemented")
+	// Use the same matcher and fault hooks as ListKeysFiltered so existing
+	// query and reconciliation tests exercise the full KVStore watcher path.
+	lister, err := m.ListKeysFiltered(ctx, keys...)
+	if err != nil || lister == nil {
+		return nil, err
+	}
+	var matched []string
+	for {
+		select {
+		case <-ctx.Done():
+			_ = lister.Stop()
+			return nil, ctx.Err()
+		case key, ok := <-lister.Keys():
+			if !ok {
+				updates := make(chan jetstream.KeyValueEntry, len(matched)+1)
+				for _, item := range matched {
+					updates <- mockWatcherEntry{key: item}
+				}
+				updates <- nil // Initial snapshot completion.
+				return &mockKeyWatcher{updates: updates, lister: lister}, nil
+			}
+			matched = append(matched, key)
+		}
+	}
 }
 
 func (m *mockKVBucket) Keys(ctx context.Context, opts ...jetstream.WatchOpt) ([]string, error) {
@@ -214,6 +237,29 @@ func newMockKeyLister(keys []string) *mockKeyLister {
 
 func (l *mockKeyLister) Keys() <-chan string { return l.ch }
 func (l *mockKeyLister) Stop() error         { return nil }
+
+type mockWatcherEntry struct {
+	jetstream.KeyValueEntry
+	key string
+}
+
+func (e mockWatcherEntry) Key() string { return e.key }
+
+type mockKeyWatcher struct {
+	updates chan jetstream.KeyValueEntry
+	lister  jetstream.KeyLister
+	once    sync.Once
+	stopErr error
+}
+
+func (w *mockKeyWatcher) Updates() <-chan jetstream.KeyValueEntry { return w.updates }
+func (w *mockKeyWatcher) Stop() error {
+	w.once.Do(func() {
+		w.stopErr = w.lister.Stop()
+		close(w.updates)
+	})
+	return w.stopErr
+}
 
 // Mock KV entry for testing
 type mockKVEntry struct {

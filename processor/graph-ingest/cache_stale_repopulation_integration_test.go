@@ -34,8 +34,10 @@ import (
 // the reader's stale Set wins and the final read observes rev1 (no marker);
 // with the guard the Set is skipped and the final read observes rev2.
 func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
-	ctx := context.Background()
-	c, _ := startPrefixTestComponent(t, withAuthority("stalecache", "ops"))
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, _, owner := startPrefixTestComponent(ctx, t, withAuthority("stalecache", "ops"))
+	defer owner.finish(ctx, t)
 
 	const id = "stalecache.ops.dom.sys.type.entity1"
 
@@ -47,6 +49,8 @@ func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
 	readerAtHook := make(chan struct{}) // reader paused post-Get, pre-Set
 	releaseReader := make(chan struct{})
 	var once sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseReader) }) }
 	c.repopulateHook = func(hookID string) {
 		if hookID != id {
 			return
@@ -66,9 +70,27 @@ func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
 		defer close(readerDone)
 		_, _, _ = c.fetchEntitiesConcurrent(ctx, []string{id}, 1)
 	}()
+	// This runs before owner.finish even if an assertion exits early. Release
+	// the hook exactly once, then give the owned reader a finite join budget.
+	defer func() {
+		release()
+		joinCtx, cancelJoin := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancelJoin()
+		select {
+		case <-readerDone:
+		case <-joinCtx.Done():
+			t.Errorf("cache reader did not join before fixture Stop: %v", joinCtx.Err())
+		}
+	}()
 
 	// Wait until the reader has read rev1 and is paused before its Set.
-	<-readerAtHook
+	select {
+	case <-readerAtHook:
+	case <-readerDone:
+		t.Fatal("cache reader returned before the post-Get hook; race window was not exercised")
+	case <-ctx.Done():
+		t.Fatalf("cache reader did not reach the post-Get hook: %v", ctx.Err())
+	}
 
 	// rev2: commit the marker while the reader is paused. AddTriple commits a new
 	// revision AND invalidates the cache (bumps the coherence generation) — this
@@ -83,8 +105,14 @@ func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
 	require.NoError(t, err)
 
 	// Release the paused reader so it attempts its (now stale) repopulating Set.
-	close(releaseReader)
-	<-readerDone
+	release()
+	joinCtx, cancelJoin := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelJoin()
+	select {
+	case <-readerDone:
+	case <-joinCtx.Done():
+		t.Fatalf("cache reader did not finish after release: %v", joinCtx.Err())
+	}
 
 	// A fresh read MUST observe rev2 (the marker), never a resurrected rev1.
 	// Without the guard the paused reader's Set writes rev1 back into the cache

@@ -1,0 +1,9 @@
+--- FAIL: TestGraphIngestOwnerAssertionExitAndCleanupError (0.04s)
+    --- FAIL: TestGraphIngestOwnerAssertionExitAndCleanupError/setup-exit (0.04s)
+        test_owner_child_test.go:80: child missing witness "GRAPH_INGEST_CHILD_DRAIN_FINITE"; output:
+            --- FAIL: TestGraphIngestOwnerChildFixture (0.00s)
+                test_owner_child_test.go:131: intentional setup assertion exit
+            FAIL
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/graph-ingest	0.424s
+FAIL

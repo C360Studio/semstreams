@@ -1,0 +1,8 @@
+LIFECYCLE_EVENT stop
+--- FAIL: TestSharedLifecycleOwnedCycleTransitions (0.00s)
+    --- FAIL: TestSharedLifecycleOwnedCycleTransitions/normal (0.00s)
+        lifecycle_test_support_test.go:237: cycle error: normal Stop: Start authority ended before Stop
+            accepted Start authority ended before controlled Stop: context canceled
+FAIL
+FAIL	github.com/c360studio/semstreams/component	0.320s
+FAIL

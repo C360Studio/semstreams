@@ -173,15 +173,13 @@ func (s *TieredScenario) executeValidateProcessing(ctx context.Context, result *
 		"graph-gateway": false,
 	}
 	graphStatus := make(map[string]map[string]any)
+	var unhealthyGraph []string
 
 	for _, comp := range components {
 		if _, isGraphComp := graphComponents[comp.Name]; isGraphComp {
 			graphComponents[comp.Name] = true
 			if !comp.Healthy {
-				result.Warnings = append(
-					result.Warnings,
-					fmt.Sprintf("Graph component %s not healthy: state=%s", comp.Name, comp.State),
-				)
+				unhealthyGraph = append(unhealthyGraph, fmt.Sprintf("%s (state=%s)", comp.Name, comp.State))
 			}
 			graphStatus[comp.Name] = map[string]any{
 				"name":      comp.Name,
@@ -207,6 +205,12 @@ func (s *TieredScenario) executeValidateProcessing(ctx context.Context, result *
 	}
 
 	result.Details["graph_processor_status"] = graphStatus
+
+	// An unhealthy graph component is the outcome this stage exists to detect;
+	// no later stage reads component health (#1426).
+	if len(unhealthyGraph) > 0 {
+		return fmt.Errorf("graph components not healthy: %v", unhealthyGraph)
+	}
 
 	result.Metrics["component_count"] = len(components)
 	result.Details["processing_validation"] = fmt.Sprintf(
@@ -243,16 +247,17 @@ func (s *TieredScenario) executeVerifyOutputs(ctx context.Context, result *Resul
 		}
 	}
 
-	if len(missingOutputs) > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Missing outputs: %v", missingOutputs))
-	}
-
 	result.Metrics["outputs_found"] = len(foundOutputs)
 	result.Metrics["outputs_expected"] = len(expectedOutputs)
 	result.Details["output_validation"] = map[string]any{
 		"expected": expectedOutputs,
 		"found":    foundOutputs,
 		"missing":  missingOutputs,
+	}
+
+	// A missing output component is the outcome this stage exists to detect (#1426).
+	if len(missingOutputs) > 0 {
+		return fmt.Errorf("missing outputs: %v", missingOutputs)
 	}
 
 	return nil
@@ -433,6 +438,12 @@ func (s *TieredScenario) executeTestEmbeddingFallback(ctx context.Context, resul
 		"message":                 "Graph embedding operational regardless of semembed availability",
 	}
 
+	// An unhealthy (or absent) graph-embedding is the outcome this stage exists to
+	// detect: neither the BM25 fallback nor hybrid mode is working (#1426).
+	if !graphEmbeddingHealthy {
+		return fmt.Errorf("graph-embedding not healthy (semembed_available=%v): neither BM25 fallback nor hybrid mode is working", semembedAvailable)
+	}
+
 	// If semembed was unavailable but graph-embedding is healthy, BM25 fallback is working
 	if !semembedAvailable && graphEmbeddingHealthy {
 		result.Metrics["fallback_verified"] = 1
@@ -445,8 +456,7 @@ func (s *TieredScenario) executeTestEmbeddingFallback(ctx context.Context, resul
 	// Send test message to verify search works in current mode
 	conn, err := net.Dial("udp", s.udpAddr)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to connect for fallback test: %v", err))
-		return nil // Don't fail the whole test
+		return fmt.Errorf("failed to connect for fallback test: %w", err)
 	}
 	defer conn.Close()
 
@@ -476,8 +486,8 @@ func (s *TieredScenario) executeValidateRules(ctx context.Context, result *Resul
 	// Capture baseline metrics
 	baselineMetrics, err := s.metrics.ExtractRuleMetrics(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to capture baseline rule metrics: %v", err))
-		baselineMetrics = &client.RuleMetrics{}
+		// A zero baseline would report absolute counters as deltas (round 2 M-c).
+		return fmt.Errorf("failed to capture baseline rule metrics: %w", err)
 	}
 
 	// Check for reactive workflow metrics presence
@@ -489,11 +499,13 @@ func (s *TieredScenario) executeValidateRules(ctx context.Context, result *Resul
 	// Wait for rule evaluations if needed
 	s.waitForRuleEvaluations(ctx, baselineMetrics, sentCount, result)
 
-	// Get final metrics
-	finalMetrics, err := s.metrics.ExtractRuleMetrics(ctx)
+	// Wait (bounded) for the asserted counters, then read them once more as final.
+	// The firing count is fixture- and timing-driven (measured 1, 2, 3 at the read),
+	// so the assertion waits for it instead of sampling it (#1426 B1, owner Q1).
+	finalMetrics, waited, err := s.awaitRuleThresholds(ctx)
+	result.Metrics["rules_threshold_wait_ms"] = waited.Milliseconds()
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get final rule metrics: %v", err))
-		return nil
+		return fmt.Errorf("failed to read final rule metrics: %w", err)
 	}
 
 	// Record validation results
@@ -504,8 +516,38 @@ func (s *TieredScenario) executeValidateRules(ctx context.Context, result *Resul
 	if finalMetrics.Evaluations <= 0 {
 		return fmt.Errorf("rule engine performed no evaluations")
 	}
+	if firings := int(finalMetrics.Firings); firings < s.config.MinRuleFirings {
+		return fmt.Errorf("rule firings %d < MinRuleFirings %d", firings, s.config.MinRuleFirings)
+	}
+	if actions := int(finalMetrics.ActionsDispatched); actions < s.config.MinActionsDispatched {
+		return fmt.Errorf("actions dispatched %d < MinActionsDispatched %d", actions, s.config.MinActionsDispatched)
+	}
 
 	return nil
+}
+
+// awaitRuleThresholds polls the rule metrics until firings >= MinRuleFirings and
+// actions >= MinActionsDispatched, or ValidationTimeout elapses, and returns the
+// last read with the time spent. The timeout is the assertion's deadline, not a
+// sleep: the caller asserts on whatever the last read says. A read that never
+// succeeds within the deadline is returned as the error.
+func (s *TieredScenario) awaitRuleThresholds(ctx context.Context) (*client.RuleMetrics, time.Duration, error) {
+	start := time.Now()
+	deadline := start.Add(s.config.ValidationTimeout)
+	for {
+		m, err := s.metrics.ExtractRuleMetrics(ctx)
+		met := err == nil &&
+			int(m.Firings) >= s.config.MinRuleFirings &&
+			int(m.ActionsDispatched) >= s.config.MinActionsDispatched
+		if met || !time.Now().Before(deadline) {
+			return m, time.Since(start), err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, time.Since(start), ctx.Err()
+		case <-time.After(s.config.PollInterval):
+		}
+	}
 }
 
 // checkReactiveMetricsPresence checks for rule engine metrics and returns presence map and count.
@@ -718,8 +760,7 @@ func (s *TieredScenario) executeWaitForRuleStabilization(ctx context.Context, re
 	// Get initial evaluation count
 	initialMetrics, err := s.metrics.ExtractRuleMetrics(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get initial rule metrics: %v", err))
-		return nil
+		return fmt.Errorf("failed to get initial rule metrics: %w", err)
 	}
 
 	// Poll until evaluation count stabilizes (no change for 2 consecutive polls)

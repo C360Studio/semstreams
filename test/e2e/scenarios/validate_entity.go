@@ -33,7 +33,7 @@ func (s *TieredScenario) tierMinter(result *Result) (func(suffix string) string,
 	// here means a stage is running outside Execute, and guessing the pair from
 	// the shipped config would be wrong by exactly the minted suffix (ADR-104).
 	if s.effectiveAuthority == "" {
-		return nil, fmt.Errorf("the deployment authority has not been read from semstreams_config/platform_identity, so no fixture entity ID can be minted; Execute reads it before any stage runs")
+		return nil, fmt.Errorf("the deployment authority has not been read from semstreams_config_<org>_<stem>/platform_identity, so no fixture entity ID can be minted; Execute reads it before any stage runs")
 	}
 	authority := s.effectiveAuthority
 	return func(suffix string) string { return authority + "." + suffix }, nil
@@ -142,8 +142,7 @@ func (s *TieredScenario) executeWaitForEntityStabilization(ctx context.Context, 
 // This function polls until minimum entities are loaded to handle file loader timing.
 func (s *TieredScenario) executeVerifyEntityCount(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping entity count verification")
-		return nil
+		return fmt.Errorf("NATS client not available for entity count verification")
 	}
 
 	minRequired := s.getMinRequiredEntities()
@@ -314,8 +313,7 @@ func (s *TieredScenario) recordEntityMetrics(result *Result, actualCount int) {
 // executeVerifyEntityRetrieval validates that specific known entities can be retrieved
 func (s *TieredScenario) executeVerifyEntityRetrieval(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping entity retrieval verification")
-		return nil
+		return fmt.Errorf("NATS client not available for entity retrieval verification")
 	}
 
 	// Test entities from test data files. The document processor mints these
@@ -375,10 +373,10 @@ func (s *TieredScenario) executeVerifyEntityRetrieval(ctx context.Context, resul
 		"message":  fmt.Sprintf("Retrieved %d/%d test entities", foundEntities, len(testEntities)),
 	}
 
-	// Log as warning if some entities missing but don't fail
+	// A known fixture entity that cannot be retrieved is the outcome this stage
+	// exists to detect (#1426).
 	if len(missingEntities) > 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Missing entities: %v", missingEntities))
+		return fmt.Errorf("retrieved %d/%d test entities; missing: %v", foundEntities, len(testEntities), missingEntities)
 	}
 
 	return nil
@@ -387,20 +385,18 @@ func (s *TieredScenario) executeVerifyEntityRetrieval(ctx context.Context, resul
 // executeValidateEntityStructure validates entity data structure integrity
 func (s *TieredScenario) executeValidateEntityStructure(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client not available, skipping entity structure validation")
-		return nil
+		return fmt.Errorf("NATS client not available for entity structure validation")
 	}
 
 	// Sample up to 5 entities for structure validation
 	entities, err := s.natsClient.GetEntitySample(ctx, 5)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get entity sample: %v", err))
-		return nil
+		return fmt.Errorf("failed to get entity sample: %w", err)
 	}
 
+	// An empty sample validates nothing; it used to warn and pass (#1426).
 	if len(entities) == 0 {
-		result.Warnings = append(result.Warnings, "No entities available for structure validation")
-		return nil
+		return fmt.Errorf("no entities available for structure validation")
 	}
 
 	validatedCount := 0

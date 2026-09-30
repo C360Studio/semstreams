@@ -1,0 +1,13 @@
+{
+  "command": [
+    "task",
+    "openspec:queue"
+  ],
+  "cwd": "/Users/coby/.codex/worktrees/gh1397-runner-tests/semstreams",
+  "pid": 4614,
+  "started_epoch": 1790709835.452518,
+  "state": "completed",
+  "log": "/private/tmp/gh1428-openspec-queue.log",
+  "exit_code": 0,
+  "elapsed_seconds": 0.387
+}

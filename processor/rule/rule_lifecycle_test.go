@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// The shared lifecycle suite asserts concurrent Stop rejoin and retained
-// terminal-result replay. RU1 intentionally implements the corrected one-shot
-// contract, so this package pins only the interface invariants that still apply.
+// Keep these interface checks fast and independent of NATS. The integration
+// fixture runs the production processor through component.StandardLifecycleTests.
 func TestRuleLifecycleNilContextsFailBeforeAction(t *testing.T) {
 	processor := &Processor{}
 	if err := processor.Start(nil); err == nil {

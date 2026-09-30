@@ -43,7 +43,10 @@ func newSeedEntity(id string, triples ...message.Triple) *graph.EntityState {
 // fresh-entity case: MergeEntity on an absent ID writes the entity
 // verbatim, like CreateEntity but without the upsert footgun.
 func TestIntegration_MergeEntity_FirstWriteCreatesAtomically(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.merge.firstwrite.entity.001"
 	now := time.Now()
@@ -70,7 +73,10 @@ func TestIntegration_MergeEntity_FirstWriteCreatesAtomically(t *testing.T) {
 // the merge; see TestIntegration_MergeEntity_SamePredicateReplaces for the
 // same-predicate de-duplication.
 func TestIntegration_MergeEntity_SecondWriteMergesTriples(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.merge.secondwrite.entity.001"
 	now := time.Now()
@@ -113,7 +119,10 @@ func TestIntegration_MergeEntity_SecondWriteMergesTriples(t *testing.T) {
 // boid publishing position snapshots would otherwise grow flock.position.x
 // without bound.
 func TestIntegration_MergeEntity_SamePredicateReplaces(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.merge.samepred.entity.001"
 	now := time.Now()
@@ -146,7 +155,10 @@ func TestIntegration_MergeEntity_SamePredicateReplaces(t *testing.T) {
 // flock.relation.neighbor set replaces the prior set (not a union). Producers own
 // publishing the complete set per arrival (gh#466 design).
 func TestIntegration_MergeEntity_MultiValuedPredicateFullSetReplace(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.merge.multivalue.entity.001"
 	now := time.Now()
@@ -184,7 +196,10 @@ func TestIntegration_MergeEntity_MultiValuedPredicateFullSetReplace(t *testing.T
 // actually calls the helper. The bug was specifically that the wire
 // called the wrong helper.
 func TestIntegration_HandleMessage_DoesNotClobber(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
+	c, owner := startBatchTestComponent(ctx, t)
+	defer owner.finish(ctx, t)
 
 	const entityID = "c360.test.handlemsg.gh177.entity.001"
 	now := time.Now()
@@ -242,7 +257,8 @@ func TestIntegration_HandleMessage_DoesNotClobber(t *testing.T) {
 // MergeEntity twice with the same entity ID; assert hierarchy
 // triples appear exactly once in the final merged state.
 func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancelOperation()
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
 	}
@@ -256,9 +272,10 @@ func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {
 	comp, err := CreateGraphIngest(cfgJSON, testDependencies(t, testClient.Client, withAuthority("c360", "test")))
 	require.NoError(t, err)
 	c := comp.(*Component)
+	owner := newGraphIngestTestOwner(c)
+	defer owner.finish(ctx, t)
 	require.NoError(t, c.Initialize())
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	require.NoError(t, c.Start(owner.startContext(ctx)))
 
 	time.Sleep(100 * time.Millisecond)
 

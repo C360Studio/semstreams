@@ -1,0 +1,61 @@
+task: [spec:properties] scripts/spec-properties.sh
+spec-properties: 461/461 citations resolve.
+task: [spec:properties:test] bash scripts/spec-properties_fixture_test.sh
+== (a) every citation resolves against openspec/specs/
+  ok   (a): exit 0
+  ok   (a): has '1/1 citations resolve'
+== (b) a reworded heading leaves the citation UNRESOLVED
+  ok   (b): exit 1
+  ok   (b): has 'UNRESOLVED'
+  ok   (b): has 'cited:  A heading that was reworded away'
+  ok   (b): has 'exists: A shipped requirement with a stable heading'
+== (c) EXACT matching: a near miss must not resolve
+  ok   (c) trailing period: exit 1
+  ok   (c) case change: exit 1
+== (d) a capability with no spec anywhere is NOSPEC
+  ok   (d): exit 1
+  ok   (d): has 'NOSPEC'
+== (e) a citation with no ' / ' separator is MALFORMED, never skipped
+  ok   (e): exit 1
+  ok   (e): has 'MALFORMED'
+== (f) an ACTIVE change delta resolves
+  ok   (f): exit 0
+== (g) the ARCHIVE does NOT resolve — an archived delta is history
+  ok   (g): exit 1
+  ok   (g): has 'NOSPEC'
+== (h) no citations at all is exit 2, never a clean pass
+  ok   (h): exit 2
+  ok   (h): has 'nothing was verified'
+  ok   (h): no 'citations resolve'
+== (i) an indented citation inside a function body is still found
+  ok   (i): exit 0
+  ok   (i): has '1/1 citations resolve'
+== (j) an untracked test file is not scanned (git grep scans tracked content)
+  ok   (j): exit 0
+== (k) an ACTIVE REMOVED suppresses the baseline heading it names
+  ok   (k) removed: exit 1
+  ok   (k) removed: has 'UNRESOLVED'
+  ok   (k) removed: no 'exists: Old heading before the rename'
+== (k2) its ADDED replacement resolves, and an untouched baseline heading still resolves
+  ok   (k2) added: exit 0
+  ok   (k2) untouched: exit 0
+== (l) RENAMED: the FROM heading is suppressed, the TO heading resolves
+  ok   (l) FROM: exit 1
+  ok   (l) TO: exit 0
+== (m) a MODIFIED heading is eligible
+  ok   (m): exit 0
+== (n) scope matches on a DIRECTORY BOUNDARY — a TRUNCATION of a real path is not a match
+  ok   (n) truncation 'pkg/alph': exit 2
+  ok   (n) truncation 'pkg/alph': has 'nothing was verified'
+  ok   (n) exact dir 'pkg/alpha': exit 0
+== (o) ordinary relative spellings of a valid scope still match
+  ok   (o) './pkg/alpha': exit 0
+  ok   (o) 'pkg/alpha/': exit 0
+
+passed=34 failed=0
+task: [openspec:queue] scripts/openspec-queue.sh
+
+openspec queue — why each in-flight change is still open
+-------------------------------------------------------
+
+  (queue is empty)

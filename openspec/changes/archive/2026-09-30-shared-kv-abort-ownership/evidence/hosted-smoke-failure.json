@@ -1,0 +1,13 @@
+{
+  "pr": 1435,
+  "head": "e479605a55095027aee4b1ce87e5b70af7cf6c18",
+  "run": 36659632924,
+  "job": 109711300460,
+  "test": "TestIntegration_PredicateLayoutSmoke/hash-catalog",
+  "operation": "hash-catalog-namespace-catalog-join",
+  "test_duration_seconds": 28.09,
+  "cleanup_drain_seconds": 14.9999892,
+  "raw_sha256": "2542c579f06dc50965823ba0ca96e75eaee9c19f927901af957cb939a958ecf8",
+  "zip_sha256": "8f0793ff5bd3acd1a13c41d5ed1fea08cf13a6b166a4317137fd026ba109042d",
+  "limit": "No listing repetition, individual failing-call duration or native construction/collection/Stop phase is recorded for this smoke path. Owner-load passed in same job. No shared cause established."
+}

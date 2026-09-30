@@ -3,7 +3,7 @@
 //
 // The scenario is deliberately narrow: dispatch a user message →
 // general-role agent gets scoped to rule-CRUD tools → mock LLM scripts a
-// create_rule call → verify the rule landed in the semstreams_config KV
+// create_rule call → verify the rule landed in the configuration bucket's rules.* KV
 // bucket with the expected content. Covers the end-to-end path for
 // rule tools; the other Pattern-B family (persona) shares the same
 // registration + dispatch plumbing so a single-family scenario proves the
@@ -30,6 +30,7 @@ import (
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 	"github.com/c360studio/semstreams/test/e2e/client"
+	e2econfig "github.com/c360studio/semstreams/test/e2e/config"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 	"github.com/c360studio/semstreams/vocabulary/rulepacks"
 )
@@ -67,9 +68,10 @@ type Config struct {
 	// test/e2e/mock/cmd/main.go applyCRUDToolsPreset.
 	ExpectedRuleID string
 
-	// RulesBucket is where rule.ConfigManager persists rule definitions.
-	// Matches the bucket constant inside kv_config_integration.go
-	// InitializeKVStore.
+	// RulesBucket is the configuration bucket whose rules.* family the rule
+	// ConfigManager writes. Since #1188 it is named by the stack's declared
+	// pair (e2econfig.CrudToolsAuthorityStem), derived by the framework's one
+	// derivation rather than spelled here.
 	RulesBucket string
 
 	// AppContainer is the docker container name for the running
@@ -77,6 +79,17 @@ type Config struct {
 	// to confirm ADR-026 M2 tool registrations fired. Matches
 	// docker/compose/crud-tools.yml.
 	AppContainer string
+}
+
+// crudToolsRulesBucket derives the crud-tools stack's configuration bucket from
+// the pair its shipped config declares. The declaration is a constant pinned to
+// that config by a unit test, so a failure here is a programming error.
+func crudToolsRulesBucket() string {
+	bucket, err := e2econfig.PlatformIdentityBucket(e2econfig.CrudToolsAuthorityStem)
+	if err != nil {
+		panic(fmt.Sprintf("crud-tools: %v", err))
+	}
+	return bucket
 }
 
 // DefaultConfig returns defaults for the mock-LLM path. Ports are in
@@ -88,7 +101,7 @@ func DefaultConfig() *Config {
 		MetricsURL:      "http://localhost:65190",
 		CompleteTimeout: 15 * time.Second,
 		ExpectedRuleID:  "e2e-crud-rule",
-		RulesBucket:     "semstreams_config",
+		RulesBucket:     crudToolsRulesBucket(),
 		AppContainer:    "semstreams-crud-tools-app",
 	}
 }
@@ -331,7 +344,7 @@ func (s *Scenario) verifyHotreloadPickup(ctx context.Context, result *scenarios.
 	return fmt.Errorf(
 		"hot-reload pickup: semstreams_rule_active_rules did not reach %.0f within 2s "+
 			"(baseline=%.0f, last observed=%.0f) — "+
-			"rule-processor debounce is 250ms; check that the rule-processor is watching semstreams_config KV "+
+			"rule-processor debounce is 250ms; check that the root rule manager is reconciling the configuration bucket's rules.* KV "+
 			"and that the metric name semstreams_rule_active_rules matches processor/rule/metrics.go",
 		expected, s.baselineActiveRules, lastSeen,
 	)

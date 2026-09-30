@@ -30,7 +30,7 @@ import (
 // config docker/compose/agentic.yml boots. It is the STEM, not the authority:
 // since ADR-104 the deployment mints an entropy suffix onto platform.id at
 // first boot, so the pair it actually mints entities under is knowable only by
-// reading semstreams_config/platform_identity from the running stack. Setup
+// reading semstreams_config_<org>_<stem>/platform_identity from the running stack. Setup
 // does that; this const is only the cross-check that the stack under test is
 // the configuration this scenario names.
 const agenticAuthorityStem = "c360.semstreams-agentic"
@@ -951,13 +951,13 @@ func (s *Scenario) verifyGraphTriples(ctx context.Context, result *scenarios.Res
 		return fmt.Errorf("loop_id not found in result details")
 	}
 
-	// Positions 1-2 come from Setup's read of semstreams_config/platform_identity,
+	// Positions 1-2 come from Setup's read of semstreams_config_<org>_<stem>/platform_identity,
 	// never from the shipped config: the effective platform.id carries the entropy
 	// suffix this deployment minted at first boot (ADR-104).
 	org, platform := s.authorityOrg, s.authorityPlatform
 	if org == "" || platform == "" {
-		return fmt.Errorf("deployment authority is unresolved; Setup did not read %s/%s",
-			e2econfig.PlatformIdentityBucket, e2econfig.PlatformIdentityKey)
+		return fmt.Errorf("deployment authority is unresolved; Setup did not read the configuration bucket's %s record",
+			e2econfig.PlatformIdentityKey)
 	}
 
 	// --- Verify loop execution entity ---

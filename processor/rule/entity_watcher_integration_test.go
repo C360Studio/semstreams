@@ -44,6 +44,8 @@ func init() {
 // TestEntityWatcher_RuleTriggerDebouncing verifies that rapid entity updates
 // are debounced and rules are evaluated once against the final stable state.
 func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	// Setup NATS client
 	testClient, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),
@@ -53,11 +55,12 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		testClient.Terminate()
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate external rule test client: %v", err)
+		}
 	})
 
 	natsClient := testClient.Client
-	ctx := context.Background()
 
 	// Create ENTITY_STATES KV bucket
 	js, err := natsClient.JetStream()
@@ -105,6 +108,11 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 	})
 
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, nil)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(ctx, t)
+	}
 	require.NoError(t, err)
 	// Production installs the deployment authority through CreateRuleProcessor
 	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
@@ -116,23 +124,25 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start processor
-	err = processor.Start(ctx)
+	err = processor.Start(owner.startContext(ctx))
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		processor.Stop(context.Background())
-	})
 
 	// Subscribe to rule events to count triggers
 	var triggerCount int64
 	var triggerMu sync.Mutex
 
-	_, err = natsClient.Subscribe(ctx, "events.rule.triggered", func(_ context.Context, msg *nats.Msg) {
+	sub, err := natsClient.Subscribe(ctx, "events.rule.triggered", func(_ context.Context, msg *nats.Msg) {
 		_ = msg.Data // data available in msg.Data if needed
 		triggerMu.Lock()
 		triggerCount++
 		triggerMu.Unlock()
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := sub.Unsubscribe(); err != nil {
+			t.Errorf("unsubscribe rule event observer: %v", err)
+		}
+	})
 
 	// Wait for KV watcher to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -276,6 +286,8 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 // - System stabilizes within 5 seconds
 // - Rules actually trigger (not just evaluating without effect)
 func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
+	ctx, cancelOperation := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelOperation()
 	// Setup NATS client
 	testClient, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),
@@ -285,11 +297,12 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		testClient.Terminate()
+		if err := testClient.Terminate(); err != nil {
+			t.Errorf("terminate external rule test client: %v", err)
+		}
 	})
 
 	natsClient := testClient.Client
-	ctx := context.Background()
 
 	// Create ENTITY_STATES KV bucket
 	js, err := natsClient.JetStream()
@@ -394,6 +407,11 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 	config.InlineRules = rules
 
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, nil)
+	var owner *processorTestOwner
+	if processor != nil {
+		owner = newProcessorTestOwner(processor)
+		defer owner.finish(ctx, t)
+	}
 	require.NoError(t, err)
 	// Production installs the deployment authority through CreateRuleProcessor
 	// (processor/rule/factory.go:130); the rule engine mints its trigger identity
@@ -405,11 +423,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start processor
-	err = processor.Start(ctx)
+	err = processor.Start(owner.startContext(ctx))
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		processor.Stop(context.Background())
-	})
 
 	// Track baseline trigger count from metrics (not NATS subscription)
 	// Rules may not have actions configured to emit events, so we use the processor's internal metric

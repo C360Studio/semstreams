@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/internal/e2eslowconsumer"
+	"github.com/c360studio/semstreams/test/e2e/client"
+	e2econfig "github.com/c360studio/semstreams/test/e2e/config"
 	"github.com/c360studio/semstreams/test/e2e/scenarios/search"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -52,6 +54,64 @@ func TestTieredFallbackHasNoRequiredCatalog(t *testing.T) {
 	}
 }
 
+func TestTieredFallbackReadsStatisticalDeploymentAuthority(t *testing.T) {
+	fixture := newKVFixture(t, "semantic-fallback")
+	stem := e2econfig.TierAuthorityStem(e2econfig.VariantStatistical)
+	bucket, err := e2econfig.PlatformIdentityBucket(stem)
+	require.NoError(t, err)
+	fixture.put(bucket, e2econfig.PlatformIdentityKey, map[string]string{
+		"org": "c360", "stem": "semstreams-statistical", "id": "semstreams-statistical-abc123",
+	})
+
+	// Stop after authority resolution at the first unrelated stage. Execute
+	// must read the running deployment before any tiered fixture can use it.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "component fixture stops the scenario", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+	fixture.s.client = client.NewObservabilityClient(server.URL)
+	result, err := fixture.s.Execute(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "c360.semstreams-statistical-abc123", result.Details["effective_authority"])
+	require.Equal(t, "semantic-fallback", result.Metrics["variant"])
+	require.Contains(t, result.Error, "verify-components failed")
+}
+
+func TestTieredFallbackRejectsDifferentDeploymentAuthority(t *testing.T) {
+	fixture := newKVFixture(t, "semantic-fallback")
+	stem := e2econfig.TierAuthorityStem(e2econfig.VariantStatistical)
+	bucket, err := e2econfig.PlatformIdentityBucket(stem)
+	require.NoError(t, err)
+	fixture.put(bucket, e2econfig.PlatformIdentityKey, map[string]string{
+		"org": "c360", "stem": "different-deployment", "id": "different-deployment-abc123",
+	})
+	result, err := fixture.s.Execute(t.Context())
+	require.NoError(t, err)
+	require.Contains(t, result.Error, "the stack under test is not the configuration this scenario names")
+	require.NotContains(t, result.Details, "effective_authority")
+}
+
+func TestTieredFallbackGraphProbeUsesStatisticalDeploymentAuthority(t *testing.T) {
+	fixture := newKVFixture(t, "semantic-fallback")
+	stem := e2econfig.TierAuthorityStem(e2econfig.VariantStatistical)
+	bucket, err := e2econfig.PlatformIdentityBucket(stem)
+	require.NoError(t, err)
+	fixture.put(bucket, e2econfig.PlatformIdentityKey, map[string]string{
+		"org": "c360", "stem": "semstreams-statistical", "id": "semstreams-statistical-abc123",
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "message logger fixture stops the probe", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+	fixture.s.msgLogger = client.NewMessageLoggerClient(server.URL)
+	fixture.s.config.GraphQLURL = server.URL
+	fixture.s.effectiveAuthority = "c360.semstreams-statistical-abc123"
+	result := newResult()
+	result.Metrics["variant"] = "semantic-fallback"
+	err = fixture.s.executeGraphRoundTrip(t.Context(), result)
+	require.ErrorContains(t, err, "message logger is required")
+}
+
 func TestTieredControlledSearchRecordsActualQueryResponse(t *testing.T) {
 	for _, tc := range []struct {
 		name, entityID, wantStatus string
@@ -69,12 +129,29 @@ func TestTieredControlledSearchRecordsActualQueryResponse(t *testing.T) {
 					} `json:"variables"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil || r.Method != http.MethodPost ||
-					!strings.Contains(request.Query, "semanticSearch(") ||
-					request.Variables.Query != "What documents mention forklift safety?" || request.Variables.Limit != 10 {
+					!strings.Contains(request.Query, "semanticSearch(") || request.Variables.Limit != 10 {
 					http.Error(w, "unexpected controlled query or variables", http.StatusBadRequest)
 					return
 				}
-				_, _ = fmt.Fprintf(w, `{"data":{"semanticSearch":{"results":[{"entity_id":%q,"similarity":0.9}]}}}`, tc.entityID)
+				var hit string
+				switch request.Variables.Query {
+				case search.DefaultQueries()[0].Text:
+					hit = tc.entityID
+				case search.DefaultQueries()[1].Text, search.DefaultQueries()[5].Text:
+					hit = "acme.ops.sensor-temp-001"
+				case search.DefaultQueries()[2].Text, search.DefaultQueries()[6].Text:
+					hit = "acme.ops.maint-001"
+				case search.DefaultQueries()[3].Text:
+					hit = "acme.ops.sensor-zone-a-001"
+				case search.DefaultQueries()[4].Text:
+					hit = "acme.ops.doc-ops-001"
+				case search.DefaultQueries()[7].Text:
+					hit = "acme.ops.document.content.safety.doc-safety-001"
+				default:
+					http.Error(w, "unknown search query", http.StatusBadRequest)
+					return
+				}
+				_, _ = fmt.Fprintf(w, `{"data":{"semanticSearch":{"results":[{"entity_id":%q,"similarity":0.9}]}}}`, hit)
 			}))
 			t.Cleanup(server.Close)
 			scenario := NewTieredScenario(nil, "", &TieredConfig{Variant: "statistical", GraphQLURL: server.URL})

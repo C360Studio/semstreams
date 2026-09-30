@@ -5,6 +5,13 @@ infrastructure is justified, and the wall-clock and isolation rules for new test
 [natsclient test-helper guide](../operations/23-natsclient-test-helpers.md) contains implementation examples and MUST
 not redefine this policy.
 
+## Local prerequisites
+
+The canonical checks use Go 1.26 and Task. Unit tests in `test/testinfra` execute the actual Task entry points
+against isolated fixtures, so `task` must be on `PATH` even when invoking `go test` directly. CI pins Task v3.53.1;
+use that version for local/CI parity before its additive unit/integration job. These admission fixtures do
+not require Docker or provider credentials; they fence expensive commands after exercising the real cleanup guard.
+
 ## Testing Discipline
 
 > Prompts focus attention. Contracts state what must hold. Property tests search for counterexamples.
@@ -312,6 +319,24 @@ deadline. A local aggregate run has no additional whole-suite deadline and can b
 25-minute outer job timeout is the whole-job and process-tree bound, including setup and cleanup. The 20-minute
 per-package value is transitional and is not a budget for a new test.
 
+### Cleanup admission
+
+Full lint, test, race and live tasks run `scripts/check-cleanup-roots.sh` before expensive execution. The full
+integration runner performs the same check before acquiring its host lock or contacting Docker; focused package
+iteration remains available through the runner. The guard type-checks default, integration and live_llm sources
+without executing those test selections.
+
+The guard refuses new unbounded defer/Cleanup lifecycle roots, unresolved cleanup paths, and stale approvals.
+`test/testinfra/cleanup_baseline.json` contains exact independently reviewed legacy debt from
+[#1064](https://github.com/C360Studio/semstreams/issues/1064). Do not regenerate or extend that baseline to silence
+a failure. Read the reported ownership and context evidence, repair new cleanup using the policy below, and remove
+stale debt entries when their corresponding cleanup is repaired. A changed reviewed entry needs exact source review.
+
+Ordinary API-contract calls remain distinct from terminal cleanup. A finite supplied context proves only deadline
+supply; it does not prove Stop observes cancellation, returns, reports errors, or precedes NATS teardown. Uncertain
+ordinary calls remain visible audit records. The package repair plan preserves separate causal proof and rollback
+boundaries for existing debt.
+
 ### Integration Runner Host Contract
 
 Every full or focused integration invocation acquires `/tmp/semstreams-integration.lock` before touching Docker. Lock
@@ -452,6 +477,22 @@ Prefer, in order:
 Polling MUST have a narrow deadline and report the last value and last error on failure. It MUST NOT silently turn a
 missing producer, subscriber, or component into a full-window timeout.
 
+For subprocess tests, observe the expected signal alongside EOF and unexpected process exit. EOF without the expected
+signal or an unexpected owner exit is terminal evidence; report it immediately. Use causal gates to establish ordering;
+give the whole fixture a documented containment budget and reserve bounded cleanup time separately.
+A deadline contains a broken test; it does not prove readiness or ordering. Do not restart a guessed performance budget
+at every signal. The runner termination test in
+[`test/testinfra/integration_runner_contract_test.go`](../../test/testinfra/integration_runner_contract_test.go)
+exercises healthy delayed progress, missing progress and early exit through the production runner and controlled tools.
+Its deliberate latency injection is test input for the old failure threshold, not a readiness mechanism.
+
+One owner calls `Cmd.Wait`. Failure cleanup releases fixture gates, terminates remaining owned work and joins that owner
+within its cleanup budget. Inspect mutable process state only after that owner's done signal; a cleanup timeout does
+not establish completion. Report the stalled phase, process identity, last observation and cleanup outcome. A parent
+exit does not prove its descendants were reaped, and an expired cleanup budget means ownership is unresolved. Account
+for inherited output descriptors too: a surviving child can keep an output-copy goroutine, and therefore `Cmd.Wait`,
+blocked after the parent exits.
+
 Test I/O contexts MUST derive from `t.Context()` and then narrow the deadline:
 
 ```go
@@ -470,6 +511,29 @@ Cleanup is the intentional exception. The Go test runner cancels `t.Context()` b
 functions, so client close and container termination cannot derive from it. Each cleanup operation receives its own
 bounded `context.Background()` child. Those independent contexts preserve the measured 10-second cleanup ceiling
 even after test cancellation; they are not a general license to use `context.Background()` for test I/O.
+
+### Shared component lifecycle tests
+
+`component.StandardLifecycleTests`, `component.TestErrorInjection` and `component.BenchmarkLifecycleMethods` own each
+nonnil component returned by their factory. They install lexical finalization before assertions or lifecycle calls
+can exit the case or iteration. Controlled Stop runs synchronously with fresh finite cleanup authority while the
+accepted Start context is live; Start cancellation follows the terminal attempt. This ordering also holds when a
+fatal assertion exits the case, before the Go testing runner cancels `t.Context()` and invokes substrate cleanup.
+Do not add a second component cleanup registry around these suites. Keep NATS/client/container ownership with the
+canonical substrate helper.
+
+Factories must return fresh independent components and support concurrent invocation. Resources acquired before a
+component is returned remain the factory's responsibility. A factory used by suite workers must not call
+`Fatal` or `FailNow`; report an acquisition error without terminating the worker and return nil. The suite reports
+that nil as a failed acquisition. Returned operation and cleanup errors remain visible; failing iterations stop new
+admission while already-owned work finishes. Error injection owns the base component separately so an injected Stop
+error cannot intercept finalization.
+
+A finite Stop context supplies a cooperative bound; it cannot interrupt an implementation that ignores cancellation.
+An abort error or an expired bound does not prove all work joined, and a second Stop must not be invented as a generic
+rejoin mechanism. Deliberate nil, abort and completed-repeat contract probes keep their own expectations. Components
+still need focused owner tests for exact worker joins, partial acquisition and resource-specific drain ordering;
+aggregate goroutine or memory counts are supplementary observations.
 
 ## Budgets for New Tests
 
@@ -560,7 +624,8 @@ The guard verifies that it scanned a non-trivial repository surface, and every c
 fixtures. A zero-match scan is therefore not accepted as proof that the repository is clean.
 
 Fabricated `testing.T` values, untagged container starts, and direct container APIs are zero-debt categories. They fail
-immediately and cannot be added to the baseline. The only recorded debt is 305 legacy integration sleeps.
+immediately and cannot be added to that policy baseline. Its recorded debt is 305 legacy integration sleeps.
+The separate type-aware cleanup guard and reviewed cleanup baseline are described under Cleanup admission above.
 
 `test/testinfra/policy_baseline.json` identifies each of those sleeps by category, file, function, call, and ordinal.
 It is shrink-only and manually maintained: removing a live sleep requires removing its now-stale entry, while a new

@@ -1,0 +1,4 @@
+=== RUN   TestAuditRepositoryFullWithAbsoluteRootReportsRepositoryRelativeCandidates
+--- PASS: TestAuditRepositoryFullWithAbsoluteRootReportsRepositoryRelativeCandidates (1.57s)
+PASS
+ok  	github.com/c360studio/semstreams/internal/entityidaudit	1.846s

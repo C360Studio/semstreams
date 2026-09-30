@@ -97,7 +97,11 @@ func TestComponentManagerPostBootComponentAndModelWritesDoNotChangeRuntimeCompos
 
 	modelUpdates := configManager.OnChange("model_registry")
 	<-modelUpdates // initial snapshot
-	bucket, err := testClient.Client.GetKeyValueBucket(ctx, "semstreams_config")
+	bucketName, err := config.BucketName("test", "boot-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := testClient.Client.GetKeyValueBucket(ctx, bucketName)
 	if err != nil {
 		t.Fatal(err)
 	}

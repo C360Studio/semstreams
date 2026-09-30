@@ -1,0 +1,106 @@
+[
+  {
+    "repo": "/Users/coby/Code/c360/semboids",
+    "head": "8c03cc53836ced93a5df7064473c63ff144e64f1",
+    "dependency": "go.mod:6:\tgithub.com/c360studio/semstreams v1.0.0-beta.160",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semconnect",
+    "head": "d0d06e00bf05a545f30ceea798db1c2b1ee47d4f",
+    "dependency": "go.mod:6:\tgithub.com/c360studio/semstreams v1.0.0-beta.160",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semdev",
+    "head": "ca3956af2ed87d5fa5bdb8183cdb506f7beb7240",
+    "dependency": "go.mod:6:\tgithub.com/c360studio/semstreams v1.0.0-beta.160",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semdragon",
+    "head": "07f4de9b65887801ff18a7273d14233023049321",
+    "dependency": "go.mod:7:\tgithub.com/c360studio/semstreams v1.0.0-beta.135",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semlink",
+    "head": "985e97d8d2181a2eef6caae7ba640195e96ecd58",
+    "dependency": "go.mod:6:\tgithub.com/c360studio/semstreams v1.0.0-beta.160",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semmachina",
+    "head": "841c45e8bb01af19495d4294a7f510a8a0c2e8c2",
+    "dependency": "go.mod:6:\tgithub.com/c360studio/semstreams v1.0.0-beta.160",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semops",
+    "head": "602c619a9f1caa8adac624cffda9d1afa9ad80f3",
+    "dependency": "go.mod:7:\tgithub.com/c360studio/semstreams v1.0.0-beta.145",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semsage",
+    "head": "4d28b4dc1210f47da84a3031125167d164de9290",
+    "dependency": "go.mod:6:\tgithub.com/c360studio/semstreams v1.0.0-alpha.3",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semsource",
+    "head": "4093d3ce421371f4a99d7168e372552899bf6795",
+    "dependency": "go.mod:8:\tgithub.com/c360studio/semstreams v1.0.0-beta.160",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semspec",
+    "head": "5a9496eecc453747f4bc557b95444db6304c1420",
+    "dependency": "go.mod:8:\tgithub.com/c360studio/semstreams v1.0.0-beta.134",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semspec-ui-bmad",
+    "head": "c8308d7e258587f3d96e59b8d2a8b3f8acc922b7",
+    "dependency": "go.mod:8:\tgithub.com/c360studio/semstreams v1.0.0-beta.107",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semspec-ui-run-visibility",
+    "head": "e30cbf78691d1a185033903869d9e6fd92ac3356",
+    "dependency": "go.mod:8:\tgithub.com/c360studio/semstreams v1.0.0-beta.107",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  },
+  {
+    "repo": "/Users/coby/Code/c360/semteams",
+    "head": "ce22c961d30014c463a09f8f8a2a90044ee1a1cf",
+    "dependency": "go.mod:6:\tgithub.com/c360studio/semstreams v1.0.0-beta.160",
+    "query_exit": 1,
+    "matches": "",
+    "stderr": ""
+  }
+]

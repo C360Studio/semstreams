@@ -70,7 +70,7 @@ Location: Separate UI test repository
 
 **Test Data**:
 ```go
-// Add rule to KV bucket "semstreams_config"
+// Add rule to the configuration bucket (semstreams_config_<org>_<stem>)
 key := "rules.test-001"
 value := `{"id": "test-001", "type": "test_rule", "conditions": [...]}`
 
@@ -334,7 +334,7 @@ services:
     build: .
     environment:
       - ENABLE_GRAPH_INTEGRATION=true
-      - RULE_CONFIG_KV_BUCKET=semstreams_config
+      - RULE_CONFIG_KV_BUCKET=semstreams_config_<org>_<stem>
       - ENTITY_STATE_KV_BUCKET=ENTITY_STATES
     depends_on:
       - nats
