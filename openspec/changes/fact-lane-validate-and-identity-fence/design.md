@@ -7,7 +7,9 @@ Base for every pin: `1b1accf4ea4ea878c26236b5a9e6cb83d2d89d7a` (`origin/main`, 2
 - P1 `processor/graph-ingest/component.go:1674-1684` — `decodeEntity` runs `c.decoder.Decode(data)` then
   `extractEntityFromMessage(baseMsg)`. No `Validate()` call, no `recover()`. It is the one entry both the consume
   closure (`:1558-1569`, decode failure = poison: `c.errors`++, WARN, ack) and the synchronous `handleMessage`
-  (`:1653-1668`) share.
+  (`:1653-1668`) share. A panic escaping it on the consume path is recovered by natsclient `safeHandleMessage`
+  (`natsclient/stream.go:767-775`), which logs ERROR and Naks: the harm today is a poison message redelivered without
+  end and never counted in `c.errors`, not a process crash. `handleMessage` has no production caller.
 - P2 `message/decoder.go:39-50` — `Decode` is `json.Unmarshal` into a `BaseMessage`; `message/base_message.go:261-`
   `UnmarshalJSON` creates the typed payload through the registry and never calls `Validate()`.
   `message/base_message.go:222-225` — `MarshalJSON` calls `m.Validate()` before serializing: the producer half of the
@@ -40,16 +42,20 @@ Base for every pin: `1b1accf4ea4ea878c26236b5a9e6cb83d2d89d7a` (`origin/main`, 2
   a classified error (`errs.WrapInvalid(err, "graph-ingest", "decodeEntity", "payload validation failed")`) on P1's
   existing poison path. This is the consumer half of P2: what `MarshalJSON` refused to emit, the lane refuses to
   ingest.
-- D2 **One fence, at the consumer.** `decodeEntity` recovers a panic raised during `extractEntityFromMessage` and
-  returns a classified error carrying the message type and the recovered value; the goroutine survives and the
-  message follows the poison path. The fence covers P3's four payload calls in one place and covers product-registered
-  types the tree cannot see. It does not wrap `Decode` itself (JSON decoding does not run payload code) and does not
-  reach past extraction (the merge path runs framework code on already-extracted data).
+- D2 **One fence, over the lane entry.** `decodeEntity` recovers a panic raised anywhere in Decode → `Validate()` →
+  `extractEntityFromMessage` and returns a classified error carrying the message type (the subject, before decode
+  succeeds) and the recovered value; the message follows the poison path (counted, WARN, ack) instead of reaching
+  `safeHandleMessage`'s Nak (P1). The fence starts at Decode because a registered type's `UnmarshalJSON` is payload
+  code, and it covers that type's `Validate()` and P3's four calls in one place, including product-registered types the
+  tree cannot see. It does not reach past extraction (the merge path runs framework code on already-extracted data).
 - D3 **`LoopExecutionEntity` takes the sibling shape (P5).** `EntityID()` uses `TryLoopExecutionEntityID` and returns
   `""` on error, with the sentinel annotation `go run ./cmd/entity-id-audit .` requires (annotations are line-pinned:
   regenerate the `line=` after the edit). `Triples()` uses the `Try` form for parent and reply-to and omits the triple
   on error, matching its own run branch (P4 `:136-139`). `Validate()` additionally checks a non-empty parent and
-  reply-to through the `Try` form and returns that error (owner ruling via the coordinator, 2026-09-30): a malformed
+  reply-to through the `Try` form and returns that error (owner ruling via the coordinator, 2026-09-30), and a
+  non-empty run ID through `TryChainExecutionEntityID` (coordinator ruling, 2026-09-30, extending the parent/reply-to
+  ruling to RunID for consistency with intake's `validateLoopTokens`; not an owner ruling; the `RunID` branch of
+  `Triples()` keeps its omit-on-error shape): a malformed
   reference is a writer-contract violation, and rejecting it at `MarshalJSON` and at ingest is loud where omitting the
   triple would be silent. The omit-on-error `Triples()` stays as the never-panic floor for a direct caller; on the lane
   it is unreachable because `Validate()` runs first. `processor/agentic-loop/graph_writer.go:479-485` now gets an error
@@ -78,7 +84,8 @@ Base for every pin: `1b1accf4ea4ea878c26236b5a9e6cb83d2d89d7a` (`origin/main`, 2
 - One `Validate()` per Graphable arrival. For `LoopExecutionEntity` that builds `Triples()` once more than today;
   microseconds against a KV round trip.
 - Behavior change on the lane: a decoded payload failing its own `Validate()` is dropped as poison instead of
-  persisted. In-tree producers publish through `MarshalJSON` (P2) and are unaffected. The migration note carries the
-  one check a sister needs: does any producer hand-write wire JSON for a registered Graphable type?
+  persisted, and a payload whose code panics on the lane is counted and acked instead of Nak-redelivered (P1).
+  In-tree producers publish through `MarshalJSON` (P2) and are unaffected. The migration note carries the one check a
+  sister needs: does any producer hand-write wire JSON for a registered Graphable type?
 - Breaking gate: a relevant e2e tier green at the final revision (`task e2e:core`; the tier ingests through this
   lane), Docker window announced to live sister sessions first.

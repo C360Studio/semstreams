@@ -9,12 +9,13 @@ each sister's owner applies it in their own repository.
 graph-ingest's Graphable lane now calls `BaseMessage.Validate()` on every decoded arrival, before any method of the
 payload runs. A payload whose own `Validate()` fails is a poison message on the lane's existing path: counted in the
 component's error count, logged at WARN with the subject and the reason, acknowledged and dropped, never written to
-`ENTITY_STATES`. The lane also recovers a panic raised by a decoded payload's `EntityID()`, `Triples()`,
-`StorageRef()` or `IndexingProfile()` and drops that message the same way, instead of crashing the process.
+`ENTITY_STATES`. The lane also recovers a panic raised by payload code on the lane (a registered type's
+`UnmarshalJSON`, `Validate()`, `EntityID()`, `Triples()`, `StorageRef()` or `IndexingProfile()`). For such a payload
+the delivery changes from Nak-and-redeliver (the stream handler's panic recovery) to a counted ack-drop.
 
 `LoopExecutionEntity.EntityID()` now returns `""` for an identity it cannot construct, `Validate()` rejects a
-malformed parent or reply-to loop ID, and `Triples()` omits such a triple instead of panicking. The exported `LoopExecutionEntityID` constructor still
-panics on malformed input; its contract is unchanged.
+malformed parent, reply-to or run ID, and `Triples()` omits such a triple instead of panicking. The exported
+`LoopExecutionEntityID` constructor still panics on malformed input; its contract is unchanged.
 
 ## Who is affected
 
@@ -30,5 +31,5 @@ hit, confirm the payload passes its type's `Validate()`, or move the publish ont
 `json.Marshal`, which enforces it at the producer.
 
 After upgrading, a message this change drops shows up as a graph-ingest WARN
-`graph-ingest: decode/extract failed; dropping` carrying `payload validation failed` or `panicked during entity
-extraction`.
+`graph-ingest: decode/extract failed; dropping` carrying `payload validation failed` or `panicked on the Graphable
+lane`.

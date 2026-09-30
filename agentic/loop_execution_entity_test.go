@@ -347,7 +347,7 @@ func TestLoopExecutionMessageType_KeyFormat(t *testing.T) {
 // LoopExecutionEntity is a registered Graphable: graph-ingest decodes it from
 // the wire and calls EntityID, Triples and Validate on producer content. None
 // of them may panic on a malformed identity (payload-registry: "A registered
-// Graphable type's identity methods MUST NOT panic on decoded input").
+// Graphable MUST NOT panic on decoded input").
 
 // mustNotPanic runs f and fails the test, instead of crashing the binary, when
 // f panics.
@@ -455,7 +455,7 @@ func TestLoopExecutionEntity_ValidateRefusesOnlyMalformedReference(t *testing.T)
 			var err error
 			mustNotPanic(t, "Validate", func() { err = e.Validate() })
 			if err == nil {
-				t.Error("Validate() = nil, want an error: no constructible spawn-identity fact remains")
+				t.Error("Validate() = nil, want an error: a malformed reference violates the writer contract")
 			}
 		})
 	}

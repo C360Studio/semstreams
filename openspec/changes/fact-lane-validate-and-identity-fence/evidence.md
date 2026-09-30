@@ -53,10 +53,7 @@ RED (pre-fix bytes), the intended assertions:
 - 2.2 `TestLoopExecutionEntity_ValidateRefusesOnlyMalformedReference/{parent_only,reply-to_only}`: `Validate panicked
   on decoded input`.
 
-Scope note for 2.2 "Validate() returns an error on each": with a malformed org, platform or loop ID, `Validate()`
-returns the identity error. With a malformed parent or reply-to, D3 omits that triple; `Validate()` returns an error
-when no other spawn-identity fact remains (the `*_only` rows) and returns nil when other facts are present (the triple
-is omitted and the rest ingests). Neither case panics.
+Scope of 2.2's `Validate()` cases after the rulings: see the Revision 1 and Revision 2 addenda below.
 
 ## Gates (task 2.4), at `fa20dc7c`
 
@@ -73,7 +70,9 @@ is omitted and the rest ingests). Neither case panics.
 Not run by the developer (coordinator's gate, task 3.2): any e2e tier; `task test:integration` (testcontainers,
 Docker).
 
-## Revision 1: `Validate()` rejects a malformed reference (owner ruling via the coordinator, 2026-09-30)
+## Revision 1: `Validate()` rejects a malformed reference
+
+Owner ruling via the coordinator, 2026-09-30.
 
 `LoopExecutionEntity.Validate()` now checks a non-empty `ParentLoopID` and `InReplyTo` through
 `TryLoopExecutionEntityID`. `TestLoopExecutionEntity_MalformedReferenceOmitsTriple` now also asserts that
@@ -100,3 +99,67 @@ Re-run gates on the revision tree (the committed bytes; only this table was fill
 | `go test -race -count=1 ./processor/graph-ingest/... ./agentic/...` | 0 |
 | `openspec validate fact-lane-validate-and-identity-fence --strict` | 0 |
 | `go run ./cmd/entity-id-audit .` | 0 (`line=94` pin verified) |
+
+## Revision 2: one fence over the lane entry; RunID; production-seam proof
+
+Review r1 (2 HIGH, 3 MEDIUM, 2 NIT). The coordinator's rulings of 2026-09-30 apply.
+
+### Unit red/green against the pre-revision bytes (`6f15f8ed`)
+
+Code commits are `dccb33dd` (graph-ingest) and `36c143b9` (agentic). The experiment ran at `36c143b9` with a clean
+worktree, and the worktree was clean again afterwards. The same `cp` + md5 ritual as above was used.
+
+| File | Pre-revision md5 (`6f15f8ed`) | Revised md5 (`36c143b9`), and again after restore |
+|------|-------------------------------|---------------------------------------------------|
+| `processor/graph-ingest/component.go` | `f2d04a95c2a86535f3c621be11fe28f0` | `4fa7278e1ce00934248b07ac37d52800` |
+| `agentic/loop_execution_entity.go` | `4ff0edd7ac217d2fba126d46a1b3240c` | `a1ba87ba2acfafe9666bfc83de9d2fd1` |
+
+Selected tests:
+
+- graph-ingest: `TestDecodeEntity_FencesPayloadPanics`, `TestHandleMessage_RejectionsLandOnPoisonAccounting` and
+  `TestDecodeEntity_MalformedLoopExecutionEntityIsInvalid`.
+- agentic: `TestLoopExecutionEntity_MalformedReferenceOmitsTriple` and
+  `TestLoopExecutionEntity_ValidateRefusesOnlyMalformedReference`.
+
+Results:
+
+- GREEN with the revised bytes, and again after restore: all pass.
+- RED with the pre-revision bytes:
+  - `FencesPayloadPanics/{panic-unmarshal,panic-validate}` and `RejectionsLandOnPoisonAccounting/{panic-validate,
+    panic-unmarshal}` fail `should not panic` with `Panic value: fence test payload: UnmarshalJSON boom` and
+    `... Validate boom`.
+  - `MalformedReferenceOmitsTriple/dotted_run` and `ValidateRefusesOnlyMalformedReference/run_only` fail
+    `Validate() = nil, want an error`.
+  - These rows still pass on the old bytes, as expected: the rows already fixed in earlier revisions, and
+    `MalformedLoopExecutionEntityIsInvalid` (Revision 1 already refused a dotted `loop_id` in `Validate()`).
+
+### Integration: the real consume closure
+
+`TestIntegration_FactLane_PoisonLoopExecutionEntityIsAckDropped` (`fact_lane_fence_integration_test.go`) publishes
+hand-written `LoopExecutionEntity` wire bytes with a dotted `loop_id` on the `ENTITY` stream. The test waits until
+`c.errors` has incremented by exactly one. It then checks the server-side consumer info: `NumPending` and
+`NumAckPending` reach 0, and `NumRedelivered` is 0. Finally it lists `ENTITY_STATES` and expects no keys.
+
+- With `component.go` alone restored to `1b1accf4` (`1bdf1efb…`), the test still passes. At that point the agentic fix
+  alone makes `EntityID()` return `""`, which the pre-fix lane already rejected as poison. The lane change and the
+  agentic change each close this case independently.
+- RED with both files at `1b1accf4` (`1bdf1efb…`, `998e7303…`): natsclient logs `ERROR panic in message handler
+  panic="LoopExecutionEntityID: ... loopID \"loop.dotted\" must not contain dots"` repeatedly, which is the
+  Nak-and-redeliver loop. The test fails with `Condition never satisfied` / `the poison message must be counted on the
+  lane's error path`.
+- GREEN after restore (`4fa7278e…`, `a1ba87ba…`): the test passes.
+
+### Gates (Revision 2 tree)
+
+| Command | Exit |
+|---------|------|
+| `task check` | 0 |
+| `go test -race -count=1 ./processor/graph-ingest/... ./agentic/...` | 0 |
+| `go test -tags=integration -race -count=1 -run TestIntegration_FactLane_PoisonLoopExecutionEntityIsAckDropped ./processor/graph-ingest/` | 0 |
+| `openspec validate fact-lane-validate-and-identity-fence --strict` | 0 |
+| `go run ./cmd/entity-id-audit .` | 0 (sentinel pin unchanged at `line=94`) |
+| `npx markdownlint-cli2` on every edited `.md` (change dir, both deltas, migration note, skill, concept doc) | 0 errors |
+
+To reach 0 markdownlint errors, the two ADDED requirement headings were shortened to fit MD013's 80-character
+heading limit, and each delta gained its `# <capability> Delta` H1, matching the archived neighbour. Nothing in the
+tree cites these ADDED requirements yet. The one test comment that quoted the old heading was updated.

@@ -5,8 +5,10 @@
 Issue #1112 (milestone `v1.0.0-beta.163`, owner triage 2026-08-30: "a live-path defect the wave itself created").
 Since #1109 registered `LoopExecutionEntity` in the payload registry (ADR-103), the graph-ingest Graphable lane can
 decode it, and its `EntityID()` and `Triples()` still route through the panicking `LoopExecutionEntityID`
-constructor. The lane calls both without a `recover()` and never calls the payload's `Validate()`, so one malformed
-arrival takes the JetStream consumer goroutine, and with it the process, down. The producer half already validates:
+constructor. The lane calls both without a `recover()` and never calls the payload's `Validate()`. The panic escapes
+to natsclient's `safeHandleMessage` (`natsclient/stream.go:767-775`), which recovers it and Naks, so one malformed
+arrival becomes a poison message that is redelivered without end and never counted on the lane. The producer half
+already validates:
 `BaseMessage.MarshalJSON` refuses a payload whose `Validate()` fails. The consumer half does not. File:line premises
 are in `design.md` at `1b1accf4ea4ea878c26236b5a9e6cb83d2d89d7a`.
 
@@ -17,13 +19,14 @@ are in `design.md` at `1b1accf4ea4ea878c26236b5a9e6cb83d2d89d7a`.
   existing path: counted, logged at WARN with the subject and reason, acked and dropped, never persisted. A producer
   that publishes through `BaseMessage.MarshalJSON` already passed this check; only hand-written wire JSON that fails
   its own type's `Validate()` changes behavior. Migration note: `docs/operations/migration-fact-lane-validate.md`.
-- The Graphable extraction is fenced: a panic raised by the decoded payload's `EntityID()`, `Triples()`,
-  `StorageRef()` or `IndexingProfile()` becomes a classified rejection naming the message type and the panic value,
-  on the same poison path. The goroutine survives.
+- The whole lane entry is fenced: a panic raised by payload code on the lane (the registered type's `UnmarshalJSON`
+  inside decode, its `Validate()`, or its `EntityID()`, `Triples()`, `StorageRef()` or `IndexingProfile()`) becomes a
+  classified rejection naming the message type (the subject, before decode succeeds) and the panic value, on the same
+  poison path: counted and acked, instead of Nak-redelivered.
 - `LoopExecutionEntity` adopts the identity-failure shape its four sibling registered types already have:
   `EntityID()` returns `""` through `TryLoopExecutionEntityID` (graph-ingest rejects the empty ID); `Triples()`
   omits the `parent` and `reply_to` triples whose constructor fails, the way its `run` branch already does;
-  `Validate()` rejects a malformed parent or reply-to and cannot panic.
+  `Validate()` rejects a malformed parent, reply-to or run reference and cannot panic.
 - One sentence in the new-payload skill and the payload-registry concept doc: a registered Graphable's identity
   methods never panic on decoded input.
 
