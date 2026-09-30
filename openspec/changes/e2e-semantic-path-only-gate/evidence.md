@@ -109,9 +109,8 @@ AFTER  c886943d8046d4dacde40ac5e91679f2ad2acb2bfa8f50a7412058b965118c36  test/e2
 ok  	github.com/c360studio/semstreams/test/e2e/scenarios	0.352s
 ```
 
-Not unit-covered: the `if s.config.PathOnly` branch in `Execute` (it needs a live deployment for
-`EffectiveTierAuthority`). Its wiring evidence is task 2.6's read of the `[PATH-ONLY]` line and the `[41/41]` counter
-from the PR's ladder log, per design D1 / Risks.
+The `if s.config.PathOnly` branch first lived inline in `Execute`; review round 1 (M1) moved it into
+`stagesToRun`, which is unit-tested — see § 9.
 
 ## § 5 `--path-only` / `E2E_PATH_ONLY` (task 2.2)
 
@@ -178,4 +177,58 @@ go test -count=1 ./internal/agentprofiles/              → ok github.com/c360st
 openspec validate e2e-semantic-path-only-gate --strict  → Change 'e2e-semantic-path-only-gate' is valid
 task spec:properties                                    → spec-properties: 464/464 citations resolve.
 task check:push                                         → exit 0 (last line: [INTEGRATION] tests complete; 0 FAIL lines; tree clean after schema:generate)
+```
+
+## § 9 First path-only CI run, and review round 1 fixes
+
+PR #1425's E2E Ladder run 36728438332 at `b9851bd2`, job `e2e semantic (path-only)`: success, 14:21:04Z → 14:25:21Z
+(4m17s wall-clock). Verbatim lines from `gh run view 36728438332 --log --job <id>` (timestamps kept):
+
+```
+2026-09-30T14:24:31.2089628Z [PATH-ONLY] skipping 3 quality stages: validate-llm-enhancement, validate-thematic-answer-eval, validate-globalsearch-known-answer
+2026-09-30T14:24:31.2090459Z [1/41] verify-components starting...
+2026-09-30T14:24:39.6726031Z [28/41] test-http-gateway completed in 8.00012724s
+2026-09-30T14:24:56.8485601Z [31/41] validate-community-structure completed in 17.111412483s
+2026-09-30T14:24:57.3766404Z [41/41] verify-outputs completed in 1.406329ms
+graphql_gateway_index_not_ready_retries:0
+graphql_gateway_latency_ms:7998
+graphql_gateway_readiness_wait_ms:8000
+graphql_gateway_search_hits:30
+```
+
+The three skipped names occur on one log line only (the `[PATH-ONLY]` line; `grep -c` over the job log = 1), so none
+has a `completed in` line or a `_duration_ms` metric. The two stages over 1 s are `test-http-gateway` (8.00 s, one
+request, cause unattributed) and `validate-community-structure` (17.1 s, its community wait).
+
+Review M1 — `stagesToRun(variant)` is what `Execute` runs; `TestStagesToRun_PathOnlySelectsTheFilteredList` drives it
+with `PathOnly` false (44 names, nil skipped) and true (41 names, the three skipped, order kept). Mutation: remove the
+`if s.config.PathOnly { stages, skipped = withoutPathOnlySkips(stages) }` call inside `stagesToRun`:
+
+```
+BEFORE f8d5f01f0a00c58920920d7d541588b60341f710ef6c792fcf6e58bc2a6b69e7  test/e2e/scenarios/tiered.go
+--- FAIL: TestStagesToRun_PathOnlySelectsTheFilteredList (0.00s)
+        	Error:      	Not equal: 
+        	            	expected: []string{"validate-llm-enhancement", "validate-thematic-answer-eval", "validate-globalsearch-known-answer"}
+        	            	actual  : []string(nil)
+        	Messages:   	PathOnly skips the declared rows, in stage-table order
+FAIL
+AFTER  f8d5f01f0a00c58920920d7d541588b60341f710ef6c792fcf6e58bc2a6b69e7  test/e2e/scenarios/tiered.go
+ok  	github.com/c360studio/semstreams/test/e2e/scenarios	0.367s
+```
+
+The `cfg.PathOnly = flags.pathOnly` copy in `cmd/e2e/main.go` stays without a unit test; its evidence is this run's
+`[PATH-ONLY]` line and `[41/41]` counter, which exist only if `E2E_PATH_ONLY` reached the flag, the flag the config, and
+the config `Execute`.
+
+Gates after the round-1 fixes (tree clean, before push):
+
+```
+gofmt -l .                                              → (no output)
+go vet ./test/e2e/... ./cmd/e2e/...                     → ok
+go test -race -count=1 ./test/e2e/... ./cmd/e2e/...     → exit 0; last line ok github.com/c360studio/semstreams/cmd/e2e 2.832s
+task lint                                               → exit 0; last line ok github.com/c360studio/semstreams/test/natsclient 0.589s
+go test -count=1 ./internal/agentprofiles/              → ok github.com/c360studio/semstreams/internal/agentprofiles 0.172s
+openspec validate e2e-semantic-path-only-gate --strict  → Change 'e2e-semantic-path-only-gate' is valid
+task spec:properties                                    → spec-properties: 465/465 citations resolve.
+actionlint .github/workflows/e2e-ladder.yml             → exit 0
 ```
